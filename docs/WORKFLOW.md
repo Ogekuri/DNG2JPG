@@ -1,0 +1,284 @@
+## Execution Units Index
+
+- ID: `PROC:main`
+  - type: `process`
+  - parent: `none`
+  - role: `primary CLI runtime for dispatch, validation, RAW bracket generation, HDR merge, JPG encode`
+  - entrypoints:
+    - `main(...)` [`src/dng2jpg/core.py`]
+    - `run(...)` [`src/dng2jpg/dng2jpg.py`] (invoked from `main(...)`)
+  - defining_files:
+    - `src/dng2jpg/__main__.py`
+    - `src/dng2jpg/core.py`
+    - `src/dng2jpg/dng2jpg.py`
+    - `src/shell_scripts/utils.py`
+
+- ID: `PROC:launcher`
+  - type: `process`
+  - parent: `none`
+  - role: `shell launcher that validates repository root and delegates execution to Python module through uv`
+  - entrypoints:
+    - `script entrypoint` [`scripts/d2j.sh`]
+  - defining_files:
+    - `scripts/d2j.sh`
+
+- ID: `PROC:gha-check-branch`
+  - type: `process`
+  - parent: `none`
+  - role: `GitHub Actions job that validates tagged commit ancestry against master`
+  - entrypoints:
+    - `job: check-branch` [`.github/workflows/release-uvx.yml`]
+  - defining_files:
+    - `.github/workflows/release-uvx.yml`
+
+- ID: `PROC:gha-build-release`
+  - type: `process`
+  - parent: `none`
+  - role: `GitHub Actions job that builds distributions, attests provenance, and creates release`
+  - entrypoints:
+    - `job: build-release` [`.github/workflows/release-uvx.yml`]
+  - defining_files:
+    - `.github/workflows/release-uvx.yml`
+
+## Execution Units
+
+### PROC:main
+
+- Entrypoints:
+  - `main(...)`: top-level dispatcher for management and conversion flows [`src/dng2jpg/core.py`]
+  - `run(...)`: conversion pipeline entry for `dng2jpg` command arguments [`src/dng2jpg/dng2jpg.py`]
+- Lifecycle/trigger:
+  - starts from module execution `python -m dng2jpg` via `src/dng2jpg/__main__.py`
+  - executes one-shot command lifecycle
+  - exits with process status code from `main(...)`
+  - threads: `no explicit threads detected`
+- Internal Call-Trace Tree:
+  - `main(...)`: parse top-level argv and dispatch management/conversion branches [`src/dng2jpg/core.py`]
+    - `_check_online_version(...)`: evaluate cached latest-release check and optionally query GitHub API [`src/dng2jpg/core.py`]
+      - `_should_skip_version_check(...)`: evaluate idle-time cache policy [`src/dng2jpg/core.py`]
+      - `_write_version_cache(...)`: persist idle-time cache metadata [`src/dng2jpg/core.py`]
+    - `_management_help(...)`: build management help text [`src/dng2jpg/core.py`]
+    - `_run_management(...)`: execute uv management command on Linux or print manual command [`src/dng2jpg/core.py`]
+    - `print_help(...)`: render conversion help text [`src/dng2jpg/dng2jpg.py`]
+      - `_build_two_line_operator_rows(...)`: flatten luminance operator table rows [`src/dng2jpg/dng2jpg.py`]
+      - `_print_box_table(...)`: render fixed-width table output [`src/dng2jpg/dng2jpg.py`]
+    - `run(...)`: execute conversion pipeline [`src/dng2jpg/dng2jpg.py`]
+      - `_is_supported_runtime_os(...)`: enforce Linux-only runtime [`src/dng2jpg/dng2jpg.py`]
+        - `get_runtime_os(...)`: normalize runtime OS label [`src/shell_scripts/utils.py`]
+        - `print_error(...)`: emit stderr diagnostic [`src/shell_scripts/utils.py`]
+      - `_parse_run_options(...)`: parse positional/optional CLI arguments into normalized option dataclasses [`src/dng2jpg/dng2jpg.py`]
+        - `_parse_auto_adjust_mode_option(...)`: validate `--auto-adjust` mode selector [`src/dng2jpg/dng2jpg.py`]
+          - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
+        - `_parse_auto_brightness_option(...)`: parse `--auto-brightness` optional boolean value [`src/dng2jpg/dng2jpg.py`]
+          - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
+        - `_parse_auto_ev_option(...)`: parse `--auto-ev` optional boolean value [`src/dng2jpg/dng2jpg.py`]
+          - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
+        - `_parse_auto_zero_option(...)`: parse `--auto-zero` optional boolean value [`src/dng2jpg/dng2jpg.py`]
+          - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
+        - `_parse_ev_option(...)`: parse fixed EV selector value [`src/dng2jpg/dng2jpg.py`]
+          - `_is_ev_value_on_supported_step(...)`: validate quarter-step EV grid [`src/dng2jpg/dng2jpg.py`]
+          - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
+        - `_parse_ev_zero_option(...)`: parse fixed EV-zero selector value [`src/dng2jpg/dng2jpg.py`]
+          - `_is_ev_value_on_supported_step(...)`: validate quarter-step EV grid [`src/dng2jpg/dng2jpg.py`]
+          - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
+        - `_parse_gamma_option(...)`: parse gamma pair [`src/dng2jpg/dng2jpg.py`]
+          - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
+        - `_parse_jpg_compression_option(...)`: parse JPEG compression integer [`src/dng2jpg/dng2jpg.py`]
+          - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
+        - `_parse_luminance_text_option(...)`: parse non-empty luminance selector values [`src/dng2jpg/dng2jpg.py`]
+          - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
+        - `_parse_tmo_passthrough_value(...)`: parse explicit `--tmo*` passthrough option values [`src/dng2jpg/dng2jpg.py`]
+          - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
+        - `_parse_percentage_option(...)`: parse bounded percentage values [`src/dng2jpg/dng2jpg.py`]
+          - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
+        - `_parse_positive_float_option(...)`: parse positive float controls [`src/dng2jpg/dng2jpg.py`]
+          - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
+        - `_resolve_default_postprocess(...)`: derive backend-specific default postprocess factors [`src/dng2jpg/dng2jpg.py`]
+        - `_parse_auto_brightness_options(...)`: build auto-brightness options dataclass [`src/dng2jpg/dng2jpg.py`]
+          - `_parse_float_exclusive_range_option(...)`: parse `(min,max)` float range [`src/dng2jpg/dng2jpg.py`]
+            - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
+        - `_parse_auto_adjust_options(...)`: build auto-adjust options dataclass [`src/dng2jpg/dng2jpg.py`]
+          - `_parse_float_in_range_option(...)`: parse inclusive float range controls [`src/dng2jpg/dng2jpg.py`]
+            - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
+          - `_parse_positive_float_option(...)`: parse positive float controls [`src/dng2jpg/dng2jpg.py`]
+            - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
+          - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
+        - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
+      - `_resolve_auto_adjust_opencv_dependencies(...)`: import OpenCV/numpy dependencies for enabled modes [`src/dng2jpg/dng2jpg.py`]
+        - `print_error(...)`: emit dependency diagnostics [`src/shell_scripts/utils.py`]
+      - `_resolve_imagemagick_command(...)`: resolve ImageMagick executable token (`magick`/`convert`) [`src/dng2jpg/dng2jpg.py`]
+      - `_load_image_dependencies(...)`: import rawpy/imageio/pillow dependencies [`src/dng2jpg/dng2jpg.py`]
+        - `print_error(...)`: emit dependency diagnostics [`src/shell_scripts/utils.py`]
+      - `_extract_dng_exif_payload_and_timestamp(...)`: read DNG EXIF payload/timestamp/orientation [`src/dng2jpg/dng2jpg.py`]
+        - `_parse_exif_datetime_to_timestamp(...)`: parse EXIF datetime into POSIX timestamp [`src/dng2jpg/dng2jpg.py`]
+      - `_load_piexif_dependency(...)`: import piexif when EXIF payload is present [`src/dng2jpg/dng2jpg.py`]
+        - `print_error(...)`: emit dependency diagnostics [`src/shell_scripts/utils.py`]
+      - `_collect_processing_errors(...)`: construct recoverable processing exception tuple [`src/dng2jpg/dng2jpg.py`]
+      - `_detect_dng_bits_per_color(...)`: detect source bit depth from RAW metadata [`src/dng2jpg/dng2jpg.py`]
+      - `_calculate_max_ev_from_bits(...)`: compute `BASE_MAX` EV ceiling from bit depth [`src/dng2jpg/dng2jpg.py`]
+      - `_extract_normalized_preview_luminance_stats(...)`: derive normalized preview luminance percentiles [`src/dng2jpg/dng2jpg.py`]
+        - `_coerce_positive_luminance(...)`: normalize luminance scalars with positive fallback [`src/dng2jpg/dng2jpg.py`]
+      - `_derive_supported_ev_zero_values(...)`: derive quantized EV-zero magnitude set [`src/dng2jpg/dng2jpg.py`]
+        - `_calculate_safe_ev_zero_max(...)`: derive safe EV-zero bound preserving bracket room [`src/dng2jpg/dng2jpg.py`]
+      - `_resolve_ev_zero(...)`: resolve final EV center from manual/auto modes [`src/dng2jpg/dng2jpg.py`]
+        - `_extract_normalized_preview_luminance_stats(...)`: derive preview stats when required [`src/dng2jpg/dng2jpg.py`]
+          - `_coerce_positive_luminance(...)`: normalize luminance scalars with positive fallback [`src/dng2jpg/dng2jpg.py`]
+        - `_optimize_auto_zero(...)`: optimize EV-zero from scene key/percentiles [`src/dng2jpg/dng2jpg.py`]
+          - `_derive_scene_key_preserving_median_target(...)`: derive key-preserving scene target [`src/dng2jpg/dng2jpg.py`]
+          - `_quantize_ev_to_supported(...)`: quantize EV value to nearest supported selector [`src/dng2jpg/dng2jpg.py`]
+        - `_apply_auto_percentage_scaling(...)`: scale auto EV value by percentage and quantize toward zero [`src/dng2jpg/dng2jpg.py`]
+          - `_quantize_ev_toward_zero_step(...)`: quantize EV toward zero on quarter-step grid [`src/dng2jpg/dng2jpg.py`]
+        - `_calculate_safe_ev_zero_max(...)`: enforce safe EV-zero absolute limit [`src/dng2jpg/dng2jpg.py`]
+      - `_derive_supported_ev_values(...)`: derive quantized EV delta selector set [`src/dng2jpg/dng2jpg.py`]
+        - `_calculate_max_ev_from_bits(...)`: compute `BASE_MAX` EV ceiling [`src/dng2jpg/dng2jpg.py`]
+      - `_calculate_safe_ev_zero_max(...)`: compute safe EV-zero limit for diagnostics [`src/dng2jpg/dng2jpg.py`]
+      - `_resolve_ev_value(...)`: resolve final EV bracket delta from static/adaptive modes [`src/dng2jpg/dng2jpg.py`]
+        - `_compute_auto_ev_value_from_stats(...)`: compute adaptive EV from precomputed preview stats [`src/dng2jpg/dng2jpg.py`]
+          - `_optimize_adaptive_ev_delta(...)`: optimize adaptive EV candidate [`src/dng2jpg/dng2jpg.py`]
+            - `_clamp_ev_to_supported(...)`: clamp EV to supported min/max [`src/dng2jpg/dng2jpg.py`]
+            - `_quantize_ev_to_supported(...)`: quantize EV to nearest supported selector [`src/dng2jpg/dng2jpg.py`]
+        - `_compute_auto_ev_value(...)`: compute adaptive EV from RAW preview when stats are not precomputed [`src/dng2jpg/dng2jpg.py`]
+          - `_extract_normalized_preview_luminance_stats(...)`: derive preview stats [`src/dng2jpg/dng2jpg.py`]
+            - `_coerce_positive_luminance(...)`: normalize luminance scalars with positive fallback [`src/dng2jpg/dng2jpg.py`]
+          - `_derive_supported_ev_values(...)`: derive EV selector set when not provided [`src/dng2jpg/dng2jpg.py`]
+            - `_calculate_max_ev_from_bits(...)`: compute `BASE_MAX` EV ceiling [`src/dng2jpg/dng2jpg.py`]
+          - `_compute_auto_ev_value_from_stats(...)`: optimize adaptive EV from preview stats [`src/dng2jpg/dng2jpg.py`]
+            - `_optimize_adaptive_ev_delta(...)`: optimize adaptive EV candidate [`src/dng2jpg/dng2jpg.py`]
+              - `_clamp_ev_to_supported(...)`: clamp EV to supported min/max [`src/dng2jpg/dng2jpg.py`]
+              - `_quantize_ev_to_supported(...)`: quantize EV to nearest supported selector [`src/dng2jpg/dng2jpg.py`]
+        - `_apply_auto_percentage_scaling(...)`: scale adaptive EV by percentage [`src/dng2jpg/dng2jpg.py`]
+          - `_quantize_ev_toward_zero_step(...)`: quantize EV toward zero on quarter-step grid [`src/dng2jpg/dng2jpg.py`]
+        - `_clamp_ev_to_supported(...)`: clamp EV to supported min/max [`src/dng2jpg/dng2jpg.py`]
+        - `_derive_supported_ev_values(...)`: derive EV selector set when not provided [`src/dng2jpg/dng2jpg.py`]
+          - `_calculate_max_ev_from_bits(...)`: compute `BASE_MAX` EV ceiling [`src/dng2jpg/dng2jpg.py`]
+        - `_detect_dng_bits_per_color(...)`: detect source bit depth when selector set absent [`src/dng2jpg/dng2jpg.py`]
+      - `_build_exposure_multipliers(...)`: derive three multiplier values from EV center/delta [`src/dng2jpg/dng2jpg.py`]
+      - `_write_bracket_images(...)`: materialize `ev_minus`, `ev_zero`, `ev_plus` TIFF intermediates [`src/dng2jpg/dng2jpg.py`]
+        - `print_info(...)`: emit extraction progress [`src/shell_scripts/utils.py`]
+      - `_run_luminance_hdr_cli(...)`: merge bracket images through luminance backend [`src/dng2jpg/dng2jpg.py`]
+        - `_order_bracket_paths(...)`: enforce deterministic bracket order [`src/dng2jpg/dng2jpg.py`]
+      - `_run_enfuse(...)`: merge bracket images through enfuse backend [`src/dng2jpg/dng2jpg.py`]
+      - `_encode_jpg(...)`: encode merged TIFF into final JPG with configured postprocess stages [`src/dng2jpg/dng2jpg.py`]
+        - `_to_uint16_image_array(...)`: normalize intermediate image tensor into uint16 [`src/dng2jpg/dng2jpg.py`]
+        - `_to_uint8_image_array(...)`: normalize intermediate image tensor into uint8 [`src/dng2jpg/dng2jpg.py`]
+        - `_apply_auto_brightness_rgb_uint8(...)`: apply BT.709 linear-domain auto-brightness [`src/dng2jpg/dng2jpg.py`]
+          - `_to_linear_srgb(...)`: convert sRGB tensor to linear RGB [`src/dng2jpg/dng2jpg.py`]
+          - `_compute_bt709_luminance(...)`: compute BT.709 luminance channel [`src/dng2jpg/dng2jpg.py`]
+          - `_apply_highlight_rolloff(...)`: apply highlight rolloff in linear domain [`src/dng2jpg/dng2jpg.py`]
+          - `_from_linear_srgb(...)`: convert linear RGB tensor to sRGB [`src/dng2jpg/dng2jpg.py`]
+        - `_apply_validated_auto_adjust_pipeline(...)`: run ImageMagick auto-adjust chain [`src/dng2jpg/dng2jpg.py`]
+        - `_apply_validated_auto_adjust_pipeline_opencv(...)`: run OpenCV auto-adjust chain [`src/dng2jpg/dng2jpg.py`]
+          - `_selective_blur_contrast_gated_vectorized(...)`: selective blur and contrast-gated blend [`src/dng2jpg/dng2jpg.py`]
+            - `_gaussian_kernel_2d(...)`: build gaussian kernel tensor [`src/dng2jpg/dng2jpg.py`]
+            - `_clamp01(...)`: clamp float tensor into `[0,1]` [`src/dng2jpg/dng2jpg.py`]
+          - `_level_per_channel_adaptive(...)`: adaptive per-channel leveling [`src/dng2jpg/dng2jpg.py`]
+            - `_clamp01(...)`: clamp float tensor into `[0,1]` [`src/dng2jpg/dng2jpg.py`]
+          - `_sigmoidal_contrast(...)`: apply sigmoidal contrast curve [`src/dng2jpg/dng2jpg.py`]
+            - `_clamp01(...)`: clamp float tensor into `[0,1]` [`src/dng2jpg/dng2jpg.py`]
+          - `_vibrance_hsl_gamma(...)`: apply HSL-domain vibrance gamma [`src/dng2jpg/dng2jpg.py`]
+            - `_rgb_to_hsl(...)`: convert RGB tensor to HSL channels [`src/dng2jpg/dng2jpg.py`]
+            - `_hsl_to_rgb(...)`: convert HSL channels to RGB tensor [`src/dng2jpg/dng2jpg.py`]
+              - `_hue_to_rgb(...)`: hue interpolation helper [`src/dng2jpg/dng2jpg.py`]
+              - `_clamp01(...)`: clamp float tensor into `[0,1]` [`src/dng2jpg/dng2jpg.py`]
+            - `_clamp01(...)`: clamp float tensor into `[0,1]` [`src/dng2jpg/dng2jpg.py`]
+          - `_high_pass_math_gray(...)`: high-pass grayscale overlay signal construction [`src/dng2jpg/dng2jpg.py`]
+            - `_gaussian_blur_rgb(...)`: gaussian blur RGB tensor [`src/dng2jpg/dng2jpg.py`]
+              - `_clamp01(...)`: clamp float tensor into `[0,1]` [`src/dng2jpg/dng2jpg.py`]
+            - `_clamp01(...)`: clamp float tensor into `[0,1]` [`src/dng2jpg/dng2jpg.py`]
+          - `_overlay_composite(...)`: overlay-composite grayscale high-pass onto RGB [`src/dng2jpg/dng2jpg.py`]
+            - `_clamp01(...)`: clamp float tensor into `[0,1]` [`src/dng2jpg/dng2jpg.py`]
+        - `_resolve_imagemagick_command(...)`: resolve ImageMagick executable when lazily needed [`src/dng2jpg/dng2jpg.py`]
+        - `_convert_compression_to_quality(...)`: map JPEG compression to Pillow quality [`src/dng2jpg/dng2jpg.py`]
+        - `_refresh_output_jpg_exif_thumbnail_after_save(...)`: rebuild and insert EXIF thumbnail/orientation [`src/dng2jpg/dng2jpg.py`]
+          - `_build_oriented_thumbnail_jpeg_bytes(...)`: generate oriented EXIF thumbnail JPEG payload [`src/dng2jpg/dng2jpg.py`]
+            - `_apply_orientation_transform(...)`: apply source orientation transform [`src/dng2jpg/dng2jpg.py`]
+              - `_resolve_thumbnail_transpose_map(...)`: resolve Pillow transpose constants [`src/dng2jpg/dng2jpg.py`]
+          - `_normalize_ifd_integer_like_values_for_piexif_dump(...)`: sanitize IFD integer-like values before dump [`src/dng2jpg/dng2jpg.py`]
+            - `_coerce_exif_int_like_value(...)`: coerce integer-like scalar values [`src/dng2jpg/dng2jpg.py`]
+      - `_sync_output_file_timestamps_from_exif(...)`: apply EXIF timestamp to output file metadata [`src/dng2jpg/dng2jpg.py`]
+        - `_set_output_file_timestamps(...)`: write filesystem mtime/atime from POSIX timestamp [`src/dng2jpg/dng2jpg.py`]
+      - `print_info(...)`: emit pipeline diagnostics [`src/shell_scripts/utils.py`]
+      - `print_error(...)`: emit failure diagnostics [`src/shell_scripts/utils.py`]
+      - `print_success(...)`: emit success diagnostics [`src/shell_scripts/utils.py`]
+- External Boundaries:
+  - network HTTP request to GitHub releases API (`urllib.request`) [`src/dng2jpg/core.py`]
+  - filesystem cache read/write under user cache directory [`src/dng2jpg/core.py`]
+  - process execution of `uv` management commands [`src/dng2jpg/core.py`]
+  - process execution of `enfuse` backend [`src/dng2jpg/dng2jpg.py`]
+  - process execution of `luminance-hdr-cli` backend [`src/dng2jpg/dng2jpg.py`]
+  - process execution of ImageMagick executable (`magick`/`convert`) [`src/dng2jpg/dng2jpg.py`]
+  - runtime imports and execution boundaries for `rawpy`, `imageio`, `PIL`, `numpy`, `cv2`, `piexif` [`src/dng2jpg/dng2jpg.py`]
+  - filesystem IO for input DNG, temporary TIFF artifacts, output JPG, and metadata timestamps [`src/dng2jpg/dng2jpg.py`]
+
+### PROC:launcher
+
+- Entrypoints:
+  - `script entrypoint`: shell script body execution [`scripts/d2j.sh`]
+- Lifecycle/trigger:
+  - starts when user executes launcher script
+  - validates launcher base path against git root
+  - delegates to `uv run --project <BASE_DIR> python -m dng2jpg`
+  - terminates via `exec` replacement semantics
+  - threads: `no explicit threads detected`
+- Internal Call-Trace Tree:
+  - no internal functions/methods declared in `scripts/d2j.sh`
+- External Boundaries:
+  - shell utilities `date`, `readlink`, `dirname`, `basename`, `git`
+  - process replacement via `exec` to external `uv` executable
+
+### PROC:gha-check-branch
+
+- Entrypoints:
+  - `job: check-branch`: workflow job executed on `ubuntu-latest` [`.github/workflows/release-uvx.yml`]
+- Lifecycle/trigger:
+  - starts on workflow trigger (`workflow_dispatch` or semantic tag push)
+  - checks whether tagged commit is contained in remote master
+  - writes `is_master` output for downstream job gating
+  - exits after output emission
+  - threads: `no explicit threads detected`
+- Internal Call-Trace Tree:
+  - no internal functions/methods declared in `.github/workflows/release-uvx.yml` job steps
+- External Boundaries:
+  - GitHub Actions runner lifecycle and action executions
+  - shell execution of `git fetch` and `git branch -r --contains`
+  - write to GitHub Actions output channel (`$GITHUB_OUTPUT`)
+
+### PROC:gha-build-release
+
+- Entrypoints:
+  - `job: build-release`: workflow job gated by `needs.check-branch.outputs.is_master == 'true'` [`.github/workflows/release-uvx.yml`]
+- Lifecycle/trigger:
+  - starts only when upstream gate output is true
+  - checks out code, sets python and uv, builds distributions, attests artifacts, builds changelog, creates release
+  - exits after release publication stage
+  - threads: `no explicit threads detected`
+- Internal Call-Trace Tree:
+  - no internal functions/methods declared in `.github/workflows/release-uvx.yml` job steps
+- External Boundaries:
+  - GitHub Actions hosted runner and marketplace actions execution
+  - `uv run --frozen --with build python -m build`
+  - release-changelog-builder action and gh-release action network/API interactions
+
+## Communication Edges
+
+- Edge ID: `EDGE:launcher_to_main`
+  - source: `PROC:launcher`
+  - destination: `PROC:main`
+  - direction: `PROC:launcher -> PROC:main`
+  - mechanism: `process handoff via exec to uv-managed python module execution`
+  - endpoint/channel: `command invocation "uv run --project <BASE_DIR> python -m dng2jpg"`
+  - payload/data-shape: `CLI argv token sequence "$@" forwarded unchanged`
+  - declaration_paths:
+    - `scripts/d2j.sh`
+    - `src/dng2jpg/__main__.py`
+    - `src/dng2jpg/core.py`
+
+- Edge ID: `EDGE:gha_gate_is_master`
+  - source: `PROC:gha-check-branch`
+  - destination: `PROC:gha-build-release`
+  - direction: `PROC:gha-check-branch -> PROC:gha-build-release`
+  - mechanism: `GitHub Actions job output propagation through needs-context`
+  - endpoint/channel: `needs.check-branch.outputs.is_master`
+  - payload/data-shape: `string boolean flag ("true"|"false")`
+  - declaration_paths:
+    - `.github/workflows/release-uvx.yml`
