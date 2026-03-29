@@ -51,6 +51,13 @@ DEFAULT_AB_MIN_GAIN = 0.95
 DEFAULT_AB_P98_HIGHLIGHT_MAX = 0.90
 DEFAULT_AB_CORRECTION_STRENGTH = 0.35
 DEFAULT_AB_MAX_EV_CORRECTION = 0.5
+DEFAULT_AL_CLIP_PERCENT = 0.02
+DEFAULT_AL_HISTCOMPR = 3
+_AUTO_LEVELS_HIGHLIGHT_METHODS = (
+    "Luminance",
+    "CIELab blending",
+    "Blend",
+)
 DEFAULT_LUMINANCE_HDR_MODEL = "debevec"
 DEFAULT_LUMINANCE_HDR_WEIGHT = "flat"
 DEFAULT_LUMINANCE_HDR_RESPONSE_CURVE = "srgb"
@@ -100,6 +107,10 @@ _AUTO_ADJUST_KNOB_OPTIONS = (
 )
 _AUTO_BRIGHTNESS_KNOB_OPTIONS = (
     "--ab-target-grey",
+)
+_AUTO_LEVELS_KNOB_OPTIONS = (
+    "--al-clip-pct",
+    "--al-highlight-reconstruction-method",
 )
 _LUMINANCE_OPERATOR_TABLE_HEADERS = (
     "Operator",
@@ -299,6 +310,27 @@ class AutoBrightnessOptions:
 
 
 @dataclass(frozen=True)
+class AutoLevelsOptions:
+    """@brief Hold `--auto-levels` knob values.
+
+    @details Encapsulates validated histogram-based auto-levels controls ported
+    from the attached RawTherapee-oriented source and adapted for RGB uint16
+    stage execution in the current post-merge pipeline.
+    @param clip_percent {float} Histogram clipping percentage in `[0, +inf)`.
+    @param histcompr {int} Histogram compression shift in `[0, 15]`.
+    @param highlight_reconstruction_enabled {bool} `True` when highlight reconstruction is enabled.
+    @param highlight_reconstruction_method {str|None} Highlight reconstruction method (`Luminance`, `CIELab blending`, `Blend`) when enabled.
+    @return {None} Immutable dataclass container.
+    @satisfies REQ-100, REQ-101, REQ-102
+    """
+
+    clip_percent: float = DEFAULT_AL_CLIP_PERCENT
+    histcompr: int = DEFAULT_AL_HISTCOMPR
+    highlight_reconstruction_enabled: bool = False
+    highlight_reconstruction_method: str | None = None
+
+
+@dataclass(frozen=True)
 class PostprocessOptions:
     """@brief Hold deterministic postprocessing option values.
 
@@ -311,10 +343,12 @@ class PostprocessOptions:
     @param jpg_compression {int} JPEG compression level in range `[0, 100]`.
     @param auto_brightness_enabled {bool} `True` when auto-brightness pre-stage is enabled.
     @param auto_brightness_options {AutoBrightnessOptions} Auto-brightness stage knobs.
+    @param auto_levels_enabled {bool} `True` when auto-levels stage is enabled.
+    @param auto_levels_options {AutoLevelsOptions} Auto-levels stage knobs.
     @param auto_adjust_mode {str|None} Optional auto-adjust implementation selector (`ImageMagick` or `OpenCV`).
     @param auto_adjust_options {AutoAdjustOptions} Shared auto-adjust knobs for `ImageMagick` and `OpenCV` implementations.
     @return {None} Immutable dataclass container.
-    @satisfies REQ-065, REQ-066, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-088, REQ-089, REQ-090
+    @satisfies REQ-065, REQ-066, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-088, REQ-089, REQ-090, REQ-100, REQ-101, REQ-102
     """
 
     post_gamma: float
@@ -326,6 +360,8 @@ class PostprocessOptions:
     auto_brightness_options: AutoBrightnessOptions = field(
         default_factory=AutoBrightnessOptions
     )
+    auto_levels_enabled: bool = False
+    auto_levels_options: AutoLevelsOptions = field(default_factory=AutoLevelsOptions)
     auto_adjust_mode: str | None = None
     auto_adjust_options: AutoAdjustOptions = field(default_factory=AutoAdjustOptions)
 
@@ -445,7 +481,7 @@ def print_help(version):
     luminance-hdr-cli tone-mapping options.
     @param version {str} CLI version label to append in usage output.
     @return {None} Writes help text to stdout.
-    @satisfies DES-008, REQ-056, REQ-063, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-088, REQ-089, REQ-090, REQ-091, REQ-094, REQ-097
+    @satisfies DES-008, REQ-056, REQ-063, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-088, REQ-089, REQ-090, REQ-091, REQ-094, REQ-097, REQ-100, REQ-101, REQ-102
     """
 
     print(
@@ -455,6 +491,9 @@ def print_help(version):
         f"[--brightness=<value>] [--contrast=<value>] [--saturation=<value>] "
         "[--auto-brightness[=<1|true|yes|on>]] "
         "[--ab-target-grey=<(0,1)>] "
+        "[--auto-levels[=<1|true|yes|on>]] "
+        "[--al-clip-pct=<value>] "
+        "[--al-highlight-reconstruction-method <Luminance|CIELab blending|Blend>] "
         f"[--jpg-compression=<0..100>] [--auto-adjust <ImageMagick|OpenCV>] "
         "[--aa-blur-sigma=<value>] [--aa-blur-threshold-pct=<0..100>] "
         "[--aa-level-low-pct=<0..100>] [--aa-level-high-pct=<0..100>] "
@@ -521,6 +560,26 @@ def print_help(version):
     )
     print(
         f"  --ab-target-grey=<(0,1)> - Linear BT.709 luminance target grey in (0,1) (default: {DEFAULT_AB_TARGET_GREY:g})."
+    )
+    print(
+        "  --auto-levels      - Enable auto-levels stage after auto-brightness and before post-gamma/brightness/contrast/saturation."
+    )
+    print(
+        "                     Optional value forms: --auto-levels=1, --auto-levels=true, --auto-levels yes."
+    )
+    print(
+        "  [auto-levels knobs] - Effective only when --auto-levels is set."
+    )
+    print(
+        f"  --al-clip-pct=<value> - Histogram clipping percentage >= 0 (default: {DEFAULT_AL_CLIP_PERCENT:g})."
+    )
+    print(
+        "  --al-highlight-reconstruction-method <name> - Enable highlight reconstruction and require one method."
+    )
+    print(
+        "                     Allowed values: "
+        + ", ".join(_AUTO_LEVELS_HIGHLIGHT_METHODS)
+        + "."
     )
     print(
         f"  --jpg-compression=<0..100> - JPEG compression level (default: {DEFAULT_JPG_COMPRESSION})."
@@ -893,6 +952,24 @@ def _parse_auto_brightness_option(auto_brightness_raw):
     if auto_brightness_text in ("1", "true", "yes", "on"):
         return True
     print_error(f"Invalid --auto-brightness value: {auto_brightness_raw}")
+    print_error("Allowed values: 1, true, yes, on")
+    return None
+
+
+def _parse_auto_levels_option(auto_levels_raw):
+    """@brief Parse and validate one `--auto-levels` option value.
+
+    @details Accepts only boolean-like activator tokens (`1`, `true`, `yes`,
+    `on`) and rejects all other values to keep deterministic CLI behavior.
+    @param auto_levels_raw {str} Raw `--auto-levels` value token from CLI args.
+    @return {bool|None} `True` when token enables auto-levels; `None` on parse failure.
+    @satisfies REQ-100, REQ-101
+    """
+
+    auto_levels_text = auto_levels_raw.strip().lower()
+    if auto_levels_text in ("1", "true", "yes", "on"):
+        return True
+    print_error(f"Invalid --auto-levels value: {auto_levels_raw}")
     print_error("Allowed values: 1, true, yes, on")
     return None
 
@@ -1522,6 +1599,78 @@ def _parse_auto_brightness_options(auto_brightness_raw_values):
     return AutoBrightnessOptions(target_grey=target_grey)
 
 
+def _parse_auto_levels_hr_method_option(auto_levels_method_raw):
+    """@brief Parse auto-levels highlight reconstruction method option value.
+
+    @details Validates case-insensitive method names and normalizes accepted
+    values to canonical tokens used by runtime dispatch.
+    @param auto_levels_method_raw {str} Raw `--al-highlight-reconstruction-method` option token.
+    @return {str|None} Canonical method token or `None` on parse failure.
+    @satisfies REQ-101, REQ-102
+    """
+
+    method_text = auto_levels_method_raw.strip()
+    if not method_text:
+        print_error("Invalid --al-highlight-reconstruction-method value: empty value")
+        return None
+    canonical_method = None
+    for allowed_method in _AUTO_LEVELS_HIGHLIGHT_METHODS:
+        if method_text.lower() == allowed_method.lower():
+            canonical_method = allowed_method
+            break
+    if canonical_method is None:
+        print_error(
+            "Invalid --al-highlight-reconstruction-method value: "
+            f"{auto_levels_method_raw}"
+        )
+        print_error(
+            "Allowed values: "
+            + ", ".join(_AUTO_LEVELS_HIGHLIGHT_METHODS)
+        )
+        return None
+    return canonical_method
+
+
+def _parse_auto_levels_options(auto_levels_raw_values):
+    """@brief Parse and validate auto-levels parameters.
+
+    @details Parses optional histogram clip percentage and optional mandatory
+    highlight reconstruction method when reconstruction is enabled.
+    @param auto_levels_raw_values {dict[str, str]} Raw `--al-*` option values keyed by long option name.
+    @return {AutoLevelsOptions|None} Parsed auto-levels options or `None` on validation error.
+    @satisfies REQ-100, REQ-101, REQ-102
+    """
+
+    options = AutoLevelsOptions()
+    clip_percent = options.clip_percent
+    histcompr = options.histcompr
+    highlight_reconstruction_enabled = options.highlight_reconstruction_enabled
+    highlight_reconstruction_method = options.highlight_reconstruction_method
+
+    if "--al-clip-pct" in auto_levels_raw_values:
+        parsed = _parse_non_negative_float_option(
+            "--al-clip-pct", auto_levels_raw_values["--al-clip-pct"]
+        )
+        if parsed is None:
+            return None
+        clip_percent = parsed
+    if "--al-highlight-reconstruction-method" in auto_levels_raw_values:
+        parsed = _parse_auto_levels_hr_method_option(
+            auto_levels_raw_values["--al-highlight-reconstruction-method"]
+        )
+        if parsed is None:
+            return None
+        highlight_reconstruction_enabled = True
+        highlight_reconstruction_method = parsed
+
+    return AutoLevelsOptions(
+        clip_percent=clip_percent,
+        histcompr=histcompr,
+        highlight_reconstruction_enabled=highlight_reconstruction_enabled,
+        highlight_reconstruction_method=highlight_reconstruction_method,
+    )
+
+
 def _parse_auto_adjust_options(auto_adjust_raw_values):
     """@brief Parse and validate shared auto-adjust knobs for both implementations.
 
@@ -1706,9 +1855,10 @@ def _parse_run_options(args):
     optional `--auto-zero-pct=<0..100>`, optional `--auto-ev-pct=<0..100>`,
     optional `--gamma=<a,b>` or `--gamma <a,b>`,
     optional postprocess controls, optional auto-brightness stage and
-    `--ab-target-grey` knob, optional shared auto-adjust knobs, required backend
-    selector (`--enable-enfuse` or `--enable-luminance`), and luminance backend
-    controls including explicit `--tmo*` passthrough options and optional
+    `--ab-target-grey` knob, optional auto-levels stage and `--al-*` knobs,
+    optional shared auto-adjust knobs, required backend selector
+    (`--enable-enfuse` or `--enable-luminance`), and luminance backend controls
+    including explicit `--tmo*` passthrough options and optional
     auto-adjust implementation selector (`--auto-adjust <ImageMagick|OpenCV>`);
     rejects unknown options and invalid arity.
     @param args {list[str]} Raw command argument vector.
@@ -1736,6 +1886,8 @@ def _parse_run_options(args):
     saturation_set = False
     auto_brightness_enabled = False
     auto_brightness_raw_values = {}
+    auto_levels_enabled = False
+    auto_levels_raw_values = {}
     auto_adjust_mode = None
     auto_adjust_raw_values = {}
     enable_enfuse = False
@@ -1825,6 +1977,48 @@ def _parse_run_options(args):
                 print_error(f"Unknown option: {option_name}")
                 return None
             auto_brightness_raw_values[option_name] = option_value
+            idx += consume_count
+            continue
+
+        if token == "--auto-levels":
+            if idx + 1 < len(args) and not args[idx + 1].startswith("--"):
+                parsed_auto_levels = _parse_auto_levels_option(args[idx + 1])
+                if parsed_auto_levels is None:
+                    return None
+                auto_levels_enabled = parsed_auto_levels
+                idx += 2
+                continue
+            auto_levels_enabled = True
+            idx += 1
+            continue
+
+        if token.startswith("--auto-levels="):
+            parsed_auto_levels = _parse_auto_levels_option(token.split("=", 1)[1])
+            if parsed_auto_levels is None:
+                return None
+            auto_levels_enabled = parsed_auto_levels
+            idx += 1
+            continue
+
+        if token.startswith("--al-"):
+            option_name = token
+            option_value = None
+            consume_count = 1
+            if "=" in token:
+                option_name, option_value = token.split("=", 1)
+            else:
+                if idx + 1 >= len(args):
+                    print_error(f"Missing value for {token}")
+                    return None
+                option_value = args[idx + 1]
+                if option_value.startswith("--"):
+                    print_error(f"Missing value for {token}")
+                    return None
+                consume_count = 2
+            if option_name not in _AUTO_LEVELS_KNOB_OPTIONS:
+                print_error(f"Unknown option: {option_name}")
+                return None
+            auto_levels_raw_values[option_name] = option_value
             idx += consume_count
             continue
 
@@ -2277,6 +2471,10 @@ def _parse_run_options(args):
             f"Auto-brightness knob {invalid_knob} requires --auto-brightness"
         )
         return None
+    if not auto_levels_enabled and auto_levels_raw_values:
+        invalid_knob = next(iter(auto_levels_raw_values))
+        print_error(f"Auto-levels knob {invalid_knob} requires --auto-levels")
+        return None
 
     (
         backend_post_gamma,
@@ -2294,6 +2492,9 @@ def _parse_run_options(args):
         saturation = backend_saturation
     auto_brightness_options = _parse_auto_brightness_options(auto_brightness_raw_values)
     if auto_brightness_options is None:
+        return None
+    auto_levels_options = _parse_auto_levels_options(auto_levels_raw_values)
+    if auto_levels_options is None:
         return None
     auto_adjust_options = _parse_auto_adjust_options(auto_adjust_raw_values)
     if auto_adjust_options is None:
@@ -2313,6 +2514,8 @@ def _parse_run_options(args):
             jpg_compression=jpg_compression,
             auto_brightness_enabled=auto_brightness_enabled,
             auto_brightness_options=auto_brightness_options,
+            auto_levels_enabled=auto_levels_enabled,
+            auto_levels_options=auto_levels_options,
             auto_adjust_mode=auto_adjust_mode,
             auto_adjust_options=auto_adjust_options,
         ),
@@ -2999,10 +3202,10 @@ def _resolve_auto_adjust_opencv_dependencies():
     """@brief Resolve OpenCV runtime dependencies for image-domain stages.
 
     @details Imports `cv2` and `numpy` modules required by OpenCV auto-adjust
-    pipeline and auto-brightness pre-stage execution, and returns `None` with
-    deterministic error output when dependencies are missing.
+    pipeline and returns `None` with deterministic error output when
+    dependencies are missing.
     @return {tuple[ModuleType, ModuleType]|None} `(cv2_module, numpy_module)` when available; `None` on dependency failure.
-    @satisfies REQ-059, REQ-073, REQ-075, REQ-090
+    @satisfies REQ-059, REQ-073, REQ-075
     """
 
     try:
@@ -3018,6 +3221,24 @@ def _resolve_auto_adjust_opencv_dependencies():
         print_error("Install dependencies with: uv pip install opencv-python numpy")
         return None
     return (cv2, numpy_module)
+
+
+def _resolve_numpy_dependency():
+    """@brief Resolve numpy runtime dependency for auto-levels and auto-brightness.
+
+    @details Imports `numpy` required by uint16-domain post-merge pre-stages and
+    returns `None` with deterministic error output when dependency is missing.
+    @return {ModuleType|None} Imported numpy module; `None` on dependency failure.
+    @satisfies REQ-059, REQ-090, REQ-100
+    """
+
+    try:
+        import numpy as numpy_module  # type: ignore
+    except ModuleNotFoundError:
+        print_error("Python dependency missing: numpy")
+        print_error("Install dependencies with: uv pip install numpy")
+        return None
+    return numpy_module
 
 
 def _to_uint8_image_array(np_module, image_data):
@@ -3185,9 +3406,625 @@ def _apply_highlight_rolloff(np_module, linear_rgb):
     return np_module.clip(rolled, 0.0, 1.0)
 
 
-def _apply_auto_brightness_rgb_uint8(
-    cv2_module, np_module, image_rgb_uint8, auto_brightness_options
+def _rt_gamma2(np_module, values):
+    """@brief Apply RawTherapee gamma2 transfer function.
+
+    @details Implements the same piecewise gamma curve used in the attached
+    auto-levels source for histogram-domain bright clipping normalization.
+    @param np_module {ModuleType} Imported numpy module.
+    @param values {object} Float tensor in linear domain.
+    @return {object} Float tensor in gamma2 domain.
+    @satisfies REQ-100
+    """
+
+    return np_module.where(
+        values <= 0.00304,
+        values * 12.92310,
+        1.055
+        * np_module.power(np_module.maximum(values, 1e-300), 1.0 / 2.4)
+        - 0.055,
+    )
+
+
+def _rt_igamma2(np_module, values):
+    """@brief Apply inverse RawTherapee gamma2 transfer function.
+
+    @details Implements inverse piecewise gamma curve paired with `_rt_gamma2`
+    for whiteclip/black normalization inside auto-levels.
+    @param np_module {ModuleType} Imported numpy module.
+    @param values {object} Float tensor in gamma2 domain.
+    @return {object} Float tensor in linear domain.
+    @satisfies REQ-100
+    """
+
+    return np_module.where(
+        values <= 0.03928,
+        values / 12.92310,
+        np_module.power(
+            np_module.maximum((values + 0.055) / 1.055, 1e-300),
+            2.4,
+        ),
+    )
+
+
+def _build_autoexp_histogram_rgb_uint16(np_module, image_rgb_uint16, histcompr):
+    """@brief Build RGB auto-levels histogram from uint16 image tensor.
+
+    @details Ports histogram accumulation logic from attached auto-levels source:
+    per-channel histogram with `hist_size = 65536 >> histcompr`, channel sum
+    accumulation, and deterministic index clipping.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_uint16 {object} RGB uint16 image tensor.
+    @param histcompr {int} Histogram compression shift in `[0, 15]`.
+    @return {object} Histogram tensor.
+    @satisfies REQ-100
+    """
+
+    hist_size = 65536 >> histcompr
+    histogram = np_module.zeros(hist_size, dtype=np_module.uint64)
+    scale = 1.0 / float(1 << histcompr)
+    for channel_index in range(3):
+        channel = image_rgb_uint16[..., channel_index].astype(np_module.float64)
+        histogram_index = np_module.clip(
+            (channel * scale).astype(np_module.int64), 0, hist_size - 1
+        )
+        histogram += np_module.bincount(
+            histogram_index.ravel(), minlength=hist_size
+        ).astype(np_module.uint64)
+    return histogram
+
+
+def _compute_auto_levels_from_histogram(np_module, histogram, histcompr, clip_percent):
+    """@brief Compute auto-levels gain metrics from histogram.
+
+    @details Ports `get_autoexp_from_histogram` from attached source as-is in
+    numeric behavior for RGB uint16 histogram: octile spread, white/black clip,
+    exposure compensation, brightness/contrast, and highlight compression metrics.
+    @param np_module {ModuleType} Imported numpy module.
+    @param histogram {object} Flattened histogram tensor.
+    @param histcompr {int} Histogram compression shift.
+    @param clip_percent {float} Clip percentage.
+    @return {dict[str, int|float]} Auto-levels metrics dictionary.
+    @satisfies REQ-100
+    """
+
+    rt_maxval = 65535.0
+    rt_midgray = 0.1842
+    histogram_flat = np_module.asarray(histogram, dtype=np_module.float64).ravel()
+    expected = 65536 >> histcompr
+    if histogram_flat.size != expected:
+        raise ValueError(
+            f"histogram size must be {expected} for histcompr={histcompr}"
+        )
+
+    total = float(histogram_flat.sum())
+    weighted = float(
+        np_module.dot(histogram_flat, np_module.arange(expected, dtype=np_module.float64))
+    )
+    average = weighted / total if total > 0 else 0.0
+    if total <= 0.0:
+        return {
+            "expcomp": 0.0,
+            "gain": 1.0,
+            "black": 0,
+            "brightness": 0,
+            "contrast": 0,
+            "hlcompr": 0,
+            "hlcomprthresh": 0,
+            "whiteclip": 0,
+            "rawmax": 0,
+            "shc": 0,
+            "median": 0,
+            "average": 0.0,
+            "overex": 0,
+            "ospread": 0.0,
+        }
+
+    cdf = np_module.cumsum(histogram_flat)
+    median = int(np_module.searchsorted(cdf, total / 2.0, side="left"))
+    if median == 0 or average < 1.0:
+        return {
+            "expcomp": 0.0,
+            "gain": 1.0,
+            "black": 0,
+            "brightness": 0,
+            "contrast": 0,
+            "hlcompr": 0,
+            "hlcomprthresh": 0,
+            "whiteclip": 0,
+            "rawmax": 0,
+            "shc": 0,
+            "median": median << histcompr,
+            "average": average * (1 << histcompr),
+            "overex": 0,
+            "ospread": 0.0,
+        }
+
+    octile = np_module.zeros(8, dtype=np_module.float64)
+    ospread = 0.0
+    low_sum = 0.0
+    high_sum = 0.0
+    octile_count = 0
+    histogram_index = 0
+    average_index = min(int(average), expected)
+    while histogram_index < average_index:
+        if octile_count < 8:
+            octile[octile_count] += histogram_flat[histogram_index]
+            if octile[octile_count] > total / 8.0 or (
+                octile_count == 7 and octile[octile_count] > total / 16.0
+            ):
+                octile[octile_count] = math.log1p(histogram_index) / math.log(2.0)
+                octile_count += 1
+        low_sum += histogram_flat[histogram_index]
+        histogram_index += 1
+    while histogram_index < expected:
+        if octile_count < 8:
+            octile[octile_count] += histogram_flat[histogram_index]
+            if octile[octile_count] > total / 8.0 or (
+                octile_count == 7 and octile[octile_count] > total / 16.0
+            ):
+                octile[octile_count] = math.log1p(histogram_index) / math.log(2.0)
+                octile_count += 1
+        high_sum += histogram_flat[histogram_index]
+        histogram_index += 1
+
+    if low_sum == 0 or high_sum == 0:
+        return {
+            "expcomp": 0.0,
+            "gain": 1.0,
+            "black": 0,
+            "brightness": 0,
+            "contrast": 0,
+            "hlcompr": 0,
+            "hlcomprthresh": 0,
+            "whiteclip": 0,
+            "rawmax": 0,
+            "shc": 0,
+            "median": median << histcompr,
+            "average": average * (1 << histcompr),
+            "overex": 0,
+            "ospread": 0.0,
+        }
+
+    overex = 0
+    guard = math.log1p(float(expected))
+    if octile[6] > guard:
+        octile[6] = 1.5 * octile[5] - 0.5 * octile[4]
+        overex = 2
+    if octile[7] > guard:
+        octile[7] = 1.5 * octile[6] - 0.5 * octile[5]
+        overex = 1
+    octile_6 = float(octile[6])
+    octile_7 = float(octile[7])
+    for octile_index in range(1, 8):
+        if octile[octile_index] == 0.0:
+            octile[octile_index] = octile[octile_index - 1]
+    for octile_index in range(1, 6):
+        if octile_index > 2:
+            denominator = max(0.5, (octile[octile_index + 1] - octile[3]))
+        else:
+            denominator = max(0.5, (octile[3] - octile[octile_index]))
+        ospread += (octile[octile_index + 1] - octile[octile_index]) / denominator
+    ospread /= 5.0
+    if ospread <= 0.0:
+        return {
+            "expcomp": 0.0,
+            "gain": 1.0,
+            "black": 0,
+            "brightness": 0,
+            "contrast": 0,
+            "hlcompr": 0,
+            "hlcomprthresh": 0,
+            "whiteclip": 0,
+            "rawmax": 0,
+            "shc": 0,
+            "median": median << histcompr,
+            "average": average * (1 << histcompr),
+            "overex": overex,
+            "ospread": ospread,
+        }
+
+    clipped = 0.0
+    rawmax = expected - 1
+    while rawmax > 1 and histogram_flat[rawmax] + clipped <= 0.0:
+        clipped += histogram_flat[rawmax]
+        rawmax -= 1
+
+    clippable = int(total * clip_percent / 100.0)
+    clipped = 0.0
+    whiteclip = expected - 1
+    while whiteclip > 1 and histogram_flat[whiteclip] + clipped <= clippable:
+        clipped += histogram_flat[whiteclip]
+        whiteclip -= 1
+
+    clipped = 0.0
+    shc = 0
+    while shc < whiteclip - 1 and histogram_flat[shc] + clipped <= clippable:
+        clipped += histogram_flat[shc]
+        shc += 1
+
+    rawmax <<= histcompr
+    whiteclip <<= histcompr
+    average *= (1 << histcompr)
+    median <<= histcompr
+    shc <<= histcompr
+
+    expcomp1 = math.log(
+        rt_midgray * rt_maxval / max(average - shc + rt_midgray * shc, 1e-12)
+    ) / math.log(2.0)
+    if overex == 0:
+        expcomp2 = 0.5 * (
+            (15.5 - histcompr - (2.0 * octile_7 - octile_6))
+            + math.log(rt_maxval / rawmax) / math.log(2.0)
+        )
+    else:
+        expcomp2 = 0.5 * (
+            (15.5 - histcompr - (2.0 * octile[7] - octile[6]))
+            + math.log(rt_maxval / rawmax) / math.log(2.0)
+        )
+    if abs(expcomp1) - abs(expcomp2) > 1.0:
+        denominator = abs(expcomp1) + abs(expcomp2)
+        expcomp = (
+            expcomp1 * abs(expcomp2) + expcomp2 * abs(expcomp1)
+        ) / max(denominator, 1e-12)
+    else:
+        expcomp = 0.5 * expcomp1 + 0.5 * expcomp2
+
+    gain = math.exp(expcomp * math.log(2.0))
+    corr = math.sqrt(gain * rt_maxval / rawmax)
+    black = int(shc * corr)
+    hlcomprthresh = 0
+    comp = (gain * whiteclip / rt_maxval - 1.0) * 2.3
+    hlcompr = int(100.0 * comp / (max(0.0, expcomp) + 1.0))
+    hlcompr = max(0, min(100, hlcompr))
+
+    midtmp = gain * math.sqrt(median * average) / rt_maxval
+    if midtmp < 0.1:
+        brightness = int((rt_midgray - midtmp) * 15.0 / max(midtmp, 1e-12))
+    else:
+        brightness = int(
+            (rt_midgray - midtmp) / max(0.10833 - 0.0833 * midtmp, 1e-12) * 15.0
+        )
+    brightness = int(0.25 * max(0, brightness))
+
+    contrast = int(50.0 * (1.1 - ospread))
+    contrast = max(0, min(100, contrast))
+    whiteclip_gamma = float(int(_rt_gamma2(np_module, whiteclip * corr / rt_maxval) * rt_maxval))
+
+    gavg = 0.0
+    value = 0.0
+    increment = corr * (1 << histcompr)
+    for histogram_index in range(expected):
+        gavg += histogram_flat[histogram_index] * float(
+            _rt_gamma2(np_module, value / rt_maxval) * rt_maxval
+        )
+        value += increment
+    gavg /= total
+    if black < gavg:
+        max_whiteclip = (gavg - black) * 4.0 / 3.0 + black
+        if whiteclip_gamma < max_whiteclip:
+            whiteclip_gamma = max_whiteclip
+
+    whiteclip_gamma = float(_rt_igamma2(np_module, whiteclip_gamma / rt_maxval) * rt_maxval)
+    black = int((rt_maxval * black) / whiteclip_gamma) if whiteclip_gamma > 0 else 0
+    expcomp = max(-5.0, min(12.0, float(expcomp)))
+    brightness = max(-100, min(100, int(brightness)))
+    return {
+        "expcomp": float(expcomp),
+        "gain": float(gain),
+        "black": int(black),
+        "brightness": int(brightness),
+        "contrast": int(contrast),
+        "hlcompr": int(hlcompr),
+        "hlcomprthresh": int(hlcomprthresh),
+        "whiteclip": int(whiteclip),
+        "rawmax": int(rawmax),
+        "shc": int(shc),
+        "median": int(median),
+        "average": float(average),
+        "overex": int(overex),
+        "ospread": float(ospread),
+    }
+
+
+def _apply_auto_levels_uint16(np_module, image_rgb_uint16, auto_levels_options):
+    """@brief Apply auto-levels stage on RGB uint16 tensor.
+
+    @details Executes auto-levels histogram analysis ported from attached source,
+    applies gain derived from exposure compensation, and conditionally runs
+    mandatory-method highlight reconstruction when enabled.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_uint16 {object} RGB uint16 image tensor.
+    @param auto_levels_options {AutoLevelsOptions} Parsed auto-levels options.
+    @return {object} RGB uint16 tensor after auto-levels stage.
+    @exception ValueError Raised when input tensor is not uint16 RGB.
+    @satisfies REQ-100, REQ-101, REQ-102
+    """
+
+    if str(getattr(image_rgb_uint16, "dtype", "")) != "uint16":
+        raise ValueError("Auto-levels input image must be uint16")
+    if len(image_rgb_uint16.shape) != 3 or image_rgb_uint16.shape[2] != 3:
+        raise ValueError("Auto-levels input image must be RGB uint16")
+    histogram = _build_autoexp_histogram_rgb_uint16(
+        np_module=np_module,
+        image_rgb_uint16=image_rgb_uint16,
+        histcompr=auto_levels_options.histcompr,
+    )
+    auto_levels_metrics = _compute_auto_levels_from_histogram(
+        np_module=np_module,
+        histogram=histogram,
+        histcompr=auto_levels_options.histcompr,
+        clip_percent=auto_levels_options.clip_percent,
+    )
+    gain = float(auto_levels_metrics["gain"])
+    image_float = image_rgb_uint16.astype(np_module.float64) * gain
+    if auto_levels_options.highlight_reconstruction_enabled:
+        method = auto_levels_options.highlight_reconstruction_method
+        if method is None:
+            raise ValueError(
+                "Highlight reconstruction method is required when reconstruction is enabled"
+            )
+        if method == "Luminance":
+            image_float = _hlrecovery_luminance_uint16(
+                np_module=np_module,
+                image_rgb=image_float,
+                maxval=65535.0,
+            )
+        elif method == "CIELab blending":
+            image_float = _hlrecovery_cielab_uint16(
+                np_module=np_module,
+                image_rgb=image_float,
+                maxval=65535.0,
+            )
+        elif method == "Blend":
+            channel_max = np_module.max(image_float, axis=(0, 1))
+            image_float = _hlrecovery_blend_uint16(
+                np_module=np_module,
+                image_rgb=image_float,
+                hlmax=channel_max,
+                maxval=65535.0,
+            )
+        else:
+            raise ValueError(f"Unsupported highlight reconstruction method: {method}")
+    return np_module.clip(np_module.round(image_float), 0.0, 65535.0).astype(
+        np_module.uint16
+    )
+
+
+def _hlrecovery_luminance_uint16(np_module, image_rgb, maxval=65535.0):
+    """@brief Apply Luminance highlight reconstruction on uint16-like RGB tensor.
+
+    @details Ports luminance method from attached source in RGB domain with
+    clipped-channel chroma ratio scaling and masked reconstruction.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb {object} RGB float tensor on uint16 scale.
+    @param maxval {float} Maximum channel value.
+    @return {object} Highlight-reconstructed RGB float tensor.
+    @satisfies REQ-102
+    """
+
+    rgb = np_module.asarray(image_rgb, dtype=np_module.float64)
+    red = rgb[..., 0]
+    green = rgb[..., 1]
+    blue = rgb[..., 2]
+    mask = np_module.any(rgb > maxval, axis=-1)
+    output = rgb.copy()
+    if not np_module.any(mask):
+        return output
+
+    red_clip = np_module.minimum(red, maxval)
+    green_clip = np_module.minimum(green, maxval)
+    blue_clip = np_module.minimum(blue, maxval)
+    luminance = red + green + blue
+    chroma_c = 1.732050808 * (red - green)
+    chroma_h = 2.0 * blue - red - green
+    chroma_c_clip = 1.732050808 * (red_clip - green_clip)
+    chroma_h_clip = 2.0 * blue_clip - red_clip - green_clip
+    neq_mask = (red != green) & (green != blue)
+    denominator = np_module.maximum(chroma_c * chroma_c + chroma_h * chroma_h, 1e-20)
+    ratio = np_module.sqrt(
+        (chroma_c_clip * chroma_c_clip + chroma_h_clip * chroma_h_clip) / denominator
+    )
+    ratio = np_module.where(neq_mask, ratio, 1.0)
+    chroma_c2 = chroma_c * ratio
+    chroma_h2 = chroma_h * ratio
+    rec_red = luminance / 3.0 - chroma_h2 / 6.0 + chroma_c2 / 3.464101615
+    rec_green = luminance / 3.0 - chroma_h2 / 6.0 - chroma_c2 / 3.464101615
+    rec_blue = luminance / 3.0 + chroma_h2 / 3.0
+    output[..., 0] = np_module.where(mask, rec_red, output[..., 0])
+    output[..., 1] = np_module.where(mask, rec_green, output[..., 1])
+    output[..., 2] = np_module.where(mask, rec_blue, output[..., 2])
+    return output
+
+
+def _hlrecovery_cielab_uint16(
+    np_module, image_rgb, maxval=65535.0, xyz_cam=None, cam_xyz=None
 ):
+    """@brief Apply CIELab blending highlight reconstruction on RGB tensor.
+
+    @details Ports CIELab blending method from attached source with Lab-space
+    channel repair under clipped highlights.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb {object} RGB float tensor on uint16 scale.
+    @param maxval {float} Maximum channel value.
+    @param xyz_cam {object|None} Optional XYZ conversion matrix.
+    @param cam_xyz {object|None} Optional inverse matrix.
+    @return {object} Highlight-reconstructed RGB float tensor.
+    @satisfies REQ-102
+    """
+
+    rgb = np_module.asarray(image_rgb, dtype=np_module.float64)
+    if xyz_cam is None:
+        xyz_cam = np_module.array(
+            [
+                [0.4124564, 0.3575761, 0.1804375],
+                [0.2126729, 0.7151522, 0.0721750],
+                [0.0193339, 0.1191920, 0.9503041],
+            ],
+            dtype=np_module.float64,
+        ) * maxval
+    else:
+        xyz_cam = np_module.asarray(xyz_cam, dtype=np_module.float64)
+    if cam_xyz is None:
+        cam_xyz = np_module.linalg.inv(xyz_cam / maxval)
+    cam_xyz = np_module.asarray(cam_xyz, dtype=np_module.float64)
+    if cam_xyz.max() >= 10.0:
+        cam_xyz = cam_xyz / maxval
+
+    def _f_lab(values):
+        values_r = values / maxval
+        return np_module.where(
+            values_r > 0.008856,
+            np_module.cbrt(values_r),
+            7.787036979 * values_r + (16.0 / 116.0),
+        )
+
+    def _f2xyz(values):
+        return np_module.where(
+            values > (24.0 / 116.0),
+            np_module.power(values, 3.0),
+            (values - (16.0 / 116.0)) / 7.787036979,
+        )
+
+    mask = np_module.any(rgb > maxval, axis=-1)
+    output = rgb.copy()
+    if not np_module.any(mask):
+        return output
+    clipped = np_module.minimum(rgb, maxval)
+    yy = np_module.tensordot(rgb, xyz_cam[1], axes=([2], [0]))
+    fy = _f_lab(yy)
+    x_values = np_module.tensordot(clipped, xyz_cam[0], axes=([2], [0]))
+    y_values = np_module.tensordot(clipped, xyz_cam[1], axes=([2], [0]))
+    z_values = np_module.tensordot(clipped, xyz_cam[2], axes=([2], [0]))
+    fx_c = _f_lab(x_values)
+    fy_c = _f_lab(y_values)
+    fz_c = _f_lab(z_values)
+    fz = fy - fy_c + fz_c
+    fx = fy + fx_c - fy_c
+    zr = _f2xyz(fz) * maxval
+    xr = _f2xyz(fx) * maxval
+    x_axis = xr
+    y_axis = yy
+    z_axis = zr
+    rec_red = (
+        cam_xyz[0, 0] * x_axis + cam_xyz[0, 1] * y_axis + cam_xyz[0, 2] * z_axis
+    )
+    rec_green = (
+        cam_xyz[1, 0] * x_axis + cam_xyz[1, 1] * y_axis + cam_xyz[1, 2] * z_axis
+    )
+    rec_blue = (
+        cam_xyz[2, 0] * x_axis + cam_xyz[2, 1] * y_axis + cam_xyz[2, 2] * z_axis
+    )
+    output[..., 0] = np_module.where(mask, rec_red, output[..., 0])
+    output[..., 1] = np_module.where(mask, rec_green, output[..., 1])
+    output[..., 2] = np_module.where(mask, rec_blue, output[..., 2])
+    return output
+
+
+def _hlrecovery_blend_uint16(np_module, image_rgb, hlmax, maxval=65535.0):
+    """@brief Apply Blend highlight reconstruction on RGB tensor.
+
+    @details Ports blend method from attached source with quadratic channel blend
+    and desaturation phase driven by clipping metrics.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb {object} RGB float tensor on uint16 scale.
+    @param hlmax {object} Channel maxima vector with shape `(3,)`.
+    @param maxval {float} Maximum channel value.
+    @return {object} Highlight-reconstructed RGB float tensor.
+    @satisfies REQ-102
+    """
+
+    blend_trans = np_module.array(
+        [
+            [1.0, 1.0, 1.0],
+            [1.7320508, -1.7320508, 0.0],
+            [-1.0, -1.0, 2.0],
+        ],
+        dtype=np_module.float64,
+    )
+    blend_itrans = np_module.array(
+        [
+            [1.0, 0.8660254, -0.5],
+            [1.0, -0.8660254, -0.5],
+            [1.0, 0.0, 1.0],
+        ],
+        dtype=np_module.float64,
+    )
+    rgb = np_module.asarray(image_rgb, dtype=np_module.float64)
+    hlmax_values = np_module.asarray(hlmax, dtype=np_module.float64)
+    if hlmax_values.shape != (3,):
+        raise ValueError("hlmax must contain exactly 3 values")
+    output = rgb.copy()
+    red = output[..., 0]
+    green = output[..., 1]
+    blue = output[..., 2]
+    minpt = float(np_module.min(hlmax_values))
+    maxave = float(np_module.mean(hlmax_values))
+    clipthresh = 0.95
+    fixthresh = 0.5
+    satthresh = 0.5
+    clip = np_module.minimum(maxave, hlmax_values)
+    clippt = clipthresh * maxval
+    fixpt = fixthresh * minpt
+    desatpt = satthresh * maxave + (1.0 - satthresh) * maxval
+    clipped_mask = (red > clippt) | (green > clippt) | (blue > clippt)
+    if not np_module.any(clipped_mask):
+        return output
+    rgb_stack = np_module.stack([red, green, blue], axis=-1)
+    cam0 = rgb_stack.copy()
+    cam1 = np_module.minimum(cam0, maxval)
+    lratio = np_module.sum(np_module.minimum(cam0, clip[None, None, :]), axis=-1)
+    lab0 = np_module.tensordot(cam0, blend_trans.T, axes=([2], [0]))
+    lab1 = np_module.tensordot(cam1, blend_trans.T, axes=([2], [0]))
+    sum0 = lab0[..., 1] ** 2 + lab0[..., 2] ** 2
+    sum1 = lab1[..., 1] ** 2 + lab1[..., 2] ** 2
+    chratio = np_module.sqrt(np_module.maximum(sum1, 0.0) / np_module.maximum(sum0, 1e-20))
+    lab0_adj = lab0.copy()
+    lab0_adj[..., 1] *= chratio
+    lab0_adj[..., 2] *= chratio
+    rgb_conv = np_module.tensordot(lab0_adj, blend_itrans.T, axes=([2], [0])) / 3.0
+    for channel_index, clip_channel in enumerate(clip):
+        channel = output[..., channel_index]
+        channel_rec = rgb_conv[..., channel_index]
+        channel_mask = channel > fixpt
+        frac_num = np_module.minimum(clip_channel, channel) - fixpt
+        frac_den = max(clip_channel - fixpt, 1e-20)
+        frac = np_module.square(frac_num / frac_den)
+        blended = frac * channel_rec + (1.0 - frac) * channel
+        output[..., channel_index] = np_module.where(
+            channel_mask,
+            np_module.minimum(maxave, blended),
+            channel,
+        )
+    red_s = output[..., 0]
+    green_s = output[..., 1]
+    blue_s = output[..., 2]
+    sum_rgb = np_module.maximum(red_s + green_s + blue_s, 1e-20)
+    lratio = lratio / sum_rgb
+    lightness = sum_rgb / 3.0
+    chroma_c = lratio * 1.732050808 * (red_s - green_s)
+    chroma_h = lratio * (2.0 * blue_s - red_s - green_s)
+    output[..., 0] = lightness - chroma_h / 6.0 + chroma_c / 3.464101615
+    output[..., 1] = lightness - chroma_h / 6.0 - chroma_c / 3.464101615
+    output[..., 2] = lightness + chroma_h / 3.0
+    red_s2 = output[..., 0]
+    green_s2 = output[..., 1]
+    blue_s2 = output[..., 2]
+    lightness2 = (red_s2 + green_s2 + blue_s2) / 3.0
+    desat_mask = lightness2 > desatpt
+    lfrac = np_module.maximum(0.0, (maxave - lightness2) / max(maxave - desatpt, 1e-20))
+    chroma_c2 = lfrac * 1.732050808 * (red_s2 - green_s2)
+    chroma_h2 = lfrac * (2.0 * blue_s2 - red_s2 - green_s2)
+    rec_red = lightness2 - chroma_h2 / 6.0 + chroma_c2 / 3.464101615
+    rec_green = lightness2 - chroma_h2 / 6.0 - chroma_c2 / 3.464101615
+    rec_blue = lightness2 + chroma_h2 / 3.0
+    output[..., 0] = np_module.where(desat_mask, rec_red, output[..., 0])
+    output[..., 1] = np_module.where(desat_mask, rec_green, output[..., 1])
+    output[..., 2] = np_module.where(desat_mask, rec_blue, output[..., 2])
+    return output
+
+
+def _apply_auto_brightness_rgb_uint8(np_module, image_rgb_uint8, auto_brightness_options):
     """@brief Apply BT.709 linear-sRGB auto-brightness on uint16 RGB tensor.
 
     @details Executes pipeline: uint16 normalization to `[0,1]` in float64,
@@ -3197,7 +4034,6 @@ def _apply_auto_brightness_rgb_uint8(
     global gain `2^ev` constrained by fixed gain cap `4.0` and highlight-safe
     cap `max(0.95,0.90/max(p98,1e-7))`, highlight rolloff, inverse sRGB
     transfer, and uint16 restoration.
-    @param cv2_module {ModuleType} Imported cv2 module.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_uint8 {object} RGB uint16 image tensor.
     @param auto_brightness_options {AutoBrightnessOptions} Parsed auto-brightness parameters.
@@ -3206,7 +4042,6 @@ def _apply_auto_brightness_rgb_uint8(
     @satisfies REQ-066, REQ-090, REQ-099
     """
 
-    del cv2_module
     if str(getattr(image_rgb_uint8, "dtype", "")) != "uint16":
         raise ValueError("Auto-brightness input image must be uint16")
     if len(image_rgb_uint8.shape) != 3 or image_rgb_uint8.shape[2] != 3:
@@ -3763,6 +4598,7 @@ def _encode_jpg(
     postprocess_options,
     imagemagick_command=None,
     auto_adjust_opencv_dependencies=None,
+    numpy_module=None,
     piexif_module=None,
     source_exif_payload=None,
     source_orientation=1,
@@ -3771,11 +4607,13 @@ def _encode_jpg(
     """@brief Encode merged HDR TIFF payload into final JPG output.
 
     @details Loads merged image payload, keeps 16-bit depth when source
-    dynamic range exceeds JPEG-native depth if auto-brightness is enabled,
-    optionally executes BT.709 linear-sRGB auto-brightness pre-stage, preserves
-    resolved `ev_zero` as extraction/merge reference only without additional
-    brightness compensation at encode stage, then applies shared
-    gamma/brightness/contrast/saturation postprocessing over resulting image,
+    dynamic range exceeds JPEG-native depth if auto-brightness or auto-levels
+    is enabled, optionally executes BT.709 linear-sRGB auto-brightness pre-stage,
+    optionally executes auto-levels stage after auto-brightness and before shared
+    gamma/brightness/contrast/saturation factors, preserves resolved `ev_zero`
+    as extraction/merge reference only without additional brightness compensation
+    at encode stage, then applies shared gamma/brightness/contrast/saturation
+    postprocessing over resulting image,
     optionally executes auto-adjust stage over temporary lossless 16-bit TIFF
     intermediates, and writes JPEG with configured compression level for both
     HDR backends.
@@ -3787,23 +4625,29 @@ def _encode_jpg(
     @param postprocess_options {PostprocessOptions} Shared TIFF-to-JPG correction settings.
     @param imagemagick_command {str|None} Optional pre-resolved ImageMagick executable.
     @param auto_adjust_opencv_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` modules for OpenCV auto-adjust implementations.
+    @param numpy_module {ModuleType|None} Optional numpy module for auto-brightness and auto-levels stages.
     @param piexif_module {ModuleType|None} Optional piexif module for EXIF thumbnail refresh.
     @param source_exif_payload {bytes|None} Serialized EXIF payload copied from input DNG.
     @param source_orientation {int} Source EXIF orientation value in range `1..8`.
     @param ev_zero {float} Selected EV center used for extraction and merge reference.
     @return {None} Side effects only.
     @exception RuntimeError Raised when auto-adjust mode dependencies are missing or auto-adjust mode value is unsupported.
-    @satisfies REQ-058, REQ-066, REQ-069, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-086, REQ-087, REQ-090
+    @satisfies REQ-058, REQ-066, REQ-069, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-086, REQ-087, REQ-090, REQ-100, REQ-101, REQ-102
     """
 
     merged_data = imageio_module.imread(str(merged_tiff))
     if (
         postprocess_options.auto_brightness_enabled
+        or postprocess_options.auto_levels_enabled
         or postprocess_options.auto_adjust_mode == "OpenCV"
     ):
-        if auto_adjust_opencv_dependencies is None:
-            raise RuntimeError("Missing required dependencies: opencv-python and numpy")
-        cv2_module, np_module = auto_adjust_opencv_dependencies
+        if numpy_module is not None:
+            np_module = numpy_module
+        elif auto_adjust_opencv_dependencies is not None:
+            _cv2_module, np_module = auto_adjust_opencv_dependencies
+            del _cv2_module
+        else:
+            raise RuntimeError("Missing required dependency: numpy")
         if postprocess_options.auto_brightness_enabled:
             merged_data_for_ab = _to_uint16_image_array(
                 np_module=np_module, image_data=merged_data
@@ -3820,10 +4664,19 @@ def _encode_jpg(
                 and merged_data_for_ab.shape[2] == 3
             ):
                 merged_data_for_ab = _apply_auto_brightness_rgb_uint8(
-                    cv2_module=cv2_module,
                     np_module=np_module,
                     image_rgb_uint8=merged_data_for_ab,
                     auto_brightness_options=postprocess_options.auto_brightness_options,
+                )
+            if (
+                postprocess_options.auto_levels_enabled
+                and len(merged_data_for_ab.shape) == 3
+                and merged_data_for_ab.shape[2] == 3
+            ):
+                merged_data_for_ab = _apply_auto_levels_uint16(
+                    np_module=np_module,
+                    image_rgb_uint16=merged_data_for_ab,
+                    auto_levels_options=postprocess_options.auto_levels_options,
                 )
             if hasattr(merged_data_for_ab, "save") and hasattr(
                 merged_data_for_ab, "convert"
@@ -3839,6 +4692,26 @@ def _encode_jpg(
                 merged_data = _to_uint8_image_array(
                     np_module=np_module, image_data=merged_data_for_ab
                 )
+        elif postprocess_options.auto_levels_enabled:
+            merged_data_for_al = _to_uint16_image_array(
+                np_module=np_module, image_data=merged_data
+            )
+            if len(merged_data_for_al.shape) == 2:
+                merged_data_for_al = merged_data_for_al[:, :, None]
+            if len(merged_data_for_al.shape) == 3 and merged_data_for_al.shape[2] == 4:
+                merged_data_for_al = merged_data_for_al[:, :, :3]
+            if (
+                len(merged_data_for_al.shape) == 3
+                and merged_data_for_al.shape[2] == 3
+            ):
+                merged_data_for_al = _apply_auto_levels_uint16(
+                    np_module=np_module,
+                    image_rgb_uint16=merged_data_for_al,
+                    auto_levels_options=postprocess_options.auto_levels_options,
+                )
+            merged_data = _to_uint8_image_array(
+                np_module=np_module, image_data=merged_data_for_al
+            )
         elif postprocess_options.auto_adjust_mode == "OpenCV":
             merged_data = _to_uint8_image_array(
                 np_module=np_module, image_data=merged_data
@@ -4034,7 +4907,7 @@ def run(args):
     guarantees temporary artifact cleanup through isolated temporary directory lifecycle.
     @param args {list[str]} Command argument vector excluding command token.
     @return {int} `0` on success; `1` on parse/validation/dependency/processing failure.
-    @satisfies REQ-055, REQ-056, REQ-057, REQ-058, REQ-059, REQ-060, REQ-061, REQ-062, REQ-064, REQ-065, REQ-066, REQ-067, REQ-068, REQ-069, REQ-071, REQ-072, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-079, REQ-080, REQ-081, REQ-088, REQ-089, REQ-090, REQ-091, REQ-092, REQ-093, REQ-094, REQ-095, REQ-096, REQ-097, REQ-098
+    @satisfies REQ-055, REQ-056, REQ-057, REQ-058, REQ-059, REQ-060, REQ-061, REQ-062, REQ-064, REQ-065, REQ-066, REQ-067, REQ-068, REQ-069, REQ-071, REQ-072, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-079, REQ-080, REQ-081, REQ-088, REQ-089, REQ-090, REQ-091, REQ-092, REQ-093, REQ-094, REQ-095, REQ-096, REQ-097, REQ-098, REQ-100, REQ-101, REQ-102
     """
 
     if not _is_supported_runtime_os():
@@ -4082,9 +4955,16 @@ def run(args):
             return 1
     imagemagick_command = None
     auto_adjust_opencv_dependencies = None
+    numpy_module = None
     if (
         postprocess_options.auto_brightness_enabled
-        or postprocess_options.auto_adjust_mode == "OpenCV"
+        or postprocess_options.auto_levels_enabled
+    ):
+        numpy_module = _resolve_numpy_dependency()
+        if numpy_module is None:
+            return 1
+    if (
+        postprocess_options.auto_adjust_mode == "OpenCV"
     ):
         auto_adjust_opencv_dependencies = _resolve_auto_adjust_opencv_dependencies()
         if auto_adjust_opencv_dependencies is None:
@@ -4123,8 +5003,18 @@ def run(args):
         f"saturation={postprocess_options.saturation:g}, "
         f"jpg-compression={postprocess_options.jpg_compression}, "
         f"auto-brightness={'enabled' if postprocess_options.auto_brightness_enabled else 'disabled'}, "
+        f"auto-levels={'enabled' if postprocess_options.auto_levels_enabled else 'disabled'}, "
         f"auto-adjust={postprocess_options.auto_adjust_mode or 'disabled'}"
     )
+    if postprocess_options.auto_levels_enabled:
+        print_info(
+            "Auto-levels knobs: "
+            f"clip-pct={postprocess_options.auto_levels_options.clip_percent:g}, "
+            f"highlight-reconstruction="
+            f"{'enabled' if postprocess_options.auto_levels_options.highlight_reconstruction_enabled else 'disabled'}, "
+            "highlight-reconstruction-method="
+            f"{postprocess_options.auto_levels_options.highlight_reconstruction_method or 'none'}"
+        )
     if enable_luminance:
         extra_args_text = ""
         if luminance_options.tmo_extra_args:
@@ -4232,6 +5122,7 @@ def run(args):
                 postprocess_options=postprocess_options,
                 imagemagick_command=imagemagick_command,
                 auto_adjust_opencv_dependencies=auto_adjust_opencv_dependencies,
+                numpy_module=numpy_module,
                 piexif_module=piexif_module,
                 source_exif_payload=source_exif_payload,
                 source_orientation=source_orientation,
