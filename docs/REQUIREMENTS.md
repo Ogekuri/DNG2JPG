@@ -1,7 +1,7 @@
 ---
 title: "DNG2JPG Requirements"
 description: Software requirements specification derived from implemented behavior
-version: "0.2.1"
+version: "0.2.0"
 date: "2026-03-29"
 author: "GitHub Copilot CLI (req-recreate)"
 scope:
@@ -152,11 +152,6 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-050**: MUST keep auto-brightness gain bounded by static and highlight-safe caps before inverse sRGB conversion.
 - **REQ-051**: MUST support both ImageMagick and OpenCV auto-adjust pipelines with shared validated knob parameters.
 - **REQ-052**: MUST print deterministic runtime diagnostics for input path, gamma, postprocess factors, backend, EV selections, and EV triplet.
-- **REQ-053**: MUST execute optional `--auto-levels` after `--auto-brightness` and before post-gamma/brightness/contrast/saturation when `--auto-levels` is enabled.
-- **REQ-054**: MUST require `--auto-levels` before accepting any `--al-*` option.
-- **REQ-055**: MUST apply auto-level normalization on RGB `uint16` domain using one configurable clip percentage with defaults preserving backward-compatible output when omitted.
-- **REQ-056**: MUST support optional auto-level highlight reconstruction with explicit selector `--al-highlight-reconstruction`.
-- **REQ-057**: MUST require explicit highlight reconstruction method when highlight reconstruction is enabled and accept only `Luminance`, `CIELabBlending`, or `Blend`.
 
 ## 4. Test Requirements
 
@@ -169,8 +164,6 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-007**: MUST verify `_extract_dng_exif_payload_and_timestamp` applies datetime priority `36867` then `36868` then `306`.
 - **TST-008**: MUST verify `_refresh_output_jpg_exif_thumbnail_after_save` preserves source orientation in `0th` IFD and sets `1st` IFD orientation to `1`.
 - **TST-009**: MUST verify release workflow gates `build-release` execution on `needs.check-branch.outputs.is_master == "true"`.
-- **TST-010**: MUST verify `_parse_run_options` rejects `--al-*` options without `--auto-levels` and rejects enabled highlight reconstruction without explicit reconstruction method.
-- **TST-011**: MUST verify `_encode_jpg` applies auto-levels stage between auto-brightness and postprocess factors when `--auto-levels` is enabled.
 
 ## 5. Evidence Matrix
 
@@ -246,11 +239,6 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-050 | `src/dng2jpg/dng2jpg.py::_apply_auto_brightness_rgb_uint8`; excerpt: bounded EV/gain and highlight-safe cap before output conversion. |
 | REQ-051 | `src/dng2jpg/dng2jpg.py::_apply_validated_auto_adjust_pipeline`, `_apply_validated_auto_adjust_pipeline_opencv`; excerpt: two implementations using shared knob dataclass. |
 | REQ-052 | `src/dng2jpg/dng2jpg.py::run`; excerpt: deterministic `print_info` diagnostic lines for runtime selections and computed EV values. |
-| REQ-053 | `src/dng2jpg/dng2jpg.py::_encode_jpg`; excerpt: executes `_apply_auto_brightness_rgb_uint8` then `_apply_auto_levels_rgb_uint16` before post-gamma/brightness/contrast/saturation. |
-| REQ-054 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: rejects `--al-*` knobs when `--auto-levels` is not enabled. |
-| REQ-055 | `src/dng2jpg/dng2jpg.py::_apply_auto_levels_rgb_uint16`; excerpt: executes clip-based per-channel normalization in uint16 path with configurable clip percent. |
-| REQ-056 | `src/dng2jpg/dng2jpg.py::_parse_auto_levels_options`, `_apply_auto_levels_rgb_uint16`; excerpt: optional highlight reconstruction toggle and conditional execution. |
-| REQ-057 | `src/dng2jpg/dng2jpg.py::_parse_auto_levels_options`; excerpt: enforces explicit method and allowed method set when highlight reconstruction is enabled. |
 | TST-001 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; branches for selector exclusivity and deterministic parse failures. |
 | TST-002 | `src/dng2jpg/dng2jpg.py::run`; branches for unsupported OS and dependency failures returning `1`. |
 | TST-003 | `src/dng2jpg/dng2jpg.py::run`; success branch prints `HDR JPG created: ...` and returns `0`. |
@@ -260,5 +248,4 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | TST-007 | `src/dng2jpg/dng2jpg.py::_extract_dng_exif_payload_and_timestamp`; explicit EXIF datetime tag priority loop. |
 | TST-008 | `src/dng2jpg/dng2jpg.py::_refresh_output_jpg_exif_thumbnail_after_save`; orientation handling in `0th` and `1st` IFDs. |
 | TST-009 | `.github/workflows/release-uvx.yml`; release job condition depends on `is_master` gate output. |
-| TST-010 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `_parse_auto_levels_options`; branches reject invalid `--al-*` gating and missing method for enabled highlight reconstruction. |
-| TST-011 | `src/dng2jpg/dng2jpg.py::_encode_jpg`; branch order applies auto-levels between auto-brightness stage and postprocess factors. |
+

@@ -45,7 +45,6 @@ DEFAULT_AA_SIGMOID_CONTRAST = 1.8
 DEFAULT_AA_SIGMOID_MIDPOINT = 0.5
 DEFAULT_AA_SATURATION_GAMMA = 0.8
 DEFAULT_AA_HIGHPASS_BLUR_SIGMA = 2.0
-DEFAULT_AL_CLIP_PCT = 0.1
 DEFAULT_AB_TARGET_GREY = 0.18
 DEFAULT_AB_MAX_GAIN = 4.0
 DEFAULT_AB_MIN_GAIN = 0.95
@@ -101,16 +100,6 @@ _AUTO_ADJUST_KNOB_OPTIONS = (
 )
 _AUTO_BRIGHTNESS_KNOB_OPTIONS = (
     "--ab-target-grey",
-)
-_AUTO_LEVELS_KNOB_OPTIONS = (
-    "--al-clip-pct",
-    "--al-highlight-reconstruction",
-    "--al-highlight-reconstruction-method",
-)
-_AUTO_LEVELS_HIGHLIGHT_RECONSTRUCTION_METHODS = (
-    "Luminance",
-    "CIELabBlending",
-    "Blend",
 )
 _LUMINANCE_OPERATOR_TABLE_HEADERS = (
     "Operator",
@@ -310,25 +299,6 @@ class AutoBrightnessOptions:
 
 
 @dataclass(frozen=True)
-class AutoLevelsOptions:
-    """@brief Hold `--auto-levels` knob values.
-
-    @details Encapsulates validated auto-levels parameters for RGB uint16
-    percentile clipping and optional highlight reconstruction stage inserted
-    between auto-brightness and static postprocess factors.
-    @param clip_pct {float} Per-side clipping percentage in `[0, 50)`.
-    @param highlight_reconstruction_enabled {bool} `True` when highlight reconstruction is enabled.
-    @param highlight_reconstruction_method {str|None} Reconstruction method token when enabled.
-    @return {None} Immutable dataclass container.
-    @satisfies REQ-053, REQ-054, REQ-055, REQ-056, REQ-057
-    """
-
-    clip_pct: float = DEFAULT_AL_CLIP_PCT
-    highlight_reconstruction_enabled: bool = False
-    highlight_reconstruction_method: str | None = None
-
-
-@dataclass(frozen=True)
 class PostprocessOptions:
     """@brief Hold deterministic postprocessing option values.
 
@@ -343,10 +313,8 @@ class PostprocessOptions:
     @param auto_brightness_options {AutoBrightnessOptions} Auto-brightness stage knobs.
     @param auto_adjust_mode {str|None} Optional auto-adjust implementation selector (`ImageMagick` or `OpenCV`).
     @param auto_adjust_options {AutoAdjustOptions} Shared auto-adjust knobs for `ImageMagick` and `OpenCV` implementations.
-    @param auto_levels_enabled {bool} `True` when auto-levels stage is enabled.
-    @param auto_levels_options {AutoLevelsOptions} Auto-levels stage knobs.
     @return {None} Immutable dataclass container.
-    @satisfies REQ-053, REQ-054, REQ-055, REQ-056, REQ-057, REQ-065, REQ-066, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-088, REQ-089, REQ-090
+    @satisfies REQ-065, REQ-066, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-088, REQ-089, REQ-090
     """
 
     post_gamma: float
@@ -358,8 +326,6 @@ class PostprocessOptions:
     auto_brightness_options: AutoBrightnessOptions = field(
         default_factory=AutoBrightnessOptions
     )
-    auto_levels_enabled: bool = False
-    auto_levels_options: AutoLevelsOptions = field(default_factory=AutoLevelsOptions)
     auto_adjust_mode: str | None = None
     auto_adjust_options: AutoAdjustOptions = field(default_factory=AutoAdjustOptions)
 
@@ -479,7 +445,7 @@ def print_help(version):
     luminance-hdr-cli tone-mapping options.
     @param version {str} CLI version label to append in usage output.
     @return {None} Writes help text to stdout.
-    @satisfies DES-008, REQ-053, REQ-054, REQ-055, REQ-056, REQ-057, REQ-063, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-088, REQ-089, REQ-090, REQ-091, REQ-094, REQ-097
+    @satisfies DES-008, REQ-056, REQ-063, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-088, REQ-089, REQ-090, REQ-091, REQ-094, REQ-097
     """
 
     print(
@@ -489,10 +455,6 @@ def print_help(version):
         f"[--brightness=<value>] [--contrast=<value>] [--saturation=<value>] "
         "[--auto-brightness[=<1|true|yes|on>]] "
         "[--ab-target-grey=<(0,1)>] "
-        "[--auto-levels[=<1|true|yes|on>]] "
-        "[--al-clip-pct=<0..50)] "
-        "[--al-highlight-reconstruction[=<1|true|yes|on>]] "
-        "[--al-highlight-reconstruction-method=<Luminance|CIELabBlending|Blend>] "
         f"[--jpg-compression=<0..100>] [--auto-adjust <ImageMagick|OpenCV>] "
         "[--aa-blur-sigma=<value>] [--aa-blur-threshold-pct=<0..100>] "
         "[--aa-level-low-pct=<0..100>] [--aa-level-high-pct=<0..100>] "
@@ -559,24 +521,6 @@ def print_help(version):
     )
     print(
         f"  --ab-target-grey=<(0,1)> - Linear BT.709 luminance target grey in (0,1) (default: {DEFAULT_AB_TARGET_GREY:g})."
-    )
-    print(
-        "  --auto-levels      - Enable auto-levels stage after auto-brightness and before static postprocess factors."
-    )
-    print(
-        "                     Optional value forms: --auto-levels=1, --auto-levels=true, --auto-levels yes."
-    )
-    print(
-        "  [auto-levels knobs] - Effective only when --auto-levels is set."
-    )
-    print(
-        f"  --al-clip-pct=<0..50) - Per-side clipping percent for auto-level normalization (default: {DEFAULT_AL_CLIP_PCT:g})."
-    )
-    print(
-        "  --al-highlight-reconstruction[=<1|true|yes|on>] - Enable highlight reconstruction in auto-levels stage."
-    )
-    print(
-        "  --al-highlight-reconstruction-method=<Luminance|CIELabBlending|Blend> - Required when highlight reconstruction is enabled."
     )
     print(
         f"  --jpg-compression=<0..100> - JPEG compression level (default: {DEFAULT_JPG_COMPRESSION})."
@@ -950,74 +894,6 @@ def _parse_auto_brightness_option(auto_brightness_raw):
         return True
     print_error(f"Invalid --auto-brightness value: {auto_brightness_raw}")
     print_error("Allowed values: 1, true, yes, on")
-    return None
-
-
-def _parse_auto_levels_option(auto_levels_raw):
-    """@brief Parse and validate one `--auto-levels` option value.
-
-    @details Accepts only boolean-like activator tokens (`1`, `true`, `yes`,
-    `on`) and rejects all other values to keep deterministic CLI behavior.
-    @param auto_levels_raw {str} Raw `--auto-levels` value token from CLI args.
-    @return {bool|None} `True` when token enables auto-levels; `None` on parse failure.
-    @satisfies REQ-053, REQ-054
-    """
-
-    auto_levels_text = auto_levels_raw.strip().lower()
-    if auto_levels_text in ("1", "true", "yes", "on"):
-        return True
-    print_error(f"Invalid --auto-levels value: {auto_levels_raw}")
-    print_error("Allowed values: 1, true, yes, on")
-    return None
-
-
-def _parse_auto_levels_highlight_reconstruction_option(option_raw):
-    """@brief Parse and validate `--al-highlight-reconstruction` boolean option.
-
-    @details Accepts deterministic boolean-like tokens for explicit enable/disable
-    of auto-level highlight reconstruction behavior.
-    @param option_raw {str} Raw option value token from CLI args.
-    @return {bool|None} Parsed boolean value when valid; `None` otherwise.
-    @satisfies REQ-056, REQ-057
-    """
-
-    option_text = option_raw.strip().lower()
-    if option_text in ("1", "true", "yes", "on"):
-        return True
-    if option_text in ("0", "false", "no", "off"):
-        return False
-    print_error(f"Invalid --al-highlight-reconstruction value: {option_raw}")
-    print_error("Allowed values: 1, true, yes, on, 0, false, no, off")
-    return None
-
-
-def _parse_auto_levels_highlight_reconstruction_method(option_raw):
-    """@brief Parse and validate `--al-highlight-reconstruction-method` option.
-
-    @details Accepts case-insensitive highlight reconstruction method names and
-    normalizes them to canonical runtime selector tokens.
-    @param option_raw {str} Raw method token from CLI args.
-    @return {str|None} Canonical method token when valid; `None` otherwise.
-    @satisfies REQ-056, REQ-057
-    """
-
-    method_text = option_raw.strip()
-    if not method_text:
-        print_error("Invalid --al-highlight-reconstruction-method value: empty value")
-        return None
-    method_lookup = {
-        "luminance": "Luminance",
-        "cielabblending": "CIELabBlending",
-        "blend": "Blend",
-    }
-    resolved = method_lookup.get(method_text.lower())
-    if resolved is not None:
-        return resolved
-    print_error(f"Invalid --al-highlight-reconstruction-method value: {option_raw}")
-    print_error(
-        "Allowed values: "
-        + ", ".join(_AUTO_LEVELS_HIGHLIGHT_RECONSTRUCTION_METHODS)
-    )
     return None
 
 
@@ -1646,74 +1522,6 @@ def _parse_auto_brightness_options(auto_brightness_raw_values):
     return AutoBrightnessOptions(target_grey=target_grey)
 
 
-def _parse_auto_levels_options(auto_levels_raw_values):
-    """@brief Parse and validate auto-levels parameters.
-
-    @details Parses optional clip percentage and optional highlight
-    reconstruction controls, applies deterministic defaults for omitted values,
-    and validates required method binding when reconstruction is enabled.
-    @param auto_levels_raw_values {dict[str, str]} Raw `--al-*` option values keyed by long option name.
-    @return {AutoLevelsOptions|None} Parsed auto-levels options or `None` on validation error.
-    @satisfies REQ-054, REQ-055, REQ-056, REQ-057
-    """
-
-    options = AutoLevelsOptions()
-    clip_pct = options.clip_pct
-    highlight_reconstruction_enabled = options.highlight_reconstruction_enabled
-    highlight_reconstruction_method = options.highlight_reconstruction_method
-
-    if "--al-clip-pct" in auto_levels_raw_values:
-        parsed = _parse_float_exclusive_range_option(
-            "--al-clip-pct",
-            auto_levels_raw_values["--al-clip-pct"],
-            0.0,
-            50.0,
-        )
-        if parsed is None:
-            return None
-        clip_pct = parsed
-
-    if "--al-highlight-reconstruction" in auto_levels_raw_values:
-        parsed = _parse_auto_levels_highlight_reconstruction_option(
-            auto_levels_raw_values["--al-highlight-reconstruction"]
-        )
-        if parsed is None:
-            return None
-        highlight_reconstruction_enabled = parsed
-
-    if "--al-highlight-reconstruction-method" in auto_levels_raw_values:
-        parsed = _parse_auto_levels_highlight_reconstruction_method(
-            auto_levels_raw_values["--al-highlight-reconstruction-method"]
-        )
-        if parsed is None:
-            return None
-        highlight_reconstruction_method = parsed
-
-    if (
-        highlight_reconstruction_enabled
-        and highlight_reconstruction_method is None
-    ):
-        print_error(
-            "Auto-levels highlight reconstruction requires --al-highlight-reconstruction-method"
-        )
-        return None
-
-    if (
-        not highlight_reconstruction_enabled
-        and "--al-highlight-reconstruction-method" in auto_levels_raw_values
-    ):
-        print_error(
-            "--al-highlight-reconstruction-method requires --al-highlight-reconstruction"
-        )
-        return None
-
-    return AutoLevelsOptions(
-        clip_pct=clip_pct,
-        highlight_reconstruction_enabled=highlight_reconstruction_enabled,
-        highlight_reconstruction_method=highlight_reconstruction_method,
-    )
-
-
 def _parse_auto_adjust_options(auto_adjust_raw_values):
     """@brief Parse and validate shared auto-adjust knobs for both implementations.
 
@@ -1898,15 +1706,14 @@ def _parse_run_options(args):
     optional `--auto-zero-pct=<0..100>`, optional `--auto-ev-pct=<0..100>`,
     optional `--gamma=<a,b>` or `--gamma <a,b>`,
     optional postprocess controls, optional auto-brightness stage and
-    `--ab-target-grey` knob, optional auto-levels stage and `--al-*` knobs,
-    optional shared auto-adjust knobs, required backend
+    `--ab-target-grey` knob, optional shared auto-adjust knobs, required backend
     selector (`--enable-enfuse` or `--enable-luminance`), and luminance backend
     controls including explicit `--tmo*` passthrough options and optional
     auto-adjust implementation selector (`--auto-adjust <ImageMagick|OpenCV>`);
     rejects unknown options and invalid arity.
     @param args {list[str]} Raw command argument vector.
     @return {tuple[Path, Path, float|None, bool, tuple[float, float], PostprocessOptions, bool, LuminanceOptions, float, bool, float, float]|None} Parsed `(input, output, ev, auto_ev, gamma, postprocess, enable_luminance, luminance_options, ev_zero, auto_zero_enabled, auto_zero_pct, auto_ev_pct)` tuple; `None` on parse failure.
-    @satisfies REQ-053, REQ-054, REQ-055, REQ-056, REQ-057, REQ-060, REQ-061, REQ-064, REQ-065, REQ-067, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-079, REQ-080, REQ-081, REQ-082, REQ-083, REQ-084, REQ-085, REQ-087, REQ-088, REQ-089, REQ-090, REQ-091, REQ-094, REQ-097
+    @satisfies REQ-055, REQ-056, REQ-057, REQ-060, REQ-061, REQ-064, REQ-065, REQ-067, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-079, REQ-080, REQ-081, REQ-082, REQ-083, REQ-084, REQ-085, REQ-087, REQ-088, REQ-089, REQ-090, REQ-091, REQ-094, REQ-097
     """
 
     positional = []
@@ -1929,8 +1736,6 @@ def _parse_run_options(args):
     saturation_set = False
     auto_brightness_enabled = False
     auto_brightness_raw_values = {}
-    auto_levels_enabled = False
-    auto_levels_raw_values = {}
     auto_adjust_mode = None
     auto_adjust_raw_values = {}
     enable_enfuse = False
@@ -2020,76 +1825,6 @@ def _parse_run_options(args):
                 print_error(f"Unknown option: {option_name}")
                 return None
             auto_brightness_raw_values[option_name] = option_value
-            idx += consume_count
-            continue
-
-        if token == "--auto-levels":
-            if idx + 1 < len(args) and not args[idx + 1].startswith("--"):
-                parsed_auto_levels = _parse_auto_levels_option(args[idx + 1])
-                if parsed_auto_levels is None:
-                    return None
-                auto_levels_enabled = parsed_auto_levels
-                idx += 2
-                continue
-            auto_levels_enabled = True
-            idx += 1
-            continue
-
-        if token.startswith("--auto-levels="):
-            parsed_auto_levels = _parse_auto_levels_option(token.split("=", 1)[1])
-            if parsed_auto_levels is None:
-                return None
-            auto_levels_enabled = parsed_auto_levels
-            idx += 1
-            continue
-
-        if token == "--al-highlight-reconstruction":
-            if idx + 1 < len(args) and not args[idx + 1].startswith("--"):
-                parsed_option = _parse_auto_levels_highlight_reconstruction_option(
-                    args[idx + 1]
-                )
-                if parsed_option is None:
-                    return None
-                auto_levels_raw_values["--al-highlight-reconstruction"] = (
-                    "1" if parsed_option else "0"
-                )
-                idx += 2
-                continue
-            auto_levels_raw_values["--al-highlight-reconstruction"] = "1"
-            idx += 1
-            continue
-
-        if token.startswith("--al-highlight-reconstruction="):
-            parsed_option = _parse_auto_levels_highlight_reconstruction_option(
-                token.split("=", 1)[1]
-            )
-            if parsed_option is None:
-                return None
-            auto_levels_raw_values["--al-highlight-reconstruction"] = (
-                "1" if parsed_option else "0"
-            )
-            idx += 1
-            continue
-
-        if token.startswith("--al-"):
-            option_name = token
-            option_value = None
-            consume_count = 1
-            if "=" in token:
-                option_name, option_value = token.split("=", 1)
-            else:
-                if idx + 1 >= len(args):
-                    print_error(f"Missing value for {token}")
-                    return None
-                option_value = args[idx + 1]
-                if option_value.startswith("--"):
-                    print_error(f"Missing value for {token}")
-                    return None
-                consume_count = 2
-            if option_name not in _AUTO_LEVELS_KNOB_OPTIONS:
-                print_error(f"Unknown option: {option_name}")
-                return None
-            auto_levels_raw_values[option_name] = option_value
             idx += consume_count
             continue
 
@@ -2542,12 +2277,6 @@ def _parse_run_options(args):
             f"Auto-brightness knob {invalid_knob} requires --auto-brightness"
         )
         return None
-    if not auto_levels_enabled and auto_levels_raw_values:
-        invalid_knob = next(iter(auto_levels_raw_values))
-        print_error(
-            f"Auto-levels knob {invalid_knob} requires --auto-levels"
-        )
-        return None
 
     (
         backend_post_gamma,
@@ -2565,9 +2294,6 @@ def _parse_run_options(args):
         saturation = backend_saturation
     auto_brightness_options = _parse_auto_brightness_options(auto_brightness_raw_values)
     if auto_brightness_options is None:
-        return None
-    auto_levels_options = _parse_auto_levels_options(auto_levels_raw_values)
-    if auto_levels_options is None:
         return None
     auto_adjust_options = _parse_auto_adjust_options(auto_adjust_raw_values)
     if auto_adjust_options is None:
@@ -2587,8 +2313,6 @@ def _parse_run_options(args):
             jpg_compression=jpg_compression,
             auto_brightness_enabled=auto_brightness_enabled,
             auto_brightness_options=auto_brightness_options,
-            auto_levels_enabled=auto_levels_enabled,
-            auto_levels_options=auto_levels_options,
             auto_adjust_mode=auto_adjust_mode,
             auto_adjust_options=auto_adjust_options,
         ),
@@ -3275,10 +2999,10 @@ def _resolve_auto_adjust_opencv_dependencies():
     """@brief Resolve OpenCV runtime dependencies for image-domain stages.
 
     @details Imports `cv2` and `numpy` modules required by OpenCV auto-adjust
-    pipeline, auto-brightness pre-stage, and auto-levels pre-stage execution, and returns `None` with
+    pipeline and auto-brightness pre-stage execution, and returns `None` with
     deterministic error output when dependencies are missing.
     @return {tuple[ModuleType, ModuleType]|None} `(cv2_module, numpy_module)` when available; `None` on dependency failure.
-    @satisfies REQ-053, REQ-055, REQ-056, REQ-057, REQ-059, REQ-073, REQ-075, REQ-090
+    @satisfies REQ-059, REQ-073, REQ-075, REQ-090
     """
 
     try:
@@ -3517,156 +3241,6 @@ def _apply_auto_brightness_rgb_uint8(
     bright_srgb = _from_linear_srgb(np_module=np_module, image_linear=bright_linear)
     return np_module.clip(
         np_module.round(bright_srgb * 65535.0), 0.0, 65535.0
-    ).astype(np_module.uint16)
-
-
-def _reconstruct_highlights_luminance(np_module, linear_rgb, clipped_mask):
-    """@brief Reconstruct clipped highlights using luminance-preserving scaling.
-
-    @details Computes channel luminance before clipping and rescales clipped
-    pixels to preserve luminance while constraining channels to `[0,1]`.
-    @param np_module {ModuleType} Imported numpy module.
-    @param linear_rgb {object} Linear RGB float tensor in `[0,1]`.
-    @param clipped_mask {object} Boolean clipped-pixel mask.
-    @return {object} Highlight-reconstructed linear RGB tensor.
-    @satisfies REQ-056, REQ-057
-    """
-
-    if not np_module.any(clipped_mask):
-        return linear_rgb
-    restored = linear_rgb.copy()
-    luminance = _compute_bt709_luminance(np_module, linear_rgb)
-    channel_max = np_module.maximum(
-        np_module.maximum(linear_rgb[..., 0], linear_rgb[..., 1]),
-        linear_rgb[..., 2],
-    )
-    scale = luminance / np_module.maximum(channel_max, 1e-12)
-    restored[clipped_mask] = np_module.clip(
-        linear_rgb[clipped_mask] * scale[clipped_mask][:, None], 0.0, 1.0
-    )
-    return restored
-
-
-def _reconstruct_highlights_cielab_blending(cv2_module, np_module, linear_rgb, clipped_mask):
-    """@brief Reconstruct clipped highlights using CIELab chroma blending.
-
-    @details Converts linear RGB to Lab space, attenuates chroma channels in
-    clipped regions, and restores RGB from blended Lab payload.
-    @param cv2_module {ModuleType} Imported cv2 module.
-    @param np_module {ModuleType} Imported numpy module.
-    @param linear_rgb {object} Linear RGB float tensor in `[0,1]`.
-    @param clipped_mask {object} Boolean clipped-pixel mask.
-    @return {object} Highlight-reconstructed linear RGB tensor.
-    @satisfies REQ-056, REQ-057
-    """
-
-    if not np_module.any(clipped_mask):
-        return linear_rgb
-    srgb_u8 = np_module.clip(
-        np_module.round(_from_linear_srgb(np_module=np_module, image_linear=linear_rgb) * 255.0),
-        0,
-        255,
-    ).astype(np_module.uint8)
-    lab_u8 = cv2_module.cvtColor(srgb_u8, cv2_module.COLOR_RGB2LAB)
-    lab_u8[..., 1][clipped_mask] = (
-        128.0 + (lab_u8[..., 1][clipped_mask].astype(np_module.float64) - 128.0) * 0.35
-    ).astype(np_module.uint8)
-    lab_u8[..., 2][clipped_mask] = (
-        128.0 + (lab_u8[..., 2][clipped_mask].astype(np_module.float64) - 128.0) * 0.35
-    ).astype(np_module.uint8)
-    blended_srgb_u8 = cv2_module.cvtColor(lab_u8, cv2_module.COLOR_LAB2RGB)
-    blended_srgb = blended_srgb_u8.astype(np_module.float64) / 255.0
-    return _to_linear_srgb(
-        np_module=np_module, image_srgb=_clamp01(np_module, blended_srgb)
-    )
-
-
-def _reconstruct_highlights_blend(np_module, linear_rgb, clipped_mask):
-    """@brief Reconstruct clipped highlights using source-neighborhood blending.
-
-    @details Blends clipped pixels with per-row and per-column neighborhood means
-    to reduce hard clipping artifacts while preserving local color tendencies.
-    @param np_module {ModuleType} Imported numpy module.
-    @param linear_rgb {object} Linear RGB float tensor in `[0,1]`.
-    @param clipped_mask {object} Boolean clipped-pixel mask.
-    @return {object} Highlight-reconstructed linear RGB tensor.
-    @satisfies REQ-056, REQ-057
-    """
-
-    if not np_module.any(clipped_mask):
-        return linear_rgb
-    restored = linear_rgb.copy()
-    row_mean = np_module.mean(linear_rgb, axis=1, keepdims=True)
-    col_mean = np_module.mean(linear_rgb, axis=0, keepdims=True)
-    blended = (row_mean + col_mean) / 2.0
-    restored[clipped_mask] = np_module.clip(
-        0.5 * linear_rgb[clipped_mask] + 0.5 * blended[clipped_mask], 0.0, 1.0
-    )
-    return restored
-
-
-def _apply_auto_levels_rgb_uint16(
-    cv2_module, np_module, image_rgb_uint16, auto_levels_options
-):
-    """@brief Apply auto-levels stage on RGB uint16 tensor.
-
-    @details Executes percentile clipping in linear domain using one per-side
-    clip percentage and optional highlight reconstruction with required method.
-    Returns uint16 payload preserving high bit-depth path compatibility.
-    @param cv2_module {ModuleType} Imported cv2 module.
-    @param np_module {ModuleType} Imported numpy module.
-    @param image_rgb_uint16 {object} RGB uint16 image tensor.
-    @param auto_levels_options {AutoLevelsOptions} Parsed auto-levels parameters.
-    @return {object} RGB uint16 image tensor after auto-levels stage.
-    @exception ValueError Raised when input tensor is not uint16 RGB.
-    @exception RuntimeError Raised when highlight reconstruction method is invalid.
-    @satisfies REQ-053, REQ-055, REQ-056, REQ-057
-    """
-
-    if str(getattr(image_rgb_uint16, "dtype", "")) != "uint16":
-        raise ValueError("Auto-levels input image must be uint16")
-    if len(image_rgb_uint16.shape) != 3 or image_rgb_uint16.shape[2] != 3:
-        raise ValueError("Auto-levels input image must be RGB uint16")
-
-    srgb = image_rgb_uint16.astype(np_module.float64) / 65535.0
-    linear = _to_linear_srgb(np_module=np_module, image_srgb=srgb)
-    clip_pct = auto_levels_options.clip_pct
-    restored = linear.copy()
-    for channel_index in range(3):
-        channel = restored[..., channel_index]
-        low_value = float(np_module.percentile(channel, clip_pct))
-        high_value = float(np_module.percentile(channel, 100.0 - clip_pct))
-        scale = 1.0 / max(high_value - low_value, 1e-12)
-        restored[..., channel_index] = _clamp01(np_module, (channel - low_value) * scale)
-
-    if auto_levels_options.highlight_reconstruction_enabled:
-        clipped_mask = np_module.any(restored >= 1.0 - 1e-12, axis=2)
-        method = auto_levels_options.highlight_reconstruction_method
-        if method == "Luminance":
-            restored = _reconstruct_highlights_luminance(
-                np_module=np_module,
-                linear_rgb=restored,
-                clipped_mask=clipped_mask,
-            )
-        elif method == "CIELabBlending":
-            restored = _reconstruct_highlights_cielab_blending(
-                cv2_module=cv2_module,
-                np_module=np_module,
-                linear_rgb=restored,
-                clipped_mask=clipped_mask,
-            )
-        elif method == "Blend":
-            restored = _reconstruct_highlights_blend(
-                np_module=np_module,
-                linear_rgb=restored,
-                clipped_mask=clipped_mask,
-            )
-        else:
-            raise RuntimeError(f"Unsupported auto-levels highlight method: {method}")
-
-    result_srgb = _from_linear_srgb(np_module=np_module, image_linear=_clamp01(np_module, restored))
-    return np_module.clip(
-        np_module.round(result_srgb * 65535.0), 0.0, 65535.0
     ).astype(np_module.uint16)
 
 
@@ -4197,9 +3771,8 @@ def _encode_jpg(
     """@brief Encode merged HDR TIFF payload into final JPG output.
 
     @details Loads merged image payload, keeps 16-bit depth when source
-    dynamic range exceeds JPEG-native depth if auto-brightness or auto-levels is enabled,
-    optionally executes BT.709 linear-sRGB auto-brightness pre-stage, optionally
-    executes auto-levels stage, preserves
+    dynamic range exceeds JPEG-native depth if auto-brightness is enabled,
+    optionally executes BT.709 linear-sRGB auto-brightness pre-stage, preserves
     resolved `ev_zero` as extraction/merge reference only without additional
     brightness compensation at encode stage, then applies shared
     gamma/brightness/contrast/saturation postprocessing over resulting image,
@@ -4220,19 +3793,18 @@ def _encode_jpg(
     @param ev_zero {float} Selected EV center used for extraction and merge reference.
     @return {None} Side effects only.
     @exception RuntimeError Raised when auto-adjust mode dependencies are missing or auto-adjust mode value is unsupported.
-    @satisfies REQ-053, REQ-055, REQ-056, REQ-057, REQ-058, REQ-066, REQ-069, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-086, REQ-087, REQ-090
+    @satisfies REQ-058, REQ-066, REQ-069, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-086, REQ-087, REQ-090
     """
 
     merged_data = imageio_module.imread(str(merged_tiff))
     if (
         postprocess_options.auto_brightness_enabled
-        or postprocess_options.auto_levels_enabled
         or postprocess_options.auto_adjust_mode == "OpenCV"
     ):
         if auto_adjust_opencv_dependencies is None:
             raise RuntimeError("Missing required dependencies: opencv-python and numpy")
         cv2_module, np_module = auto_adjust_opencv_dependencies
-        if postprocess_options.auto_brightness_enabled or postprocess_options.auto_levels_enabled:
+        if postprocess_options.auto_brightness_enabled:
             merged_data_for_ab = _to_uint16_image_array(
                 np_module=np_module, image_data=merged_data
             )
@@ -4247,20 +3819,12 @@ def _encode_jpg(
                 len(merged_data_for_ab.shape) == 3
                 and merged_data_for_ab.shape[2] == 3
             ):
-                if postprocess_options.auto_brightness_enabled:
-                    merged_data_for_ab = _apply_auto_brightness_rgb_uint8(
-                        cv2_module=cv2_module,
-                        np_module=np_module,
-                        image_rgb_uint8=merged_data_for_ab,
-                        auto_brightness_options=postprocess_options.auto_brightness_options,
-                    )
-                if postprocess_options.auto_levels_enabled:
-                    merged_data_for_ab = _apply_auto_levels_rgb_uint16(
-                        cv2_module=cv2_module,
-                        np_module=np_module,
-                        image_rgb_uint16=merged_data_for_ab,
-                        auto_levels_options=postprocess_options.auto_levels_options,
-                    )
+                merged_data_for_ab = _apply_auto_brightness_rgb_uint8(
+                    cv2_module=cv2_module,
+                    np_module=np_module,
+                    image_rgb_uint8=merged_data_for_ab,
+                    auto_brightness_options=postprocess_options.auto_brightness_options,
+                )
             if hasattr(merged_data_for_ab, "save") and hasattr(
                 merged_data_for_ab, "convert"
             ):
@@ -4470,7 +4034,7 @@ def run(args):
     guarantees temporary artifact cleanup through isolated temporary directory lifecycle.
     @param args {list[str]} Command argument vector excluding command token.
     @return {int} `0` on success; `1` on parse/validation/dependency/processing failure.
-    @satisfies REQ-053, REQ-054, REQ-055, REQ-056, REQ-057, REQ-058, REQ-059, REQ-060, REQ-061, REQ-062, REQ-064, REQ-065, REQ-066, REQ-067, REQ-068, REQ-069, REQ-071, REQ-072, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-079, REQ-080, REQ-081, REQ-088, REQ-089, REQ-090, REQ-091, REQ-092, REQ-093, REQ-094, REQ-095, REQ-096, REQ-097, REQ-098
+    @satisfies REQ-055, REQ-056, REQ-057, REQ-058, REQ-059, REQ-060, REQ-061, REQ-062, REQ-064, REQ-065, REQ-066, REQ-067, REQ-068, REQ-069, REQ-071, REQ-072, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-079, REQ-080, REQ-081, REQ-088, REQ-089, REQ-090, REQ-091, REQ-092, REQ-093, REQ-094, REQ-095, REQ-096, REQ-097, REQ-098
     """
 
     if not _is_supported_runtime_os():
@@ -4520,7 +4084,6 @@ def run(args):
     auto_adjust_opencv_dependencies = None
     if (
         postprocess_options.auto_brightness_enabled
-        or postprocess_options.auto_levels_enabled
         or postprocess_options.auto_adjust_mode == "OpenCV"
     ):
         auto_adjust_opencv_dependencies = _resolve_auto_adjust_opencv_dependencies()
@@ -4560,7 +4123,6 @@ def run(args):
         f"saturation={postprocess_options.saturation:g}, "
         f"jpg-compression={postprocess_options.jpg_compression}, "
         f"auto-brightness={'enabled' if postprocess_options.auto_brightness_enabled else 'disabled'}, "
-        f"auto-levels={'enabled' if postprocess_options.auto_levels_enabled else 'disabled'}, "
         f"auto-adjust={postprocess_options.auto_adjust_mode or 'disabled'}"
     )
     if enable_luminance:
