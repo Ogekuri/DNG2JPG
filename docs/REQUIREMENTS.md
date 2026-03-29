@@ -112,7 +112,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-010**: MUST write bracket TIFFs named `ev_minus.tif`, `ev_zero.tif`, and `ev_plus.tif` using `rawpy.postprocess` at `output_bps=16`.
 - **REQ-011**: MUST run `enfuse` with LZW compression for enfuse backend and `luminance-hdr-cli` with deterministic HDR/TMO arguments for luminance backend.
 - **REQ-012**: MUST encode final JPEG with configurable post-gamma, brightness, contrast, saturation, and JPEG compression mapping.
-- **REQ-013**: MUST execute optional auto-brightness and optional auto-adjust stage (`ImageMagick` or `OpenCV`) before final JPEG write when configured.
+- **REQ-013**: MUST execute optional auto-brightness before optional auto-levels and before post-gamma/brightness/contrast/saturation, and MUST execute optional auto-adjust stage before final JPEG write when configured.
 - **REQ-014**: MUST synchronize output file timestamps from EXIF datetime when EXIF datetime metadata is available.
 - **REQ-015**: MUST return `1` on parse, validation, dependency, and processing errors, and return `0` on successful processing.
 - **REQ-016**: MUST execute GitHub latest-release version checks with an idle-time cache file and print version status or check errors.
@@ -149,9 +149,12 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-047**: MUST publish release assets from `dist/**/*` using `softprops/action-gh-release@v2` with `fail_on_unmatched_files: true`.
 - **REQ-048**: MUST include project script entrypoints `dng2jpg` and `d2j` mapped to `dng2jpg.core:main`.
 - **REQ-049**: SHOULD provide both `dng2jpg` and `d2j` as equivalent user-invokable CLI aliases.
-- **REQ-050**: MUST keep auto-brightness gain bounded by static and highlight-safe caps before inverse sRGB conversion.
+- **REQ-050**: MUST implement auto-brightness on RGB uint16 input/output with internal float processing using sRGB linearization, BT.709 luminance computation, and key-adaptive photographic Reinhard mapping.
 - **REQ-051**: MUST support both ImageMagick and OpenCV auto-adjust pipelines with shared validated knob parameters.
 - **REQ-052**: MUST print deterministic runtime diagnostics for input path, gamma, postprocess factors, backend, EV selections, and EV triplet.
+- **REQ-103**: MUST classify scene key from log-average luminance, median, and 5th/95th percentiles, then auto-select key value from `0.09`, `0.18`, `0.36` with configurable clamp and auto-boost limits.
+- **REQ-104**: MUST map luminance with `L=(a/Lw_bar)*Y`, percentile-derived robust `Lwhite`, and burn-out compression `Ld=(L*(1+L/Lwhite^2))/(1+L)` before linear-domain chromaticity-preserving RGB scaling.
+- **REQ-105**: MUST prevent out-of-gamut clipping by luminance-preserving desaturation only for overflowing pixels and MAY apply mild CLAHE local contrast on luminance with configurable strength and clip limit.
 - **REQ-100**: MUST support optional `--auto-levels` stage executed after optional `--auto-brightness` and before post-gamma/brightness/contrast/saturation.
 - **REQ-101**: MUST parse `--auto-levels`, `--al-clip-pct`, and `--al-highlight-reconstruction-method`, requiring `--auto-levels` before any `--al-*` option.
 - **REQ-102**: MUST require highlight reconstruction method when enabled and accept only `Luminance`, `CIELab blending`, or `Blend`.
@@ -168,7 +171,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-008**: MUST verify `_refresh_output_jpg_exif_thumbnail_after_save` preserves source orientation in `0th` IFD and sets `1st` IFD orientation to `1`.
 - **TST-009**: MUST verify release workflow gates `build-release` execution on `needs.check-branch.outputs.is_master == "true"`.
 - **TST-010**: MUST verify `_parse_run_options` enforces `--auto-levels`/`--al-*` coupling and validates allowed highlight reconstruction methods.
-- **TST-011**: MUST verify `_encode_jpg` executes auto-levels between auto-brightness and post-gamma/brightness/contrast/saturation when enabled.
+- **TST-011**: MUST verify `_apply_auto_brightness_rgb_uint8` preserves uint16 I/O and executes key-adaptive Reinhard luminance mapping with luminance-preserving anti-clipping desaturation and optional CLAHE local-contrast blending.
 
 ## 5. Evidence Matrix
 
@@ -204,7 +207,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-010 | `src/dng2jpg/dng2jpg.py::_write_bracket_images`; excerpt: writes `ev_minus.tif`, `ev_zero.tif`, `ev_plus.tif` at `output_bps=16`. |
 | REQ-011 | `src/dng2jpg/dng2jpg.py::_run_enfuse`, `_run_luminance_hdr_cli`; excerpt: `--compression=lzw`, deterministic luminance args, and `--ldrTiff 16b`. |
 | REQ-012 | `src/dng2jpg/dng2jpg.py::_encode_jpg`; excerpt: gamma LUT + brightness/contrast/saturation + quality mapping save flow. |
-| REQ-013 | `src/dng2jpg/dng2jpg.py::_encode_jpg`; excerpt: auto-brightness and selected auto-adjust stage before final JPEG save. |
+| REQ-013 | `src/dng2jpg/dng2jpg.py::_encode_jpg`; excerpt: auto-brightness executes before auto-levels and postprocess factors; optional auto-adjust executes before final JPEG save. |
 | REQ-014 | `src/dng2jpg/dng2jpg.py::_sync_output_file_timestamps_from_exif`; excerpt: applies `os.utime` when EXIF timestamp exists. |
 | REQ-015 | `src/dng2jpg/dng2jpg.py::run`; excerpt: parse/dependency/processing failures return `1`, success returns `0`. |
 | REQ-016 | `src/dng2jpg/core.py::_check_online_version`; excerpt: GitHub API check with idle-time cache policy and error/status outputs. |
@@ -241,9 +244,12 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-047 | `.github/workflows/release-uvx.yml`; excerpt: `softprops/action-gh-release@v2` uploads `dist/**/*` with unmatched-file failure enabled. |
 | REQ-048 | `pyproject.toml`; excerpt: `[project.scripts] dng2jpg = "dng2jpg.core:main"` and `d2j = "dng2jpg.core:main"`. |
 | REQ-049 | `pyproject.toml`; excerpt: both `dng2jpg` and `d2j` map to identical entrypoint. |
-| REQ-050 | `src/dng2jpg/dng2jpg.py::_apply_auto_brightness_rgb_uint8`; excerpt: bounded EV/gain and highlight-safe cap before output conversion. |
+| REQ-050 | `src/dng2jpg/dng2jpg.py::_apply_auto_brightness_rgb_uint8`; excerpt: uint16 I/O, float linearization, BT.709 luminance, and Reinhard photographic tonemap pipeline. |
 | REQ-051 | `src/dng2jpg/dng2jpg.py::_apply_validated_auto_adjust_pipeline`, `_apply_validated_auto_adjust_pipeline_opencv`; excerpt: two implementations using shared knob dataclass. |
 | REQ-052 | `src/dng2jpg/dng2jpg.py::run`; excerpt: deterministic `print_info` diagnostic lines for runtime selections and computed EV values. |
+| REQ-103 | `src/dng2jpg/dng2jpg.py::_analyze_luminance_key`, `_choose_auto_key_value`; excerpt: log-average/percentile scene classification and key auto-selection from low/normal/high presets. |
+| REQ-104 | `src/dng2jpg/dng2jpg.py::_reinhard_global_tonemap_luminance`, `_apply_auto_brightness_rgb_uint8`; excerpt: percentile robust `Lwhite` and burn-out compression before RGB scaling. |
+| REQ-105 | `src/dng2jpg/dng2jpg.py::_luminance_preserving_desaturate_to_fit`, `_apply_mild_local_contrast_bgr_uint16`; excerpt: overflow-only luminance-preserving desaturation and optional CLAHE luminance blend. |
 | REQ-100 | `src/dng2jpg/dng2jpg.py::_encode_jpg`, `_apply_auto_levels_uint16`; excerpt: optional auto-levels stage runs after auto-brightness and before postprocess factors. |
 | REQ-101 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `_parse_auto_levels_options`; excerpt: parses `--auto-levels` and `--al-*` with explicit coupling/validation. |
 | REQ-102 | `src/dng2jpg/dng2jpg.py::_parse_auto_levels_hr_method_option`, `_apply_auto_levels_uint16`; excerpt: requires and validates reconstruction method from fixed allowed set. |
@@ -257,4 +263,4 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | TST-008 | `src/dng2jpg/dng2jpg.py::_refresh_output_jpg_exif_thumbnail_after_save`; orientation handling in `0th` and `1st` IFDs. |
 | TST-009 | `.github/workflows/release-uvx.yml`; release job condition depends on `is_master` gate output. |
 | TST-010 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; branch checks for `--auto-levels` + `--al-*` coupling and reconstruction method validation. |
-| TST-011 | `src/dng2jpg/dng2jpg.py::_encode_jpg`; branch order applies auto-levels after auto-brightness and before postprocess factors. |
+| TST-011 | `src/dng2jpg/dng2jpg.py::_apply_auto_brightness_rgb_uint8`, `_apply_mild_local_contrast_bgr_uint16`; stage preserves uint16 domain with key-adaptive tonemap, anti-clipping desaturation, and optional CLAHE blend. |
