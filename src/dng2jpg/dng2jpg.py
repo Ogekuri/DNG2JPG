@@ -3538,8 +3538,9 @@ def _blend_uint16(np_module, base_uint16, target_uint16, factor):
 def _apply_brightness_uint16(np_module, image_rgb_uint16, brightness_factor):
     """@brief Apply static brightness factor on RGB uint16 tensor.
 
-    @details Multiplies all channels by configured brightness factor in float64
-    and restores clamped uint16 output.
+    @details Applies Pillow-compatible Brightness enhancement on byte-quantized
+    view of the uint16 tensor, then lifts result back to uint16 (`u8*257`) to
+    preserve legacy JPEG-domain behavior while keeping uint16 buffers.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_uint16 {object} RGB uint16 image tensor.
     @param brightness_factor {float} Brightness scale factor.
@@ -3549,16 +3550,22 @@ def _apply_brightness_uint16(np_module, image_rgb_uint16, brightness_factor):
 
     if brightness_factor == 1.0:
         return image_rgb_uint16
-    adjusted = image_rgb_uint16.astype(np_module.float64) * float(brightness_factor)
-    return np_module.clip(np_module.round(adjusted), 0.0, 65535.0).astype(np_module.uint16)
+    from PIL import Image as pil_image_module  # type: ignore
+    from PIL import ImageEnhance as pil_enhance_module  # type: ignore
+
+    image_rgb_uint8 = _to_uint8_image_array(np_module=np_module, image_data=image_rgb_uint16)
+    pil_image = pil_image_module.fromarray(image_rgb_uint8, mode="RGB")
+    pil_image = pil_enhance_module.Brightness(pil_image).enhance(float(brightness_factor))
+    output_uint8 = np_module.asarray(pil_image, dtype=np_module.uint8)
+    return (output_uint8.astype(np_module.uint16) * 257).astype(np_module.uint16)
 
 
 def _apply_contrast_uint16(np_module, image_rgb_uint16, contrast_factor):
     """@brief Apply static contrast factor on RGB uint16 tensor.
 
-    @details Replicates Pillow-like contrast behavior by blending image toward
-    grayscale mean image at midpoint `32768` equivalent using factor-driven
-    interpolation in uint16 domain.
+    @details Applies Pillow-compatible Contrast enhancement on byte-quantized
+    view of the uint16 tensor, then lifts result back to uint16 (`u8*257`) to
+    preserve legacy JPEG-domain behavior while keeping uint16 buffers.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_uint16 {object} RGB uint16 image tensor.
     @param contrast_factor {float} Contrast interpolation factor.
@@ -3568,24 +3575,22 @@ def _apply_contrast_uint16(np_module, image_rgb_uint16, contrast_factor):
 
     if contrast_factor == 1.0:
         return image_rgb_uint16
-    image_float = image_rgb_uint16.astype(np_module.float64)
-    luminance = (
-        0.299 * image_float[..., 0]
-        + 0.587 * image_float[..., 1]
-        + 0.114 * image_float[..., 2]
-    )
-    luminance = np_module.clip(np_module.round(luminance), 0.0, 65535.0)
-    mean_luminance = float(int(np_module.round(np_module.mean(luminance))))
-    neutral = np_module.full_like(image_float, mean_luminance, dtype=np_module.float64)
-    adjusted = neutral + float(contrast_factor) * (image_float - neutral)
-    return np_module.clip(np_module.round(adjusted), 0.0, 65535.0).astype(np_module.uint16)
+    from PIL import Image as pil_image_module  # type: ignore
+    from PIL import ImageEnhance as pil_enhance_module  # type: ignore
+
+    image_rgb_uint8 = _to_uint8_image_array(np_module=np_module, image_data=image_rgb_uint16)
+    pil_image = pil_image_module.fromarray(image_rgb_uint8, mode="RGB")
+    pil_image = pil_enhance_module.Contrast(pil_image).enhance(float(contrast_factor))
+    output_uint8 = np_module.asarray(pil_image, dtype=np_module.uint8)
+    return (output_uint8.astype(np_module.uint16) * 257).astype(np_module.uint16)
 
 
 def _apply_saturation_uint16(np_module, image_rgb_uint16, saturation_factor):
     """@brief Apply static saturation factor on RGB uint16 tensor.
 
-    @details Replicates Pillow-like color enhancement by blending RGB image with
-    BT.601 grayscale projection according to configured saturation factor.
+    @details Applies Pillow-compatible Color enhancement on byte-quantized view
+    of the uint16 tensor, then lifts result back to uint16 (`u8*257`) to
+    preserve legacy JPEG-domain behavior while keeping uint16 buffers.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_uint16 {object} RGB uint16 image tensor.
     @param saturation_factor {float} Saturation interpolation factor.
@@ -3595,20 +3600,14 @@ def _apply_saturation_uint16(np_module, image_rgb_uint16, saturation_factor):
 
     if saturation_factor == 1.0:
         return image_rgb_uint16
-    image_float = image_rgb_uint16.astype(np_module.float64)
-    grayscale = (
-        0.299 * image_float[..., 0]
-        + 0.587 * image_float[..., 1]
-        + 0.114 * image_float[..., 2]
-    )
-    grayscale = np_module.clip(np_module.round(grayscale), 0.0, 65535.0)
-    grayscale_rgb = np_module.repeat(grayscale[..., None], 3, axis=2)
-    return _blend_uint16(
-        np_module=np_module,
-        base_uint16=grayscale_rgb.astype(np_module.uint16),
-        target_uint16=image_rgb_uint16,
-        factor=saturation_factor,
-    )
+    from PIL import Image as pil_image_module  # type: ignore
+    from PIL import ImageEnhance as pil_enhance_module  # type: ignore
+
+    image_rgb_uint8 = _to_uint8_image_array(np_module=np_module, image_data=image_rgb_uint16)
+    pil_image = pil_image_module.fromarray(image_rgb_uint8, mode="RGB")
+    pil_image = pil_enhance_module.Color(pil_image).enhance(float(saturation_factor))
+    output_uint8 = np_module.asarray(pil_image, dtype=np_module.uint8)
+    return (output_uint8.astype(np_module.uint16) * 257).astype(np_module.uint16)
 
 
 def _apply_static_postprocess_uint16(np_module, image_rgb_uint16, postprocess_options):
