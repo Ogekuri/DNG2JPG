@@ -111,8 +111,9 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-009**: MUST compute adaptive EV from preview luminance statistics when `--auto-ev` is enabled and clamp it to supported selectors.
 - **REQ-010**: MUST write bracket TIFFs named `ev_minus.tif`, `ev_zero.tif`, and `ev_plus.tif` using `rawpy.postprocess` at `output_bps=16`.
 - **REQ-011**: MUST run `enfuse` with LZW compression for enfuse backend and `luminance-hdr-cli` with deterministic HDR/TMO arguments for luminance backend.
-- **REQ-012**: MUST encode final JPEG with configurable post-gamma, brightness, contrast, saturation, and JPEG compression mapping.
-- **REQ-013**: MUST execute optional auto-brightness before optional auto-levels and before post-gamma/brightness/contrast/saturation, and MUST execute optional auto-adjust stage before final JPEG write when configured.
+- **REQ-012**: MUST execute post-gamma, brightness, contrast, and saturation in RGB uint16 precision and perform exactly one uint16-to-uint8 quantization immediately before final JPEG save.
+- **REQ-013**: MUST execute optional auto-brightness, optional auto-levels, post-gamma, brightness, contrast, and saturation in this exact order before any optional auto-adjust stage.
+- **REQ-106**: MUST execute optional auto-adjust stage after static postprocess and before final JPEG quantization/write while preserving uint16 processing buffers.
 - **REQ-014**: MUST synchronize output file timestamps from EXIF datetime when EXIF datetime metadata is available.
 - **REQ-015**: MUST return `1` on parse, validation, dependency, and processing errors, and return `0` on successful processing.
 - **REQ-016**: MUST execute GitHub latest-release version checks with an idle-time cache file and print version status or check errors.
@@ -172,6 +173,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-009**: MUST verify release workflow gates `build-release` execution on `needs.check-branch.outputs.is_master == "true"`.
 - **TST-010**: MUST verify `_parse_run_options` enforces `--auto-levels`/`--al-*` coupling and validates allowed highlight reconstruction methods.
 - **TST-011**: MUST verify `_apply_auto_brightness_rgb_uint8` preserves uint16 I/O and executes key-adaptive Reinhard luminance mapping with luminance-preserving anti-clipping desaturation and optional CLAHE local-contrast blending.
+- **TST-012**: MUST verify `_encode_jpg` keeps uint16 static postprocess buffers and applies a single uint16-to-uint8 conversion immediately before JPEG save.
 
 ## 5. Evidence Matrix
 
