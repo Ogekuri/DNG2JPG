@@ -3485,12 +3485,34 @@ def _normalize_uint16_rgb_image(np_module, image_data):
     return normalized
 
 
+def _validate_uint16_rgb_stage_image(np_module, image_rgb_uint16, stage_label):
+    """@brief Validate uint16 RGB tensor contract for static postprocess stages.
+
+    @details Enforces deterministic guard rails for static uint16 postprocess
+    steps by requiring dtype `uint16`, rank `3`, and channel count `3`.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_uint16 {object} Stage image payload to validate.
+    @param stage_label {str} Diagnostic stage identifier for deterministic errors.
+    @return {object} Validated RGB uint16 tensor.
+    @exception ValueError Raised when stage tensor dtype or shape is unsupported.
+    @satisfies REQ-012, REQ-013, REQ-106
+    """
+
+    dtype_name = str(getattr(image_rgb_uint16, "dtype", ""))
+    if dtype_name != "uint16":
+        raise ValueError(f"{stage_label}: expected uint16 RGB tensor")
+    shape = getattr(image_rgb_uint16, "shape", ())
+    if len(shape) != 3 or shape[2] != 3:
+        raise ValueError(f"{stage_label}: expected shape (H,W,3)")
+    return image_rgb_uint16
+
+
 def _apply_post_gamma_uint16(np_module, image_rgb_uint16, gamma_value):
     """@brief Apply static post-gamma over RGB uint16 tensor.
 
-    @details Executes legacy-equivalent gamma transform by evaluating the prior
-    256-entry gamma LUT on byte-quantized bins and lifting the result back to
-    uint16 scale (`u8*257`) to preserve behavior while keeping uint16 buffers.
+    @details Executes gamma transfer directly in uint16 domain using a 65536-step
+    LUT (`index == input uint16 code value`) and returns uint16 output without
+    intermediate byte quantization to preserve full 16-bit gradation.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_uint16 {object} RGB uint16 image tensor.
     @param gamma_value {float} Static post-gamma factor.
@@ -3498,22 +3520,28 @@ def _apply_post_gamma_uint16(np_module, image_rgb_uint16, gamma_value):
     @satisfies REQ-012, REQ-013
     """
 
+    validated_input = _validate_uint16_rgb_stage_image(
+        np_module=np_module,
+        image_rgb_uint16=image_rgb_uint16,
+        stage_label="_apply_post_gamma_uint16.input",
+    )
     if gamma_value == 1.0:
-        return image_rgb_uint16
-    value_u8 = np_module.arange(256, dtype=np_module.float64)
-    lut_u8 = np_module.clip(
+        return validated_input
+    value_u16 = np_module.arange(65536, dtype=np_module.float64)
+    lut_u16 = np_module.clip(
         np_module.round(
-            np_module.power(value_u8 / 255.0, 1.0 / float(gamma_value)) * 255.0
+            np_module.power(value_u16 / 65535.0, 1.0 / float(gamma_value)) * 65535.0
         ),
         0.0,
-        255.0,
-    ).astype(np_module.uint8)
-    indices = np_module.clip(
-        np_module.round(image_rgb_uint16.astype(np_module.float64) / 257.0),
-        0.0,
-        255.0,
-    ).astype(np_module.int32)
-    return (lut_u8[indices].astype(np_module.uint16) * 257).astype(np_module.uint16)
+        65535.0,
+    ).astype(np_module.uint16)
+    indices = np_module.clip(validated_input, 0, 65535).astype(np_module.int32)
+    output = lut_u16[indices]
+    return _validate_uint16_rgb_stage_image(
+        np_module=np_module,
+        image_rgb_uint16=output,
+        stage_label="_apply_post_gamma_uint16.output",
+    )
 
 
 def _blend_uint16(np_module, base_uint16, target_uint16, factor):
@@ -3538,9 +3566,9 @@ def _blend_uint16(np_module, base_uint16, target_uint16, factor):
 def _apply_brightness_uint16(np_module, image_rgb_uint16, brightness_factor):
     """@brief Apply static brightness factor on RGB uint16 tensor.
 
-    @details Applies Pillow-compatible Brightness enhancement on byte-quantized
-    view of the uint16 tensor, then lifts result back to uint16 (`u8*257`) to
-    preserve legacy JPEG-domain behavior while keeping uint16 buffers.
+    @details Multiplies uint16 RGB channels by `brightness_factor` in float64
+    domain and applies deterministic clamp/round to uint16 without byte-domain
+    conversion.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_uint16 {object} RGB uint16 image tensor.
     @param brightness_factor {float} Brightness scale factor.
@@ -3548,24 +3576,29 @@ def _apply_brightness_uint16(np_module, image_rgb_uint16, brightness_factor):
     @satisfies REQ-012, REQ-013
     """
 
+    validated_input = _validate_uint16_rgb_stage_image(
+        np_module=np_module,
+        image_rgb_uint16=image_rgb_uint16,
+        stage_label="_apply_brightness_uint16.input",
+    )
     if brightness_factor == 1.0:
-        return image_rgb_uint16
-    from PIL import Image as pil_image_module  # type: ignore
-    from PIL import ImageEnhance as pil_enhance_module  # type: ignore
-
-    image_rgb_uint8 = _to_uint8_image_array(np_module=np_module, image_data=image_rgb_uint16)
-    pil_image = pil_image_module.fromarray(image_rgb_uint8, mode="RGB")
-    pil_image = pil_enhance_module.Brightness(pil_image).enhance(float(brightness_factor))
-    output_uint8 = np_module.asarray(pil_image, dtype=np_module.uint8)
-    return (output_uint8.astype(np_module.uint16) * 257).astype(np_module.uint16)
+        return validated_input
+    image_float = validated_input.astype(np_module.float64)
+    adjusted = image_float * float(brightness_factor)
+    output = np_module.clip(np_module.round(adjusted), 0.0, 65535.0).astype(np_module.uint16)
+    return _validate_uint16_rgb_stage_image(
+        np_module=np_module,
+        image_rgb_uint16=output,
+        stage_label="_apply_brightness_uint16.output",
+    )
 
 
 def _apply_contrast_uint16(np_module, image_rgb_uint16, contrast_factor):
     """@brief Apply static contrast factor on RGB uint16 tensor.
 
-    @details Applies Pillow-compatible Contrast enhancement on byte-quantized
-    view of the uint16 tensor, then lifts result back to uint16 (`u8*257`) to
-    preserve legacy JPEG-domain behavior while keeping uint16 buffers.
+    @details Applies contrast interpolation around luminance mean computed on
+    float64 uint16 tensor (`output = mean + factor*(input-mean)`), then clamps
+    and rounds to uint16.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_uint16 {object} RGB uint16 image tensor.
     @param contrast_factor {float} Contrast interpolation factor.
@@ -3573,24 +3606,30 @@ def _apply_contrast_uint16(np_module, image_rgb_uint16, contrast_factor):
     @satisfies REQ-012, REQ-013
     """
 
+    validated_input = _validate_uint16_rgb_stage_image(
+        np_module=np_module,
+        image_rgb_uint16=image_rgb_uint16,
+        stage_label="_apply_contrast_uint16.input",
+    )
     if contrast_factor == 1.0:
-        return image_rgb_uint16
-    from PIL import Image as pil_image_module  # type: ignore
-    from PIL import ImageEnhance as pil_enhance_module  # type: ignore
-
-    image_rgb_uint8 = _to_uint8_image_array(np_module=np_module, image_data=image_rgb_uint16)
-    pil_image = pil_image_module.fromarray(image_rgb_uint8, mode="RGB")
-    pil_image = pil_enhance_module.Contrast(pil_image).enhance(float(contrast_factor))
-    output_uint8 = np_module.asarray(pil_image, dtype=np_module.uint8)
-    return (output_uint8.astype(np_module.uint16) * 257).astype(np_module.uint16)
+        return validated_input
+    image_float = validated_input.astype(np_module.float64)
+    luminance_mean = np_module.mean(image_float, axis=(0, 1), keepdims=True)
+    adjusted = luminance_mean + float(contrast_factor) * (image_float - luminance_mean)
+    output = np_module.clip(np_module.round(adjusted), 0.0, 65535.0).astype(np_module.uint16)
+    return _validate_uint16_rgb_stage_image(
+        np_module=np_module,
+        image_rgb_uint16=output,
+        stage_label="_apply_contrast_uint16.output",
+    )
 
 
 def _apply_saturation_uint16(np_module, image_rgb_uint16, saturation_factor):
     """@brief Apply static saturation factor on RGB uint16 tensor.
 
-    @details Applies Pillow-compatible Color enhancement on byte-quantized view
-    of the uint16 tensor, then lifts result back to uint16 (`u8*257`) to
-    preserve legacy JPEG-domain behavior while keeping uint16 buffers.
+    @details Applies saturation interpolation around BT.709 luminance in float64
+    uint16 domain (`output = gray + factor*(input-gray)`), then clamps and rounds
+    to uint16.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_uint16 {object} RGB uint16 image tensor.
     @param saturation_factor {float} Saturation interpolation factor.
@@ -3598,16 +3637,27 @@ def _apply_saturation_uint16(np_module, image_rgb_uint16, saturation_factor):
     @satisfies REQ-012, REQ-013
     """
 
+    validated_input = _validate_uint16_rgb_stage_image(
+        np_module=np_module,
+        image_rgb_uint16=image_rgb_uint16,
+        stage_label="_apply_saturation_uint16.input",
+    )
     if saturation_factor == 1.0:
-        return image_rgb_uint16
-    from PIL import Image as pil_image_module  # type: ignore
-    from PIL import ImageEnhance as pil_enhance_module  # type: ignore
-
-    image_rgb_uint8 = _to_uint8_image_array(np_module=np_module, image_data=image_rgb_uint16)
-    pil_image = pil_image_module.fromarray(image_rgb_uint8, mode="RGB")
-    pil_image = pil_enhance_module.Color(pil_image).enhance(float(saturation_factor))
-    output_uint8 = np_module.asarray(pil_image, dtype=np_module.uint8)
-    return (output_uint8.astype(np_module.uint16) * 257).astype(np_module.uint16)
+        return validated_input
+    image_float = validated_input.astype(np_module.float64)
+    red_channel = image_float[:, :, 0]
+    green_channel = image_float[:, :, 1]
+    blue_channel = image_float[:, :, 2]
+    grayscale = (
+        (0.2126 * red_channel) + (0.7152 * green_channel) + (0.0722 * blue_channel)
+    )[:, :, None]
+    adjusted = grayscale + float(saturation_factor) * (image_float - grayscale)
+    output = np_module.clip(np_module.round(adjusted), 0.0, 65535.0).astype(np_module.uint16)
+    return _validate_uint16_rgb_stage_image(
+        np_module=np_module,
+        image_rgb_uint16=output,
+        stage_label="_apply_saturation_uint16.output",
+    )
 
 
 def _apply_static_postprocess_uint16(np_module, image_rgb_uint16, postprocess_options):
@@ -3623,9 +3673,14 @@ def _apply_static_postprocess_uint16(np_module, image_rgb_uint16, postprocess_op
     @satisfies REQ-012, REQ-013, REQ-106
     """
 
-    processed = _apply_post_gamma_uint16(
+    processed = _validate_uint16_rgb_stage_image(
         np_module=np_module,
         image_rgb_uint16=image_rgb_uint16,
+        stage_label="_apply_static_postprocess_uint16.input",
+    )
+    processed = _apply_post_gamma_uint16(
+        np_module=np_module,
+        image_rgb_uint16=processed,
         gamma_value=postprocess_options.post_gamma,
     )
     processed = _apply_brightness_uint16(
