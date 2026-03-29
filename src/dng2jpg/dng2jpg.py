@@ -2664,7 +2664,7 @@ def _load_image_dependencies():
 
     @details Imports `rawpy` for RAW decoding and `imageio` for image IO using
     `imageio.v3` when available with fallback to top-level `imageio` module.
-    @return {tuple[ModuleType, ModuleType, ModuleType, ModuleType]|None} `(rawpy_module, imageio_module, pil_image_module, pil_enhance_module)` on success; `None` on missing dependency.
+    @return {tuple[ModuleType, ModuleType, ModuleType]|None} `(rawpy_module, imageio_module, pil_image_module)` on success; `None` on missing dependency.
     @satisfies REQ-059, REQ-066, REQ-074
     """
 
@@ -2689,13 +2689,12 @@ def _load_image_dependencies():
 
     try:
         from PIL import Image as pil_image  # type: ignore
-        from PIL import ImageEnhance as pil_enhance  # type: ignore
     except ModuleNotFoundError:
         print_error("Python dependency missing: pillow")
         print_error("Install dependencies with: uv pip install rawpy imageio pillow")
         return None
 
-    return rawpy, imageio, pil_image, pil_enhance
+    return rawpy, imageio, pil_image
 
 
 def _parse_exif_datetime_to_timestamp(datetime_raw):
@@ -3456,6 +3455,196 @@ def _to_uint16_image_array(np_module, image_data):
     if hasattr(image_data, "astype"):
         return image_data.astype("uint16")
     return image_data
+
+
+def _normalize_uint16_rgb_image(np_module, image_data):
+    """@brief Normalize image payload into RGB uint16 tensor.
+
+    @details Converts input image payload to `uint16`, normalizes channel layout
+    for static postprocess stages by expanding grayscale to one channel,
+    replicating single-channel input to RGB, dropping alpha from RGBA input,
+    and returning first three channels for deterministic RGB processing.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_data {object} Numeric image tensor.
+    @return {object} RGB uint16 image tensor with shape `(H,W,3)`.
+    @exception ValueError Raised when normalized image has unsupported shape.
+    @satisfies REQ-012, REQ-013, REQ-106
+    """
+
+    normalized = _to_uint16_image_array(np_module=np_module, image_data=image_data)
+    if len(normalized.shape) == 2:
+        normalized = normalized[:, :, None]
+    if len(normalized.shape) == 3 and normalized.shape[2] == 1:
+        normalized = np_module.repeat(normalized, 3, axis=2)
+    if len(normalized.shape) == 3 and normalized.shape[2] == 4:
+        normalized = normalized[:, :, :3]
+    if len(normalized.shape) != 3 or normalized.shape[2] < 3:
+        raise ValueError("Postprocess input image has unsupported shape")
+    if normalized.shape[2] > 3:
+        normalized = normalized[:, :, :3]
+    return normalized
+
+
+def _apply_post_gamma_uint16(np_module, image_rgb_uint16, gamma_value):
+    """@brief Apply static post-gamma over RGB uint16 tensor.
+
+    @details Executes legacy-equivalent gamma transform by evaluating the prior
+    256-entry gamma LUT on byte-quantized bins and lifting the result back to
+    uint16 scale (`u8*257`) to preserve behavior while keeping uint16 buffers.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_uint16 {object} RGB uint16 image tensor.
+    @param gamma_value {float} Static post-gamma factor.
+    @return {object} RGB uint16 tensor after gamma stage.
+    @satisfies REQ-012, REQ-013
+    """
+
+    if gamma_value == 1.0:
+        return image_rgb_uint16
+    value_u8 = np_module.arange(256, dtype=np_module.float64)
+    lut_u8 = np_module.clip(
+        np_module.round(
+            np_module.power(value_u8 / 255.0, 1.0 / float(gamma_value)) * 255.0
+        ),
+        0.0,
+        255.0,
+    ).astype(np_module.uint8)
+    indices = np_module.clip(
+        np_module.round(image_rgb_uint16.astype(np_module.float64) / 257.0),
+        0.0,
+        255.0,
+    ).astype(np_module.int32)
+    return (lut_u8[indices].astype(np_module.uint16) * 257).astype(np_module.uint16)
+
+
+def _blend_uint16(np_module, base_uint16, target_uint16, factor):
+    """@brief Blend two uint16 tensors with deterministic linear interpolation.
+
+    @details Computes `base + factor*(target-base)` in float64, then rounds and
+    clamps to uint16 to preserve deterministic postprocess factor behavior.
+    @param np_module {ModuleType} Imported numpy module.
+    @param base_uint16 {object} Base RGB uint16 tensor.
+    @param target_uint16 {object} Target RGB uint16 tensor.
+    @param factor {float} Interpolation factor.
+    @return {object} RGB uint16 tensor after blend operation.
+    @satisfies REQ-012, REQ-013
+    """
+
+    base_float = base_uint16.astype(np_module.float64)
+    target_float = target_uint16.astype(np_module.float64)
+    blended = base_float + float(factor) * (target_float - base_float)
+    return np_module.clip(np_module.round(blended), 0.0, 65535.0).astype(np_module.uint16)
+
+
+def _apply_brightness_uint16(np_module, image_rgb_uint16, brightness_factor):
+    """@brief Apply static brightness factor on RGB uint16 tensor.
+
+    @details Multiplies all channels by configured brightness factor in float64
+    and restores clamped uint16 output.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_uint16 {object} RGB uint16 image tensor.
+    @param brightness_factor {float} Brightness scale factor.
+    @return {object} RGB uint16 tensor after brightness stage.
+    @satisfies REQ-012, REQ-013
+    """
+
+    if brightness_factor == 1.0:
+        return image_rgb_uint16
+    adjusted = image_rgb_uint16.astype(np_module.float64) * float(brightness_factor)
+    return np_module.clip(np_module.round(adjusted), 0.0, 65535.0).astype(np_module.uint16)
+
+
+def _apply_contrast_uint16(np_module, image_rgb_uint16, contrast_factor):
+    """@brief Apply static contrast factor on RGB uint16 tensor.
+
+    @details Replicates Pillow-like contrast behavior by blending image toward
+    grayscale mean image at midpoint `32768` equivalent using factor-driven
+    interpolation in uint16 domain.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_uint16 {object} RGB uint16 image tensor.
+    @param contrast_factor {float} Contrast interpolation factor.
+    @return {object} RGB uint16 tensor after contrast stage.
+    @satisfies REQ-012, REQ-013
+    """
+
+    if contrast_factor == 1.0:
+        return image_rgb_uint16
+    image_float = image_rgb_uint16.astype(np_module.float64)
+    luminance = (
+        0.299 * image_float[..., 0]
+        + 0.587 * image_float[..., 1]
+        + 0.114 * image_float[..., 2]
+    )
+    luminance = np_module.clip(np_module.round(luminance), 0.0, 65535.0)
+    mean_luminance = float(int(np_module.round(np_module.mean(luminance))))
+    neutral = np_module.full_like(image_float, mean_luminance, dtype=np_module.float64)
+    adjusted = neutral + float(contrast_factor) * (image_float - neutral)
+    return np_module.clip(np_module.round(adjusted), 0.0, 65535.0).astype(np_module.uint16)
+
+
+def _apply_saturation_uint16(np_module, image_rgb_uint16, saturation_factor):
+    """@brief Apply static saturation factor on RGB uint16 tensor.
+
+    @details Replicates Pillow-like color enhancement by blending RGB image with
+    BT.601 grayscale projection according to configured saturation factor.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_uint16 {object} RGB uint16 image tensor.
+    @param saturation_factor {float} Saturation interpolation factor.
+    @return {object} RGB uint16 tensor after saturation stage.
+    @satisfies REQ-012, REQ-013
+    """
+
+    if saturation_factor == 1.0:
+        return image_rgb_uint16
+    image_float = image_rgb_uint16.astype(np_module.float64)
+    grayscale = (
+        0.299 * image_float[..., 0]
+        + 0.587 * image_float[..., 1]
+        + 0.114 * image_float[..., 2]
+    )
+    grayscale = np_module.clip(np_module.round(grayscale), 0.0, 65535.0)
+    grayscale_rgb = np_module.repeat(grayscale[..., None], 3, axis=2)
+    return _blend_uint16(
+        np_module=np_module,
+        base_uint16=grayscale_rgb.astype(np_module.uint16),
+        target_uint16=image_rgb_uint16,
+        factor=saturation_factor,
+    )
+
+
+def _apply_static_postprocess_uint16(np_module, image_rgb_uint16, postprocess_options):
+    """@brief Execute static postprocess chain fully in uint16 precision.
+
+    @details Applies post-gamma, brightness, contrast, and saturation in fixed
+    order over RGB uint16 tensor and preserves uint16 output for downstream
+    auto-adjust/final quantization stages.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_uint16 {object} RGB uint16 image tensor.
+    @param postprocess_options {PostprocessOptions} Parsed postprocess controls.
+    @return {object} RGB uint16 tensor after static postprocess chain.
+    @satisfies REQ-012, REQ-013, REQ-106
+    """
+
+    processed = _apply_post_gamma_uint16(
+        np_module=np_module,
+        image_rgb_uint16=image_rgb_uint16,
+        gamma_value=postprocess_options.post_gamma,
+    )
+    processed = _apply_brightness_uint16(
+        np_module=np_module,
+        image_rgb_uint16=processed,
+        brightness_factor=postprocess_options.brightness,
+    )
+    processed = _apply_contrast_uint16(
+        np_module=np_module,
+        image_rgb_uint16=processed,
+        contrast_factor=postprocess_options.contrast,
+    )
+    processed = _apply_saturation_uint16(
+        np_module=np_module,
+        image_rgb_uint16=processed,
+        saturation_factor=postprocess_options.saturation,
+    )
+    return processed
 
 
 def _to_linear_srgb(np_module, image_srgb):
@@ -4895,7 +5084,6 @@ def _load_piexif_dependency():
 def _encode_jpg(
     imageio_module,
     pil_image_module,
-    pil_enhance_module,
     merged_tiff,
     output_jpg,
     postprocess_options,
@@ -4909,189 +5097,80 @@ def _encode_jpg(
 ):
     """@brief Encode merged HDR TIFF payload into final JPG output.
 
-    @details Loads merged image payload, keeps 16-bit depth when source
-    dynamic range exceeds JPEG-native depth if auto-brightness or auto-levels
-    is enabled, optionally executes BT.709 linear-sRGB auto-brightness pre-stage,
-    optionally executes auto-levels stage after auto-brightness and before shared
-    gamma/brightness/contrast/saturation factors, preserves resolved `ev_zero`
-    as extraction/merge reference only without additional brightness compensation
-    at encode stage, then applies shared gamma/brightness/contrast/saturation
-    postprocessing over resulting image,
-    optionally executes auto-adjust stage over temporary lossless 16-bit TIFF
-    intermediates, and writes JPEG with configured compression level for both
-    HDR backends.
+    @details Loads merged image payload, normalizes to RGB uint16 tensor, executes
+    optional auto-brightness stage, optional auto-levels stage, static
+    post-gamma/brightness/contrast/saturation chain in uint16 precision, optional
+    auto-adjust stage over temporary 16-bit TIFF intermediates, then performs one
+    final uint16-to-uint8 conversion immediately before JPEG save.
     @param imageio_module {ModuleType} Imported imageio module with `imread` and `imwrite`.
     @param pil_image_module {ModuleType} Imported Pillow image module.
-    @param pil_enhance_module {ModuleType} Imported Pillow ImageEnhance module.
     @param merged_tiff {Path} Merged TIFF source path produced by `enfuse`.
     @param output_jpg {Path} Final JPG output path.
     @param postprocess_options {PostprocessOptions} Shared TIFF-to-JPG correction settings.
     @param imagemagick_command {str|None} Optional pre-resolved ImageMagick executable.
     @param auto_adjust_opencv_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` modules for OpenCV auto-adjust implementations.
-    @param numpy_module {ModuleType|None} Optional numpy module for auto-brightness and auto-levels stages.
+    @param numpy_module {ModuleType|None} Optional numpy module for uint16-domain stages.
     @param piexif_module {ModuleType|None} Optional piexif module for EXIF thumbnail refresh.
     @param source_exif_payload {bytes|None} Serialized EXIF payload copied from input DNG.
     @param source_orientation {int} Source EXIF orientation value in range `1..8`.
     @param ev_zero {float} Selected EV center used for extraction and merge reference.
     @return {None} Side effects only.
-    @exception RuntimeError Raised when auto-adjust mode dependencies are missing or auto-adjust mode value is unsupported.
-    @satisfies REQ-013, REQ-050, REQ-058, REQ-066, REQ-069, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-086, REQ-087, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105
+    @exception RuntimeError Raised when numpy or auto-adjust mode dependencies are missing or auto-adjust mode value is unsupported.
+    @satisfies REQ-012, REQ-013, REQ-050, REQ-058, REQ-066, REQ-069, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-086, REQ-087, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-106
     """
 
+    del ev_zero
     merged_data = imageio_module.imread(str(merged_tiff))
-    if (
-        postprocess_options.auto_brightness_enabled
-        or postprocess_options.auto_levels_enabled
-        or postprocess_options.auto_adjust_mode == "OpenCV"
-    ):
-        if numpy_module is not None:
-            np_module = numpy_module
-        elif auto_adjust_opencv_dependencies is not None:
-            _cv2_module, np_module = auto_adjust_opencv_dependencies
-            del _cv2_module
-        else:
-            raise RuntimeError("Missing required dependency: numpy")
-        if postprocess_options.auto_brightness_enabled:
-            merged_data_for_ab = _to_uint16_image_array(
-                np_module=np_module, image_data=merged_data
-            )
-            if len(merged_data_for_ab.shape) == 2:
-                merged_data_for_ab = merged_data_for_ab[:, :, None]
-            if (
-                len(merged_data_for_ab.shape) == 3
-                and merged_data_for_ab.shape[2] == 4
-            ):
-                merged_data_for_ab = merged_data_for_ab[:, :, :3]
-            if (
-                len(merged_data_for_ab.shape) == 3
-                and merged_data_for_ab.shape[2] == 3
-            ):
-                merged_data_for_ab = _apply_auto_brightness_rgb_uint8(
-                    np_module=np_module,
-                    image_rgb_uint8=merged_data_for_ab,
-                    auto_brightness_options=postprocess_options.auto_brightness_options,
-                )
-                if postprocess_options.auto_brightness_options.local_contrast_strength > 0.0:
-                    if auto_adjust_opencv_dependencies is not None:
-                        cv2_module, _opencv_np_module = auto_adjust_opencv_dependencies
-                        del _opencv_np_module
-                    else:
-                        try:
-                            import cv2 as cv2_module  # type: ignore
-                        except ModuleNotFoundError as exc:
-                            raise RuntimeError("Missing required dependency: opencv-python") from exc
-                    merged_data_for_ab = cv2_module.cvtColor(
-                        merged_data_for_ab,
-                        cv2_module.COLOR_RGB2BGR,
-                    )
-                    merged_data_for_ab = _apply_mild_local_contrast_bgr_uint16(
-                        cv2_module=cv2_module,
-                        np_module=np_module,
-                        image_bgr_uint16=merged_data_for_ab,
-                        options=postprocess_options.auto_brightness_options,
-                    )
-                    merged_data_for_ab = cv2_module.cvtColor(
-                        merged_data_for_ab,
-                        cv2_module.COLOR_BGR2RGB,
-                    )
-            if (
-                postprocess_options.auto_levels_enabled
-                and len(merged_data_for_ab.shape) == 3
-                and merged_data_for_ab.shape[2] == 3
-            ):
-                merged_data_for_ab = _apply_auto_levels_uint16(
-                    np_module=np_module,
-                    image_rgb_uint16=merged_data_for_ab,
-                    auto_levels_options=postprocess_options.auto_levels_options,
-                )
-            if hasattr(merged_data_for_ab, "save") and hasattr(
-                merged_data_for_ab, "convert"
-            ):
-                merged_data = merged_data_for_ab
-            elif not (
-                hasattr(merged_data_for_ab, "shape")
-                or hasattr(merged_data_for_ab, "dtype")
-                or hasattr(merged_data_for_ab, "astype")
-            ):
-                merged_data = merged_data_for_ab
-            else:
-                merged_data = _to_uint8_image_array(
-                    np_module=np_module, image_data=merged_data_for_ab
-                )
-        elif postprocess_options.auto_levels_enabled:
-            merged_data_for_al = _to_uint16_image_array(
-                np_module=np_module, image_data=merged_data
-            )
-            if len(merged_data_for_al.shape) == 2:
-                merged_data_for_al = merged_data_for_al[:, :, None]
-            if len(merged_data_for_al.shape) == 3 and merged_data_for_al.shape[2] == 4:
-                merged_data_for_al = merged_data_for_al[:, :, :3]
-            if (
-                len(merged_data_for_al.shape) == 3
-                and merged_data_for_al.shape[2] == 3
-            ):
-                merged_data_for_al = _apply_auto_levels_uint16(
-                    np_module=np_module,
-                    image_rgb_uint16=merged_data_for_al,
-                    auto_levels_options=postprocess_options.auto_levels_options,
-                )
-            merged_data = _to_uint8_image_array(
-                np_module=np_module, image_data=merged_data_for_al
-            )
-        elif postprocess_options.auto_adjust_mode == "OpenCV":
-            merged_data = _to_uint8_image_array(
-                np_module=np_module, image_data=merged_data
-            )
+    if numpy_module is not None:
+        np_module = numpy_module
+    elif auto_adjust_opencv_dependencies is not None:
+        _cv2_module, np_module = auto_adjust_opencv_dependencies
+        del _cv2_module
     else:
-        dtype_name = str(getattr(merged_data, "dtype", ""))
-        if dtype_name and dtype_name != "uint8":
-            scaled = merged_data / 257.0
-            if hasattr(scaled, "clip"):
-                scaled = scaled.clip(0, 255)
-            if hasattr(scaled, "astype"):
-                merged_data = scaled.astype("uint8")
+        try:
+            import numpy as np_module  # type: ignore
+        except ModuleNotFoundError as exc:
+            raise RuntimeError("Missing required dependency: numpy") from exc
+
+    image_rgb_uint16 = _normalize_uint16_rgb_image(
+        np_module=np_module,
+        image_data=merged_data,
+    )
+    if postprocess_options.auto_brightness_enabled:
+        image_rgb_uint16 = _apply_auto_brightness_rgb_uint8(
+            np_module=np_module,
+            image_rgb_uint8=image_rgb_uint16,
+            auto_brightness_options=postprocess_options.auto_brightness_options,
+        )
+        if postprocess_options.auto_brightness_options.local_contrast_strength > 0.0:
+            if auto_adjust_opencv_dependencies is not None:
+                cv2_module, _opencv_np_module = auto_adjust_opencv_dependencies
+                del _opencv_np_module
             else:
-                merged_data = scaled
-
-    if hasattr(merged_data, "save") and hasattr(merged_data, "convert"):
-        pil_image = merged_data
-    else:
-        pil_image = pil_image_module.fromarray(merged_data)
-
-    if getattr(pil_image, "mode", "") == "RGBA":
-        pil_image = pil_image.convert("RGB")
-
-    if postprocess_options.post_gamma != 1.0:
-        lut = [
-            max(
-                0,
-                min(
-                    255,
-                    int(
-                        round(
-                            ((value / 255.0) ** (1.0 / postprocess_options.post_gamma))
-                            * 255.0
-                        )
-                    ),
-                ),
+                try:
+                    import cv2 as cv2_module  # type: ignore
+                except ModuleNotFoundError as exc:
+                    raise RuntimeError("Missing required dependency: opencv-python") from exc
+            image_bgr_uint16 = cv2_module.cvtColor(image_rgb_uint16, cv2_module.COLOR_RGB2BGR)
+            image_bgr_uint16 = _apply_mild_local_contrast_bgr_uint16(
+                cv2_module=cv2_module,
+                np_module=np_module,
+                image_bgr_uint16=image_bgr_uint16,
+                options=postprocess_options.auto_brightness_options,
             )
-            for value in range(256)
-        ]
-        band_count = len(getattr(pil_image, "getbands", lambda: ("R", "G", "B"))())
-        pil_image = pil_image.point(lut * max(1, band_count))
+            image_rgb_uint16 = cv2_module.cvtColor(image_bgr_uint16, cv2_module.COLOR_BGR2RGB)
+    if postprocess_options.auto_levels_enabled:
+        image_rgb_uint16 = _apply_auto_levels_uint16(
+            np_module=np_module,
+            image_rgb_uint16=image_rgb_uint16,
+            auto_levels_options=postprocess_options.auto_levels_options,
+        )
 
-    if postprocess_options.brightness != 1.0:
-        pil_image = pil_enhance_module.Brightness(pil_image).enhance(
-            postprocess_options.brightness
-        )
-    if postprocess_options.contrast != 1.0:
-        pil_image = pil_enhance_module.Contrast(pil_image).enhance(
-            postprocess_options.contrast
-        )
-    if postprocess_options.saturation != 1.0:
-        pil_image = pil_enhance_module.Color(pil_image).enhance(
-            postprocess_options.saturation
-        )
+    image_rgb_uint16 = _apply_static_postprocess_uint16(
+        np_module=np_module,
+        image_rgb_uint16=image_rgb_uint16,
+        postprocess_options=postprocess_options,
+    )
 
     if postprocess_options.auto_adjust_mode is not None:
         with tempfile.TemporaryDirectory(
@@ -5100,9 +5179,7 @@ def _encode_jpg(
             auto_adjust_temp_dir = Path(auto_adjust_temp_dir_raw)
             postprocessed_input = auto_adjust_temp_dir / "postprocessed_input.tif"
             auto_adjust_output = auto_adjust_temp_dir / "auto_adjust_output.tif"
-            pil_image.save(
-                str(postprocessed_input), format="TIFF", compression="tiff_lzw"
-            )
+            imageio_module.imwrite(str(postprocessed_input), image_rgb_uint16)
             if postprocess_options.auto_adjust_mode == "ImageMagick":
                 if imagemagick_command is None:
                     imagemagick_command = _resolve_imagemagick_command()
@@ -5133,23 +5210,13 @@ def _encode_jpg(
                 raise RuntimeError(
                     f"Unsupported auto-adjust mode: {postprocess_options.auto_adjust_mode}"
                 )
-            auto_adjust_data = imageio_module.imread(str(auto_adjust_output))
-            auto_adjust_dtype_name = str(getattr(auto_adjust_data, "dtype", ""))
-            if auto_adjust_dtype_name and auto_adjust_dtype_name != "uint8":
-                auto_adjust_scaled = auto_adjust_data / 257.0
-                if hasattr(auto_adjust_scaled, "clip"):
-                    auto_adjust_scaled = auto_adjust_scaled.clip(0, 255)
-                if hasattr(auto_adjust_scaled, "astype"):
-                    auto_adjust_data = auto_adjust_scaled.astype("uint8")
-                else:
-                    auto_adjust_data = auto_adjust_scaled
-            if hasattr(auto_adjust_data, "save") and hasattr(
-                auto_adjust_data, "convert"
-            ):
-                pil_image = auto_adjust_data
-            else:
-                pil_image = pil_image_module.fromarray(auto_adjust_data)
+            image_rgb_uint16 = _normalize_uint16_rgb_image(
+                np_module=np_module,
+                image_data=imageio_module.imread(str(auto_adjust_output)),
+            )
 
+    image_rgb_uint8 = _to_uint8_image_array(np_module=np_module, image_data=image_rgb_uint16)
+    pil_image = pil_image_module.fromarray(image_rgb_uint8)
     if getattr(pil_image, "mode", "") != "RGB":
         pil_image = pil_image.convert("RGB")
 
@@ -5307,7 +5374,7 @@ def run(args):
     if dependencies is None:
         return 1
 
-    rawpy_module, imageio_module, pil_image_module, pil_enhance_module = dependencies
+    rawpy_module, imageio_module, pil_image_module = dependencies
     source_exif_payload, source_exif_timestamp, source_orientation = (
         _extract_dng_exif_payload_and_timestamp(
             pil_image_module=pil_image_module,
@@ -5456,7 +5523,6 @@ def run(args):
             _encode_jpg(
                 imageio_module=imageio_module,
                 pil_image_module=pil_image_module,
-                pil_enhance_module=pil_enhance_module,
                 merged_tiff=merged_tiff,
                 output_jpg=output_jpg,
                 postprocess_options=postprocess_options,
