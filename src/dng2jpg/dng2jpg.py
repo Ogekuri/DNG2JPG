@@ -45,12 +45,18 @@ DEFAULT_AA_SIGMOID_CONTRAST = 1.8
 DEFAULT_AA_SIGMOID_MIDPOINT = 0.5
 DEFAULT_AA_SATURATION_GAMMA = 0.8
 DEFAULT_AA_HIGHPASS_BLUR_SIGMA = 2.0
-DEFAULT_AB_TARGET_GREY = 0.18
-DEFAULT_AB_MAX_GAIN = 4.0
-DEFAULT_AB_MIN_GAIN = 0.95
-DEFAULT_AB_P98_HIGHLIGHT_MAX = 0.90
-DEFAULT_AB_CORRECTION_STRENGTH = 0.35
-DEFAULT_AB_MAX_EV_CORRECTION = 0.5
+DEFAULT_AB_KEY_VALUE = None
+DEFAULT_AB_WHITE_POINT_PERCENTILE = 99.8
+DEFAULT_AB_KEY_MIN = 0.045
+DEFAULT_AB_KEY_MAX = 0.72
+DEFAULT_AB_MAX_AUTO_BOOST_FACTOR = 1.25
+DEFAULT_AB_LOCAL_CONTRAST_STRENGTH = 0.20
+DEFAULT_AB_CLAHE_CLIP_LIMIT = 1.6
+DEFAULT_AB_CLAHE_TILE_GRID_SIZE = (8, 8)
+DEFAULT_AB_EPS = 1e-6
+DEFAULT_AB_LOW_KEY_VALUE = 0.09
+DEFAULT_AB_NORMAL_KEY_VALUE = 0.18
+DEFAULT_AB_HIGH_KEY_VALUE = 0.36
 DEFAULT_AL_CLIP_PERCENT = 0.02
 DEFAULT_AL_HISTCOMPR = 3
 _AUTO_LEVELS_HIGHLIGHT_METHODS = (
@@ -106,7 +112,13 @@ _AUTO_ADJUST_KNOB_OPTIONS = (
     "--aa-highpass-blur-sigma",
 )
 _AUTO_BRIGHTNESS_KNOB_OPTIONS = (
-    "--ab-target-grey",
+    "--ab-key-value",
+    "--ab-white-point-pct",
+    "--ab-key-min",
+    "--ab-key-max",
+    "--ab-max-auto-boost",
+    "--ab-local-contrast-strength",
+    "--ab-clahe-clip-limit",
 )
 _AUTO_LEVELS_KNOB_OPTIONS = (
     "--al-clip-pct",
@@ -294,19 +306,32 @@ class AutoAdjustOptions:
 class AutoBrightnessOptions:
     """@brief Hold `--auto-brightness` knob values.
 
-    @details Encapsulates validated auto-brightness parameters for the BT.709
-    linear-sRGB luminance pipeline with light EV-domain correction and
-    highlight-safe global gain cap.
-    @param target_grey {float} Linear BT.709 middle-grey luminance target in `(0, 1)`.
-    @param correction_strength {float} EV-domain correction multiplier in `(0, +inf)`.
-    @param max_ev_correction {float} Positive EV correction clamp in `(0, +inf)`.
+    @details Encapsulates parameters for the 16-bit BT.709 photographic
+    tonemap pipeline: key-classification, key-value selection, robust white
+    point, luminance-preserving anti-clipping desaturation, and optional mild
+    CLAHE micro-contrast blending in the Y channel.
+    @param key_value {float|None} Manual Reinhard key value override in `(0, +inf)`; `None` enables automatic key selection.
+    @param white_point_percentile {float} Percentile in `(0, 100)` used to derive robust `Lwhite`.
+    @param key_min {float} Minimum allowed key value clamp in `(0, +inf)`.
+    @param key_max {float} Maximum allowed key value clamp in `(0, +inf)`.
+    @param max_auto_boost_factor {float} Multiplicative adjustment factor for automatic key adaptation in `(0, +inf)`.
+    @param local_contrast_strength {float} CLAHE blend factor in `[0, 1]`.
+    @param clahe_clip_limit {float} OpenCV CLAHE clip limit in `(0, +inf)`.
+    @param clahe_tile_grid_size {tuple[int, int]} OpenCV CLAHE tile grid size `(rows, cols)`, each `>=1`.
+    @param eps {float} Positive numerical stability guard used in divisions and logarithms.
     @return {None} Immutable dataclass container.
-    @satisfies REQ-065, REQ-088, REQ-089, REQ-090
+    @satisfies REQ-050, REQ-065, REQ-088, REQ-089, REQ-090, REQ-103, REQ-104, REQ-105
     """
 
-    target_grey: float = DEFAULT_AB_TARGET_GREY
-    correction_strength: float = DEFAULT_AB_CORRECTION_STRENGTH
-    max_ev_correction: float = DEFAULT_AB_MAX_EV_CORRECTION
+    key_value: float | None = DEFAULT_AB_KEY_VALUE
+    white_point_percentile: float = DEFAULT_AB_WHITE_POINT_PERCENTILE
+    key_min: float = DEFAULT_AB_KEY_MIN
+    key_max: float = DEFAULT_AB_KEY_MAX
+    max_auto_boost_factor: float = DEFAULT_AB_MAX_AUTO_BOOST_FACTOR
+    local_contrast_strength: float = DEFAULT_AB_LOCAL_CONTRAST_STRENGTH
+    clahe_clip_limit: float = DEFAULT_AB_CLAHE_CLIP_LIMIT
+    clahe_tile_grid_size: tuple[int, int] = DEFAULT_AB_CLAHE_TILE_GRID_SIZE
+    eps: float = DEFAULT_AB_EPS
 
 
 @dataclass(frozen=True)
@@ -348,7 +373,7 @@ class PostprocessOptions:
     @param auto_adjust_mode {str|None} Optional auto-adjust implementation selector (`ImageMagick` or `OpenCV`).
     @param auto_adjust_options {AutoAdjustOptions} Shared auto-adjust knobs for `ImageMagick` and `OpenCV` implementations.
     @return {None} Immutable dataclass container.
-    @satisfies REQ-065, REQ-066, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-088, REQ-089, REQ-090, REQ-100, REQ-101, REQ-102
+    @satisfies REQ-050, REQ-065, REQ-066, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-088, REQ-089, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105
     """
 
     post_gamma: float
@@ -490,7 +515,11 @@ def print_help(version):
         "[--auto-zero-pct=<0..100>] [--auto-ev-pct=<0..100>] "
         f"[--brightness=<value>] [--contrast=<value>] [--saturation=<value>] "
         "[--auto-brightness[=<1|true|yes|on>]] "
-        "[--ab-target-grey=<(0,1)>] "
+        "[--ab-key-value=<value>] [--ab-white-point-pct=<(0,100)>] "
+        "[--ab-key-min=<value>] [--ab-key-max=<value>] "
+        "[--ab-max-auto-boost=<value>] "
+        "[--ab-local-contrast-strength=<0..1>] "
+        "[--ab-clahe-clip-limit=<value>] "
         "[--auto-levels[=<1|true|yes|on>]] "
         "[--al-clip-pct=<value>] "
         "[--al-highlight-reconstruction-method <Luminance|CIELab blending|Blend>] "
@@ -559,7 +588,25 @@ def print_help(version):
         "  [auto-brightness knobs] - Effective only when --auto-brightness is set."
     )
     print(
-        f"  --ab-target-grey=<(0,1)> - Linear BT.709 luminance target grey in (0,1) (default: {DEFAULT_AB_TARGET_GREY:g})."
+        "  --ab-key-value=<value> - Manual Reinhard key value a (>0); omit to enable automatic low/normal/high-key selection."
+    )
+    print(
+        f"  --ab-white-point-pct=<(0,100)> - Percentile for robust white point in burn-out compression (default: {DEFAULT_AB_WHITE_POINT_PERCENTILE:g})."
+    )
+    print(
+        f"  --ab-key-min=<value> - Minimum key-value clamp (>0, default: {DEFAULT_AB_KEY_MIN:g})."
+    )
+    print(
+        f"  --ab-key-max=<value> - Maximum key-value clamp (>0, default: {DEFAULT_AB_KEY_MAX:g})."
+    )
+    print(
+        f"  --ab-max-auto-boost=<value> - Auto key adaptation factor (>0, default: {DEFAULT_AB_MAX_AUTO_BOOST_FACTOR:g})."
+    )
+    print(
+        f"  --ab-local-contrast-strength=<0..1> - CLAHE Y-channel blend factor for mild local contrast (default: {DEFAULT_AB_LOCAL_CONTRAST_STRENGTH:g})."
+    )
+    print(
+        f"  --ab-clahe-clip-limit=<value> - CLAHE clip limit for local contrast (>0, default: {DEFAULT_AB_CLAHE_CLIP_LIMIT:g})."
     )
     print(
         "  --auto-levels      - Enable auto-levels stage after auto-brightness and before post-gamma/brightness/contrast/saturation."
@@ -1578,25 +1625,103 @@ def _parse_float_in_range_option(option_name, option_raw, min_value, max_value):
 def _parse_auto_brightness_options(auto_brightness_raw_values):
     """@brief Parse and validate auto-brightness parameters.
 
-    @details Parses optional linear BT.709 target-grey selector and applies
-    deterministic defaults for omitted auto-brightness options.
+    @details Parses optional key-value and compression controls for the
+    photographic BT.709 16-bit tonemap pipeline and applies deterministic
+    defaults for omitted auto-brightness options.
     @param auto_brightness_raw_values {dict[str, str]} Raw `--ab-*` option values keyed by long option name.
     @return {AutoBrightnessOptions|None} Parsed auto-brightness options or `None` on validation error.
-    @satisfies REQ-088, REQ-089
+    @satisfies REQ-088, REQ-089, REQ-103, REQ-104, REQ-105
     """
 
-    target_grey = AutoBrightnessOptions().target_grey
-    if "--ab-target-grey" in auto_brightness_raw_values:
+    defaults = AutoBrightnessOptions()
+    key_value = defaults.key_value
+    white_point_percentile = defaults.white_point_percentile
+    key_min = defaults.key_min
+    key_max = defaults.key_max
+    max_auto_boost_factor = defaults.max_auto_boost_factor
+    local_contrast_strength = defaults.local_contrast_strength
+    clahe_clip_limit = defaults.clahe_clip_limit
+
+    if "--ab-key-value" in auto_brightness_raw_values:
+        parsed = _parse_positive_float_option(
+            "--ab-key-value", auto_brightness_raw_values["--ab-key-value"]
+        )
+        if parsed is None:
+            return None
+        key_value = parsed
+
+    if "--ab-white-point-pct" in auto_brightness_raw_values:
         parsed = _parse_float_exclusive_range_option(
-            "--ab-target-grey",
-            auto_brightness_raw_values["--ab-target-grey"],
+            "--ab-white-point-pct",
+            auto_brightness_raw_values["--ab-white-point-pct"],
+            0.0,
+            100.0,
+        )
+        if parsed is None:
+            return None
+        white_point_percentile = parsed
+
+    if "--ab-key-min" in auto_brightness_raw_values:
+        parsed = _parse_positive_float_option(
+            "--ab-key-min", auto_brightness_raw_values["--ab-key-min"]
+        )
+        if parsed is None:
+            return None
+        key_min = parsed
+
+    if "--ab-key-max" in auto_brightness_raw_values:
+        parsed = _parse_positive_float_option(
+            "--ab-key-max", auto_brightness_raw_values["--ab-key-max"]
+        )
+        if parsed is None:
+            return None
+        key_max = parsed
+
+    if key_min > key_max:
+        print_error("Invalid --ab-key-min/--ab-key-max values")
+        print_error("--ab-key-min must be less than or equal to --ab-key-max")
+        return None
+
+    if "--ab-max-auto-boost" in auto_brightness_raw_values:
+        parsed = _parse_positive_float_option(
+            "--ab-max-auto-boost",
+            auto_brightness_raw_values["--ab-max-auto-boost"],
+        )
+        if parsed is None:
+            return None
+        max_auto_boost_factor = parsed
+
+    if "--ab-local-contrast-strength" in auto_brightness_raw_values:
+        parsed = _parse_float_in_range_option(
+            "--ab-local-contrast-strength",
+            auto_brightness_raw_values["--ab-local-contrast-strength"],
             0.0,
             1.0,
         )
         if parsed is None:
             return None
-        target_grey = parsed
-    return AutoBrightnessOptions(target_grey=target_grey)
+        local_contrast_strength = parsed
+
+    if "--ab-clahe-clip-limit" in auto_brightness_raw_values:
+        parsed = _parse_positive_float_option(
+            "--ab-clahe-clip-limit",
+            auto_brightness_raw_values["--ab-clahe-clip-limit"],
+        )
+        if parsed is None:
+            return None
+        clahe_clip_limit = parsed
+
+    return AutoBrightnessOptions(
+        key_value=key_value,
+        white_point_percentile=white_point_percentile,
+        key_min=key_min,
+        key_max=key_max,
+        max_auto_boost_factor=max_auto_boost_factor,
+        local_contrast_strength=local_contrast_strength,
+        clahe_clip_limit=clahe_clip_limit,
+        clahe_tile_grid_size=defaults.clahe_tile_grid_size,
+        eps=defaults.eps,
+    )
 
 
 def _parse_auto_levels_hr_method_option(auto_levels_method_raw):
@@ -1855,7 +1980,7 @@ def _parse_run_options(args):
     optional `--auto-zero-pct=<0..100>`, optional `--auto-ev-pct=<0..100>`,
     optional `--gamma=<a,b>` or `--gamma <a,b>`,
     optional postprocess controls, optional auto-brightness stage and
-    `--ab-target-grey` knob, optional auto-levels stage and `--al-*` knobs,
+    `--ab-*` knobs, optional auto-levels stage and `--al-*` knobs,
     optional shared auto-adjust knobs, required backend selector
     (`--enable-enfuse` or `--enable-luminance`), and luminance backend controls
     including explicit `--tmo*` passthrough options and optional
@@ -3387,23 +3512,192 @@ def _compute_bt709_luminance(np_module, linear_rgb):
     )
 
 
-def _apply_highlight_rolloff(np_module, linear_rgb):
-    """@brief Apply global highlight rolloff on linear RGB tensor.
+def _analyze_luminance_key(np_module, luminance, eps):
+    """@brief Analyze luminance distribution and classify scene key.
 
-    @details Applies Reinhard-style two-step rolloff when any channel exceeds
-    `1.0`, then clamps to `[0,1]`.
+    @details Computes log-average luminance, median, percentile tails, and
+    clip proxies on normalized BT.709 luminance and classifies scene as
+    `low-key`, `normal-key`, or `high-key` using conservative thresholds.
     @param np_module {ModuleType} Imported numpy module.
-    @param linear_rgb {object} Linear-sRGB float tensor.
-    @return {object} Rolloff-compressed linear-sRGB float tensor.
-    @satisfies REQ-090
+    @param luminance {object} BT.709 luminance float tensor in `[0, 1]`.
+    @param eps {float} Positive numerical stability guard.
+    @return {dict[str, float|str]} Key analysis dictionary with key type, central statistics, tails, and clipping proxies.
+    @satisfies REQ-050, REQ-103
     """
 
-    max_value = float(np_module.max(linear_rgb)) if linear_rgb.size else 0.0
-    if max_value <= 1.0:
-        return np_module.clip(linear_rgb, 0.0, 1.0)
-    rolled = linear_rgb / (1.0 + (linear_rgb / (max_value**2)))
-    rolled = rolled / (1.0 + rolled) * (1.0 + max_value)
-    return np_module.clip(rolled, 0.0, 1.0)
+    luminance_clamped = np_module.clip(luminance, 0.0, 1.0)
+    log_average = float(
+        np_module.exp(np_module.mean(np_module.log(eps + luminance_clamped)))
+    )
+    median_luminance = float(np_module.median(luminance_clamped))
+    p05 = float(np_module.percentile(luminance_clamped, 5.0))
+    p95 = float(np_module.percentile(luminance_clamped, 95.0))
+    shadow_clip = float(np_module.mean(luminance_clamped <= (1.0 / 65535.0)))
+    highlight_clip = float(np_module.mean(luminance_clamped >= (65534.0 / 65535.0)))
+    if median_luminance < 0.35 and p95 < 0.85:
+        key_type = "low-key"
+    elif median_luminance > 0.65 and p05 > 0.15:
+        key_type = "high-key"
+    else:
+        key_type = "normal-key"
+    return {
+        "key_type": key_type,
+        "log_avg_lum": log_average,
+        "median_lum": median_luminance,
+        "p05": p05,
+        "p95": p95,
+        "shadow_clip_in": shadow_clip,
+        "highlight_clip_in": highlight_clip,
+    }
+
+
+def _choose_auto_key_value(key_analysis, auto_brightness_options):
+    """@brief Select Reinhard key value from key-analysis metrics.
+
+    @details Chooses base key by scene class (`0.09/0.18/0.36`) and applies
+    conservative under/over-exposure adaptation bounded by configured min/max
+    key limits and automatic boost factor.
+    @param key_analysis {dict[str, float|str]} Luminance key-analysis dictionary.
+    @param auto_brightness_options {AutoBrightnessOptions} Parsed auto-brightness parameters.
+    @return {float} Clamped key value `a`.
+    @satisfies REQ-050, REQ-103
+    """
+
+    key_type = str(key_analysis["key_type"])
+    if key_type == "low-key":
+        key_value = DEFAULT_AB_LOW_KEY_VALUE
+    elif key_type == "high-key":
+        key_value = DEFAULT_AB_HIGH_KEY_VALUE
+    else:
+        key_value = DEFAULT_AB_NORMAL_KEY_VALUE
+
+    under_hint = (
+        float(key_analysis["p95"]) < 0.60 and float(key_analysis["median_lum"]) < 0.35
+    )
+    over_hint = (
+        float(key_analysis["p05"]) > 0.40 and float(key_analysis["median_lum"]) > 0.65
+    )
+
+    if under_hint:
+        key_value = min(
+            key_value * auto_brightness_options.max_auto_boost_factor,
+            auto_brightness_options.key_max,
+        )
+    if over_hint:
+        key_value = max(
+            key_value / auto_brightness_options.max_auto_boost_factor,
+            auto_brightness_options.key_min,
+        )
+
+    return float(
+        min(
+            max(key_value, auto_brightness_options.key_min),
+            auto_brightness_options.key_max,
+        )
+    )
+
+
+def _reinhard_global_tonemap_luminance(
+    np_module,
+    luminance,
+    key_value,
+    white_point_percentile,
+    eps,
+):
+    """@brief Apply Reinhard global tonemap on luminance with robust `Lwhite`.
+
+    @details Executes photographic operator: `Lw_bar=exp(mean(log(eps+Y)))`,
+    `L=(a/Lw_bar)*Y`, robust `Lwhite` from percentile of `L`, then burn-out
+    compression `Ld=(L*(1+L/(Lwhite^2)))/(1+L)`.
+    @param np_module {ModuleType} Imported numpy module.
+    @param luminance {object} BT.709 luminance float tensor.
+    @param key_value {float} Reinhard key value `a`.
+    @param white_point_percentile {float} Percentile in `(0,100)` for robust white point.
+    @param eps {float} Positive numerical stability guard.
+    @return {tuple[object, dict[str, float]]} Tonemapped luminance tensor and debug statistics dictionary.
+    @satisfies REQ-050, REQ-104
+    """
+
+    luminance_clamped = np_module.clip(luminance, 0.0, 1.0)
+    lw_bar = float(np_module.exp(np_module.mean(np_module.log(eps + luminance_clamped))))
+    scaled_luminance = (key_value / (lw_bar + eps)) * luminance_clamped
+    lwhite = float(np_module.percentile(scaled_luminance, white_point_percentile))
+    lwhite = max(lwhite, eps)
+    ld = (scaled_luminance * (1.0 + (scaled_luminance / (lwhite * lwhite)))) / (
+        1.0 + scaled_luminance
+    )
+    debug = {
+        "Lw_bar": lw_bar,
+        "a": float(key_value),
+        "Lwhite": lwhite,
+        "Ld_min": float(np_module.min(ld)),
+        "Ld_max": float(np_module.max(ld)),
+    }
+    return np_module.clip(ld, 0.0, 1.0), debug
+
+
+def _luminance_preserving_desaturate_to_fit(np_module, rgb_linear, luminance, eps):
+    """@brief Desaturate only out-of-gamut pixels while preserving luminance.
+
+    @details For pixels where any RGB channel exceeds `1.0`, computes minimal
+    blend factor toward grayscale `(Y,Y,Y)` such that max channel becomes `<=1`
+    while preserving BT.709 luminance of both endpoints.
+    @param np_module {ModuleType} Imported numpy module.
+    @param rgb_linear {object} Linear RGB float tensor.
+    @param luminance {object} Target luminance tensor used for grayscale anchor.
+    @param eps {float} Positive numerical stability guard.
+    @return {object} Desaturated and clamped linear RGB tensor.
+    @satisfies REQ-050, REQ-105
+    """
+
+    rgb_out = rgb_linear.copy()
+    gray = np_module.stack([luminance, luminance, luminance], axis=-1)
+    max_channel = np_module.max(rgb_out, axis=-1)
+    mask = max_channel > 1.0
+    if not bool(np_module.any(mask)):
+        return np_module.clip(rgb_out, 0.0, 1.0)
+    denominator = max_channel - luminance + eps
+    blend = np_module.zeros_like(max_channel)
+    blend[mask] = (max_channel[mask] - 1.0) / denominator[mask]
+    blend = np_module.clip(blend, 0.0, 1.0)
+    rgb_out = (1.0 - blend[..., None]) * rgb_out + blend[..., None] * gray
+    return np_module.clip(rgb_out, 0.0, 1.0)
+
+
+def _apply_mild_local_contrast_bgr_uint16(cv2_module, np_module, image_bgr_uint16, options):
+    """@brief Apply optional mild CLAHE micro-contrast on 16-bit Y channel.
+
+    @details Converts BGR16 to YCrCb, runs CLAHE on 16-bit Y with configured
+    clip/tile controls, then blends original and CLAHE outputs using configured
+    local-contrast strength.
+    @param cv2_module {ModuleType} Imported cv2 module.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_bgr_uint16 {object} BGR uint16 image tensor.
+    @param options {AutoBrightnessOptions} Parsed auto-brightness options.
+    @return {object} BGR uint16 image tensor after optional local contrast.
+    @satisfies REQ-050, REQ-105
+    """
+
+    strength = float(min(max(options.local_contrast_strength, 0.0), 1.0))
+    if strength <= 0.0:
+        return image_bgr_uint16
+    ycrcb = cv2_module.cvtColor(image_bgr_uint16, cv2_module.COLOR_BGR2YCrCb)
+    y_channel, cr_channel, cb_channel = cv2_module.split(ycrcb)
+    clahe = cv2_module.createCLAHE(
+        clipLimit=float(options.clahe_clip_limit),
+        tileGridSize=tuple(options.clahe_tile_grid_size),
+    )
+    y_clahe = clahe.apply(y_channel)
+    ycrcb_clahe = cv2_module.merge([y_clahe, cr_channel, cb_channel])
+    bgr_clahe = cv2_module.cvtColor(ycrcb_clahe, cv2_module.COLOR_YCrCb2BGR)
+    blended = cv2_module.addWeighted(
+        image_bgr_uint16,
+        1.0 - strength,
+        bgr_clahe,
+        strength,
+        0.0,
+    )
+    return np_module.clip(blended, 0, 65535).astype(np_module.uint16)
 
 
 def _rt_gamma2(np_module, values):
@@ -4025,21 +4319,20 @@ def _hlrecovery_blend_uint16(np_module, image_rgb, hlmax, maxval=65535.0):
 
 
 def _apply_auto_brightness_rgb_uint8(np_module, image_rgb_uint8, auto_brightness_options):
-    """@brief Apply BT.709 linear-sRGB auto-brightness on uint16 RGB tensor.
+    """@brief Apply photographic BT.709 auto-brightness on uint16 RGB tensor.
 
-    @details Executes pipeline: uint16 normalization to `[0,1]` in float64,
-    sRGB linearization, BT.709 luminance extraction, percentile statistics
-    (`p50`, `p98`), raw gain `target_grey/p50`, EV-domain light correction
-    `clamp(log2(raw_gain)*correction_strength,0,+max_ev_correction)`,
-    global gain `2^ev` constrained by fixed gain cap `4.0` and highlight-safe
-    cap `max(0.95,0.90/max(p98,1e-7))`, highlight rolloff, inverse sRGB
-    transfer, and uint16 restoration.
+    @details Executes 16-bit pipeline: normalize to float `[0,1]`, linearize
+    sRGB, derive BT.709 luminance, classify key using log-average and
+    percentiles, choose/override key value `a`, apply Reinhard global tonemap
+    with robust percentile white-point, preserve chromaticity by luminance
+    scaling, perform luminance-preserving anti-clipping desaturation, then
+    de-linearize and restore uint16 output.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_uint8 {object} RGB uint16 image tensor.
     @param auto_brightness_options {AutoBrightnessOptions} Parsed auto-brightness parameters.
     @return {object} RGB uint16 image tensor after BT.709 auto-brightness.
     @exception ValueError Raised when input tensor is not uint16 RGB.
-    @satisfies REQ-066, REQ-090, REQ-099
+    @satisfies REQ-050, REQ-066, REQ-090, REQ-099, REQ-103, REQ-104, REQ-105
     """
 
     if str(getattr(image_rgb_uint8, "dtype", "")) != "uint16":
@@ -4049,30 +4342,40 @@ def _apply_auto_brightness_rgb_uint8(np_module, image_rgb_uint8, auto_brightness
 
     image_srgb = image_rgb_uint8.astype(np_module.float64) / 65535.0
     image_linear = _to_linear_srgb(np_module=np_module, image_srgb=image_srgb)
-
-    linear_luminance = _compute_bt709_luminance(np_module=np_module, linear_rgb=image_linear)
-    p50 = float(np_module.percentile(linear_luminance, 50))
-    p98 = float(np_module.percentile(linear_luminance, 98))
-
-    raw_gain = auto_brightness_options.target_grey / (p50 + 1e-7)
-    raw_ev = math.log2(max(raw_gain, 1e-7))
-    light_ev = max(
-        0.0,
-        min(
-            raw_ev * auto_brightness_options.correction_strength,
-            auto_brightness_options.max_ev_correction,
-        ),
+    luminance = _compute_bt709_luminance(np_module=np_module, linear_rgb=image_linear)
+    key_analysis = _analyze_luminance_key(
+        np_module=np_module,
+        luminance=luminance,
+        eps=auto_brightness_options.eps,
     )
-    gain = 2.0**light_ev
-    gain = min(
-        gain,
-        DEFAULT_AB_MAX_GAIN,
-        max(DEFAULT_AB_MIN_GAIN, DEFAULT_AB_P98_HIGHLIGHT_MAX / max(p98, 1e-7)),
+    key_value = auto_brightness_options.key_value
+    if key_value is None:
+        key_value = _choose_auto_key_value(
+            key_analysis=key_analysis,
+            auto_brightness_options=auto_brightness_options,
+        )
+    else:
+        key_value = float(
+            min(
+                max(float(key_value), auto_brightness_options.key_min),
+                auto_brightness_options.key_max,
+            )
+        )
+    luminance_mapped, _debug = _reinhard_global_tonemap_luminance(
+        np_module=np_module,
+        luminance=luminance,
+        key_value=float(key_value),
+        white_point_percentile=float(auto_brightness_options.white_point_percentile),
+        eps=float(auto_brightness_options.eps),
     )
-
-    bright_linear = image_linear * gain
-    bright_linear = _apply_highlight_rolloff(np_module=np_module, linear_rgb=bright_linear)
-
+    luminance_scale = luminance_mapped / (luminance + auto_brightness_options.eps)
+    bright_linear = image_linear * luminance_scale[..., None]
+    bright_linear = _luminance_preserving_desaturate_to_fit(
+        np_module=np_module,
+        rgb_linear=bright_linear,
+        luminance=luminance_mapped,
+        eps=auto_brightness_options.eps,
+    )
     bright_srgb = _from_linear_srgb(np_module=np_module, image_linear=bright_linear)
     return np_module.clip(
         np_module.round(bright_srgb * 65535.0), 0.0, 65535.0
@@ -4632,7 +4935,7 @@ def _encode_jpg(
     @param ev_zero {float} Selected EV center used for extraction and merge reference.
     @return {None} Side effects only.
     @exception RuntimeError Raised when auto-adjust mode dependencies are missing or auto-adjust mode value is unsupported.
-    @satisfies REQ-058, REQ-066, REQ-069, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-086, REQ-087, REQ-090, REQ-100, REQ-101, REQ-102
+    @satisfies REQ-013, REQ-050, REQ-058, REQ-066, REQ-069, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-086, REQ-087, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105
     """
 
     merged_data = imageio_module.imread(str(merged_tiff))
@@ -4668,6 +4971,29 @@ def _encode_jpg(
                     image_rgb_uint8=merged_data_for_ab,
                     auto_brightness_options=postprocess_options.auto_brightness_options,
                 )
+                if postprocess_options.auto_brightness_options.local_contrast_strength > 0.0:
+                    if auto_adjust_opencv_dependencies is not None:
+                        cv2_module, _opencv_np_module = auto_adjust_opencv_dependencies
+                        del _opencv_np_module
+                    else:
+                        try:
+                            import cv2 as cv2_module  # type: ignore
+                        except ModuleNotFoundError as exc:
+                            raise RuntimeError("Missing required dependency: opencv-python") from exc
+                    merged_data_for_ab = cv2_module.cvtColor(
+                        merged_data_for_ab,
+                        cv2_module.COLOR_RGB2BGR,
+                    )
+                    merged_data_for_ab = _apply_mild_local_contrast_bgr_uint16(
+                        cv2_module=cv2_module,
+                        np_module=np_module,
+                        image_bgr_uint16=merged_data_for_ab,
+                        options=postprocess_options.auto_brightness_options,
+                    )
+                    merged_data_for_ab = cv2_module.cvtColor(
+                        merged_data_for_ab,
+                        cv2_module.COLOR_BGR2RGB,
+                    )
             if (
                 postprocess_options.auto_levels_enabled
                 and len(merged_data_for_ab.shape) == 3
@@ -5006,6 +5332,20 @@ def run(args):
         f"auto-levels={'enabled' if postprocess_options.auto_levels_enabled else 'disabled'}, "
         f"auto-adjust={postprocess_options.auto_adjust_mode or 'disabled'}"
     )
+    if postprocess_options.auto_brightness_enabled:
+        resolved_ab_key = postprocess_options.auto_brightness_options.key_value
+        if resolved_ab_key is None:
+            resolved_ab_key = "auto"
+        print_info(
+            "Auto-brightness knobs: "
+            f"key-value={resolved_ab_key}, "
+            f"white-point-pct={postprocess_options.auto_brightness_options.white_point_percentile:g}, "
+            f"key-min={postprocess_options.auto_brightness_options.key_min:g}, "
+            f"key-max={postprocess_options.auto_brightness_options.key_max:g}, "
+            f"max-auto-boost={postprocess_options.auto_brightness_options.max_auto_boost_factor:g}, "
+            f"local-contrast-strength={postprocess_options.auto_brightness_options.local_contrast_strength:g}, "
+            f"clahe-clip-limit={postprocess_options.auto_brightness_options.clahe_clip_limit:g}"
+        )
     if postprocess_options.auto_levels_enabled:
         print_info(
             "Auto-levels knobs: "
