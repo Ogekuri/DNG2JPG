@@ -3,10 +3,26 @@
 
 from __future__ import annotations
 
+import importlib.util
 from dataclasses import dataclass
+from pathlib import Path
+import sys
 
 import numpy as np
-from dng2jpg import dng2jpg as dng2jpg_module
+
+_SRC_PATH = Path(__file__).resolve().parents[1] / "src"
+if str(_SRC_PATH) not in sys.path:
+    sys.path.insert(0, str(_SRC_PATH))
+
+_MODULE_PATH = _SRC_PATH / "dng2jpg" / "dng2jpg.py"
+_MODULE_SPEC = importlib.util.spec_from_file_location(
+    "dng2jpg_test_module",
+    _MODULE_PATH,
+)
+if _MODULE_SPEC is None or _MODULE_SPEC.loader is None:
+    raise RuntimeError(f"Unable to load module spec: {_MODULE_PATH}")
+dng2jpg_module = importlib.util.module_from_spec(_MODULE_SPEC)
+_MODULE_SPEC.loader.exec_module(dng2jpg_module)
 
 
 @dataclass
@@ -52,7 +68,7 @@ class _FakeImageIoModule:
         self.writes.append((path, np.array(image, copy=True)))
 
 
-def _build_postprocess_options() -> dng2jpg_module.PostprocessOptions:
+def _build_postprocess_options():
     return dng2jpg_module.PostprocessOptions(
         post_gamma=1.07,
         brightness=1.13,
@@ -149,3 +165,85 @@ def test_encode_jpg_quantizes_once_at_final_boundary(monkeypatch, tmp_path) -> N
 
     assert call_trace.count("to_uint8") == 1
     assert call_trace.index("to_uint8") > call_trace.index("static")
+
+
+def test_parse_run_options_accepts_enable_opencv_backend() -> None:
+    """Parser must accept `--enable-opencv` as exclusive backend selector."""
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--ev=1", "--enable-opencv"]
+    )
+    assert parsed is not None
+    _input_path = parsed[0]
+    _output_path = parsed[1]
+    _ev_value = parsed[2]
+    _auto_ev_enabled = parsed[3]
+    _gamma_value = parsed[4]
+    _postprocess = parsed[5]
+    enable_luminance = parsed[6]
+    enable_opencv = parsed[7]
+    opencv_merge_options = parsed[9]
+    del (
+        _input_path,
+        _output_path,
+        _ev_value,
+        _auto_ev_enabled,
+        _gamma_value,
+        _postprocess,
+    )
+    assert enable_luminance is False
+    assert enable_opencv is True
+    assert opencv_merge_options.debevec_white_point_percentile > 0.0
+
+
+def test_parse_run_options_rejects_multiple_backends_with_opencv() -> None:
+    """Parser must reject simultaneous backend selectors including OpenCV."""
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        [
+            "input.dng",
+            "output.jpg",
+            "--ev=1",
+            "--enable-opencv",
+            "--enable-enfuse",
+        ]
+    )
+    assert parsed is None
+
+
+def test_build_ev_times_from_ev_zero_and_delta_matches_bracket_sequence() -> None:
+    """EV times helper must generate three deterministic stop-space samples."""
+
+    times = dng2jpg_module._build_ev_times_from_ev_zero_and_delta(  # pylint: disable=protected-access
+        ev_zero=1.0,
+        ev_delta=0.5,
+    )
+    assert times.dtype == np.float32
+    assert times.shape == (3,)
+    np.testing.assert_allclose(
+        times,
+        np.array([2 ** 0.5, 2**1.0, 2**1.5], dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+
+
+def test_normalize_debevec_hdr_to_unit_range_clamps_to_valid_interval() -> None:
+    """Debevec normalization must return float32 RGB data in [0,1]."""
+
+    hdr_rgb = np.array(
+        [
+            [[10.0, 20.0, 30.0], [100.0, 120.0, 140.0]],
+            [[1.0, 1.5, 2.0], [0.1, 0.2, 0.3]],
+        ],
+        dtype=np.float32,
+    )
+    normalized = dng2jpg_module._normalize_debevec_hdr_to_unit_range(  # pylint: disable=protected-access
+        np_module=np,
+        hdr_rgb_float32=hdr_rgb,
+        white_point_percentile=99.0,
+    )
+    assert normalized.dtype == np.float32
+    assert normalized.shape == hdr_rgb.shape
+    assert float(np.min(normalized)) >= 0.0
+    assert float(np.max(normalized)) <= 1.0

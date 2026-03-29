@@ -159,6 +159,10 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-100**: MUST support optional `--auto-levels` stage executed after optional `--auto-brightness` and before post-gamma/brightness/contrast/saturation.
 - **REQ-101**: MUST parse `--auto-levels`, `--al-clip-pct`, and `--al-highlight-reconstruction-method`, requiring `--auto-levels` before any `--al-*` option.
 - **REQ-102**: MUST require highlight reconstruction method when enabled and accept only `Luminance`, `CIELab blending`, or `Blend`.
+- **REQ-107**: MUST accept `--enable-opencv` as HDR backend selector and enforce backend exclusivity across `--enable-enfuse`, `--enable-luminance`, and `--enable-opencv`.
+- **REQ-108**: MUST execute OpenCV backend merge using `MergeMertens` and `MergeDebevec` over bracket TIFFs ordered as `ev_minus`, `ev_zero`, `ev_plus` with EV-derived exposure times.
+- **REQ-109**: MUST normalize Debevec HDR radiance in float domain using robust luminance white-point percentile and blend it with Mertens fusion before writing merged TIFF.
+- **REQ-110**: MUST preserve 16-bit-per-channel processing in OpenCV backend by executing merge/blend in float domain and converting to `uint16` once when writing merged TIFF.
 
 ## 4. Test Requirements
 
@@ -174,6 +178,9 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-010**: MUST verify `_parse_run_options` enforces `--auto-levels`/`--al-*` coupling and validates allowed highlight reconstruction methods.
 - **TST-011**: MUST verify `_apply_auto_brightness_rgb_uint8` preserves uint16 I/O and executes key-adaptive Reinhard luminance mapping with luminance-preserving anti-clipping desaturation and optional CLAHE local-contrast blending.
 - **TST-012**: MUST verify `_encode_jpg` keeps uint16 static postprocess buffers and applies a single uint16-to-uint8 conversion immediately before JPEG save.
+- **TST-013**: MUST verify `_parse_run_options` accepts `--enable-opencv` and rejects simultaneous backend selectors.
+- **TST-014**: MUST verify OpenCV EV-time derivation returns deterministic three-element stop-space sequence mapped to bracket order.
+- **TST-015**: MUST verify Debevec normalization clamps blended radiance contribution to `[0,1]` float range before uint16 conversion.
 
 ## 5. Evidence Matrix
 
@@ -255,6 +262,10 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-100 | `src/dng2jpg/dng2jpg.py::_encode_jpg`, `_apply_auto_levels_uint16`; excerpt: optional auto-levels stage runs after auto-brightness and before postprocess factors. |
 | REQ-101 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `_parse_auto_levels_options`; excerpt: parses `--auto-levels` and `--al-*` with explicit coupling/validation. |
 | REQ-102 | `src/dng2jpg/dng2jpg.py::_parse_auto_levels_hr_method_option`, `_apply_auto_levels_uint16`; excerpt: requires and validates reconstruction method from fixed allowed set. |
+| REQ-107 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `print_help`; excerpt: parses `--enable-opencv`, enforces single backend selector, and documents backend exclusivity. |
+| REQ-108 | `src/dng2jpg/dng2jpg.py::_run_opencv_hdr_merge`, `_build_ev_times_from_ev_zero_and_delta`; excerpt: executes OpenCV Mertens+Debevec using ordered bracket inputs and EV-derived exposure times. |
+| REQ-109 | `src/dng2jpg/dng2jpg.py::_normalize_debevec_hdr_to_unit_range`, `_run_opencv_hdr_merge`; excerpt: applies robust luminance white-point percentile normalization and blends Debevec with Mertens in float domain. |
+| REQ-110 | `src/dng2jpg/dng2jpg.py::_run_opencv_hdr_merge`; excerpt: maintains float-domain processing and performs one float-to-uint16 conversion for merged TIFF write. |
 | TST-001 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; branches for selector exclusivity and deterministic parse failures. |
 | TST-002 | `src/dng2jpg/dng2jpg.py::run`; branches for unsupported OS and dependency failures returning `1`. |
 | TST-003 | `src/dng2jpg/dng2jpg.py::run`; success branch prints `HDR JPG created: ...` and returns `0`. |
@@ -266,3 +277,6 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | TST-009 | `.github/workflows/release-uvx.yml`; release job condition depends on `is_master` gate output. |
 | TST-010 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; branch checks for `--auto-levels` + `--al-*` coupling and reconstruction method validation. |
 | TST-011 | `src/dng2jpg/dng2jpg.py::_apply_auto_brightness_rgb_uint8`, `_apply_mild_local_contrast_bgr_uint16`; stage preserves uint16 domain with key-adaptive tonemap, anti-clipping desaturation, and optional CLAHE blend. |
+| TST-013 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_accepts_enable_opencv_backend`, `test_parse_run_options_rejects_multiple_backends_with_opencv`; validates acceptance and exclusivity for `--enable-opencv`. |
+| TST-014 | `tests/test_uint16_postprocess_pipeline.py::test_build_ev_times_from_ev_zero_and_delta_matches_bracket_sequence`; verifies deterministic stop-space EV-time sequence generation. |
+| TST-015 | `tests/test_uint16_postprocess_pipeline.py::test_normalize_debevec_hdr_to_unit_range_clamps_to_valid_interval`; verifies Debevec normalization clamps float output to `[0,1]`. |

@@ -2,8 +2,9 @@
 """@brief Convert one DNG file into one HDR-merged JPG output.
 
 @details Implements bracketed RAW extraction with three synthetic exposures
-(`ev_zero-ev`, `ev_zero`, `ev_zero+ev`), merges them through selected `enfuse` or selected
-`luminance-hdr-cli` flow with deterministic HDR model parameters, then writes
+(`ev_zero-ev`, `ev_zero`, `ev_zero+ev`), merges them through selected `enfuse`, selected
+`luminance-hdr-cli`, or selected OpenCV (`Mertens+Debevec`) flow with deterministic
+parameters, then writes
 final JPG to user-selected output path. Temporary artifacts are isolated in a
 temporary directory and removed automatically on success and failure.
     @satisfies PRJ-003, DES-008, REQ-055, REQ-056, REQ-057, REQ-058, REQ-059, REQ-060, REQ-061, REQ-062, REQ-063, REQ-064, REQ-065, REQ-066, REQ-067, REQ-068, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-079, REQ-080, REQ-081, REQ-088, REQ-089, REQ-090, REQ-091, REQ-092, REQ-093, REQ-094, REQ-095, REQ-096, REQ-097, REQ-098
@@ -28,7 +29,7 @@ from shell_scripts.utils import (
 )
 
 PROGRAM = "shellscripts"
-DESCRIPTION = "Convert DNG to HDR-merged JPG with optional luminance-hdr-cli backend."
+DESCRIPTION = "Convert DNG to HDR-merged JPG with optional luminance-hdr-cli or OpenCV backend."
 DEFAULT_GAMMA = (2.222, 4.5)
 DEFAULT_POST_GAMMA = 1.0
 DEFAULT_BRIGHTNESS = 1.0
@@ -72,6 +73,7 @@ DEFAULT_REINHARD02_BRIGHTNESS = 1.25
 DEFAULT_REINHARD02_CONTRAST = 0.85
 DEFAULT_REINHARD02_SATURATION = 0.55
 DEFAULT_MANTIUK08_CONTRAST = 1.2
+DEFAULT_OPENCV_DEBEVEC_WHITE_POINT_PERCENTILE = 99.5
 EV_STEP = 0.25
 MIN_SUPPORTED_BITS_PER_COLOR = 9
 DEFAULT_DNG_BITS_PER_COLOR = 14
@@ -414,6 +416,22 @@ class LuminanceOptions:
 
 
 @dataclass(frozen=True)
+class OpenCvMergeOptions:
+    """@brief Hold deterministic OpenCV HDR merge option values.
+
+    @details Encapsulates OpenCV merge controls used by the `--enable-opencv`
+    backend. The backend computes exposure fusion (`MergeMertens`) and
+    radiance merge (`MergeDebevec`) from the same uint16 bracket TIFF set, then
+    blends both outputs in float domain before one uint16 conversion.
+    @param debevec_white_point_percentile {float} Percentile in `(0, 100)` used to derive robust white-point normalization from Debevec luminance.
+    @return {None} Immutable dataclass container.
+    @satisfies REQ-108, REQ-109, REQ-110
+    """
+
+    debevec_white_point_percentile: float = DEFAULT_OPENCV_DEBEVEC_WHITE_POINT_PERCENTILE
+
+
+@dataclass(frozen=True)
 class AutoEvInputs:
     """@brief Hold adaptive EV optimization scalar inputs.
 
@@ -528,7 +546,7 @@ def print_help(version):
         "[--aa-level-low-pct=<0..100>] [--aa-level-high-pct=<0..100>] "
         "[--aa-sigmoid-contrast=<value>] [--aa-sigmoid-midpoint=<0..1>] "
         "[--aa-saturation-gamma=<value>] [--aa-highpass-blur-sigma=<value>] "
-        f"(--enable-enfuse | --enable-luminance) "
+        f"(--enable-enfuse | --enable-luminance | --enable-opencv) "
         f"[--luminance-hdr-model=<name>] [--luminance-hdr-weight=<name>] "
         f"[--luminance-hdr-response-curve=<name>] [--luminance-tmo=<name>] "
         f"[--tmo*=<value>] ({version})"
@@ -667,7 +685,11 @@ def print_help(version):
     )
     print("  --enable-luminance")
     print(
-        "                   - Select luminance-hdr-cli backend (required, mutually exclusive with --enable-enfuse)."
+        "                   - Select luminance-hdr-cli backend (required, mutually exclusive with --enable-enfuse and --enable-opencv)."
+    )
+    print("  --enable-opencv")
+    print(
+        "                   - Select OpenCV merge backend (Mertens+Debevec, required, mutually exclusive with --enable-enfuse and --enable-luminance)."
     )
     print(
         "  [postprocess defaults]"
@@ -686,6 +708,11 @@ def print_help(version):
     )
     print(
         "                   - --enable-luminance + other --luminance-tmo (except reinhard02,mantiuk08): "
+        f"post-gamma={DEFAULT_POST_GAMMA}, brightness={DEFAULT_BRIGHTNESS}, "
+        f"contrast={DEFAULT_CONTRAST}, saturation={DEFAULT_SATURATION}."
+    )
+    print(
+        "                   - --enable-opencv: "
         f"post-gamma={DEFAULT_POST_GAMMA}, brightness={DEFAULT_BRIGHTNESS}, "
         f"contrast={DEFAULT_CONTRAST}, saturation={DEFAULT_SATURATION}."
     )
@@ -1927,18 +1954,20 @@ def _parse_auto_adjust_mode_option(auto_adjust_raw):
     return None
 
 
-def _resolve_default_postprocess(enable_luminance, luminance_tmo):
+def _resolve_default_postprocess(enable_luminance, enable_opencv, luminance_tmo):
     """@brief Resolve backend-specific postprocess defaults.
 
-    @details Selects neutral defaults for enfuse and non-tuned luminance
+    @details Selects neutral defaults for enfuse/OpenCV and non-tuned luminance
     operators, and selects tuned defaults for luminance `reinhard02` and
     `mantiuk08`.
     @param enable_luminance {bool} Backend selector state.
+    @param enable_opencv {bool} OpenCV backend selector state.
     @param luminance_tmo {str} Selected luminance tone-mapping operator.
     @return {tuple[float, float, float, float]} Defaults in `(post_gamma, brightness, contrast, saturation)` order.
-    @satisfies REQ-069, REQ-071, REQ-072, REQ-091
+    @satisfies REQ-069, REQ-071, REQ-072, REQ-091, REQ-107
     """
 
+    del enable_opencv
     if not enable_luminance:
         return (
             DEFAULT_POST_GAMMA,
@@ -1982,13 +2011,13 @@ def _parse_run_options(args):
     optional postprocess controls, optional auto-brightness stage and
     `--ab-*` knobs, optional auto-levels stage and `--al-*` knobs,
     optional shared auto-adjust knobs, required backend selector
-    (`--enable-enfuse` or `--enable-luminance`), and luminance backend controls
+    (`--enable-enfuse`, `--enable-luminance`, or `--enable-opencv`), and luminance backend controls
     including explicit `--tmo*` passthrough options and optional
     auto-adjust implementation selector (`--auto-adjust <ImageMagick|OpenCV>`);
     rejects unknown options and invalid arity.
     @param args {list[str]} Raw command argument vector.
-    @return {tuple[Path, Path, float|None, bool, tuple[float, float], PostprocessOptions, bool, LuminanceOptions, float, bool, float, float]|None} Parsed `(input, output, ev, auto_ev, gamma, postprocess, enable_luminance, luminance_options, ev_zero, auto_zero_enabled, auto_zero_pct, auto_ev_pct)` tuple; `None` on parse failure.
-    @satisfies REQ-055, REQ-056, REQ-057, REQ-060, REQ-061, REQ-064, REQ-065, REQ-067, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-079, REQ-080, REQ-081, REQ-082, REQ-083, REQ-084, REQ-085, REQ-087, REQ-088, REQ-089, REQ-090, REQ-091, REQ-094, REQ-097
+    @return {tuple[Path, Path, float|None, bool, tuple[float, float], PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, float, bool, float, float]|None} Parsed `(input, output, ev, auto_ev, gamma, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, ev_zero, auto_zero_enabled, auto_zero_pct, auto_ev_pct)` tuple; `None` on parse failure.
+    @satisfies REQ-055, REQ-056, REQ-057, REQ-060, REQ-061, REQ-064, REQ-065, REQ-067, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-079, REQ-080, REQ-081, REQ-082, REQ-083, REQ-084, REQ-085, REQ-087, REQ-088, REQ-089, REQ-090, REQ-091, REQ-094, REQ-097, REQ-107, REQ-108
     """
 
     positional = []
@@ -2017,6 +2046,7 @@ def _parse_run_options(args):
     auto_adjust_raw_values = {}
     enable_enfuse = False
     enable_luminance = False
+    enable_opencv = False
     luminance_hdr_model = DEFAULT_LUMINANCE_HDR_MODEL
     luminance_hdr_weight = DEFAULT_LUMINANCE_HDR_WEIGHT
     luminance_hdr_response_curve = DEFAULT_LUMINANCE_HDR_RESPONSE_CURVE
@@ -2034,6 +2064,11 @@ def _parse_run_options(args):
 
         if token == "--enable-luminance":
             enable_luminance = True
+            idx += 1
+            continue
+
+        if token == "--enable-opencv":
+            enable_opencv = True
             idx += 1
             continue
 
@@ -2574,9 +2609,10 @@ def _parse_run_options(args):
         print_error("Exactly one EV-zero selector is allowed: --ev-zero or --auto-zero")
         return None
 
-    if enable_enfuse == enable_luminance:
+    backend_enabled_count = int(enable_enfuse) + int(enable_luminance) + int(enable_opencv)
+    if backend_enabled_count != 1:
         print_error(
-            "Exactly one backend selector is required: --enable-enfuse or --enable-luminance"
+            "Exactly one backend selector is required: --enable-enfuse, --enable-luminance, or --enable-opencv"
         )
         return None
 
@@ -2606,7 +2642,7 @@ def _parse_run_options(args):
         backend_brightness,
         backend_contrast,
         backend_saturation,
-    ) = _resolve_default_postprocess(enable_luminance, luminance_tmo)
+    ) = _resolve_default_postprocess(enable_luminance, enable_opencv, luminance_tmo)
     if not post_gamma_set:
         post_gamma = backend_post_gamma
     if not brightness_set:
@@ -2645,12 +2681,16 @@ def _parse_run_options(args):
             auto_adjust_options=auto_adjust_options,
         ),
         enable_luminance,
+        enable_opencv,
         LuminanceOptions(
             hdr_model=luminance_hdr_model,
             hdr_weight=luminance_hdr_weight,
             hdr_response_curve=luminance_hdr_response_curve,
             tmo=luminance_tmo,
             tmo_extra_args=tuple(luminance_tmo_extra_args),
+        ),
+        OpenCvMergeOptions(
+            debevec_white_point_percentile=DEFAULT_OPENCV_DEBEVEC_WHITE_POINT_PERCENTILE
         ),
         ev_zero,
         auto_zero_enabled,
@@ -3289,6 +3329,144 @@ def _run_luminance_hdr_cli(
         subprocess.run(command, check=True)
     finally:
         os.chdir(original_working_directory)
+
+
+def _build_ev_times_from_ev_zero_and_delta(ev_zero, ev_delta):
+    """@brief Build deterministic exposure times array from EV center and EV delta.
+
+    @details Computes exposure times in stop space as
+    `[2^(ev_zero-ev_delta), 2^ev_zero, 2^(ev_zero+ev_delta)]` mapped to
+    bracket order `(ev_minus, ev_zero, ev_plus)` and returns `float32` vector
+    suitable for OpenCV `MergeDebevec.process`.
+    @param ev_zero {float} Central EV used during bracket extraction.
+    @param ev_delta {float} EV bracket delta used during bracket extraction.
+    @return {object} `numpy.float32` vector with length `3`.
+    @exception RuntimeError Raised when numpy dependency is unavailable.
+    @satisfies REQ-108, REQ-109
+    """
+
+    try:
+        import numpy as np_module  # type: ignore
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("Missing required dependency: numpy") from exc
+    return np_module.array(
+        [
+            2 ** (ev_zero - ev_delta),
+            2**ev_zero,
+            2 ** (ev_zero + ev_delta),
+        ],
+        dtype=np_module.float32,
+    )
+
+
+def _normalize_debevec_hdr_to_unit_range(np_module, hdr_rgb_float32, white_point_percentile):
+    """@brief Normalize Debevec HDR tensor to unit range with robust white point.
+
+    @details Computes BT.709 luminance, extracts percentile-derived `Lwhite`,
+    scales RGB tensor by `1/Lwhite`, and clamps into `[0,1]` to produce
+    deterministic blend-ready Debevec contribution.
+    @param np_module {ModuleType} Imported numpy module.
+    @param hdr_rgb_float32 {object} Debevec output RGB tensor in float domain.
+    @param white_point_percentile {float} White-point percentile in `(0,100)`.
+    @return {object} Debevec RGB float tensor clamped to `[0,1]`.
+    @satisfies REQ-109, REQ-110
+    """
+
+    hdr_rgb_float64 = np_module.array(hdr_rgb_float32, dtype=np_module.float64)
+    luminance = (
+        0.2126 * hdr_rgb_float64[..., 0]
+        + 0.7152 * hdr_rgb_float64[..., 1]
+        + 0.0722 * hdr_rgb_float64[..., 2]
+    )
+    positive_mask = luminance > 0.0
+    if np_module.any(positive_mask):
+        positive_luminance = luminance[positive_mask]
+        white_point = float(
+            np_module.percentile(positive_luminance, float(white_point_percentile))
+        )
+        if white_point <= 0.0:
+            white_point = float(np_module.max(positive_luminance))
+        if white_point <= 0.0:
+            white_point = 1.0
+    else:
+        white_point = 1.0
+    normalized = hdr_rgb_float64 / white_point
+    return np_module.clip(normalized, 0.0, 1.0).astype(np_module.float32)
+
+
+def _run_opencv_hdr_merge(
+    bracket_paths,
+    output_hdr_tiff,
+    ev_value,
+    ev_zero,
+    opencv_merge_options,
+    auto_adjust_opencv_dependencies,
+):
+    """@brief Merge bracket TIFF files into one HDR TIFF via OpenCV Mertens+Debevec.
+
+    @details Loads deterministic bracket order, executes `MergeMertens` exposure
+    fusion and `MergeDebevec` radiance merge using EV-derived exposure times,
+    normalizes Debevec HDR with percentile robust white-point luminance scaling,
+    averages both outputs in float domain, then writes one RGB uint16 TIFF.
+    @param bracket_paths {list[Path]} Ordered intermediate exposure TIFF paths.
+    @param output_hdr_tiff {Path} Output HDR TIFF target path.
+    @param ev_value {float} EV bracket delta used to generate exposure files.
+    @param ev_zero {float} Central EV used to generate exposure files.
+    @param opencv_merge_options {OpenCvMergeOptions} OpenCV merge backend controls.
+    @param auto_adjust_opencv_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
+    @return {None} Side effects only.
+    @exception RuntimeError Raised when OpenCV/numpy dependencies are missing or bracket payloads are invalid.
+    @satisfies REQ-077, REQ-107, REQ-108, REQ-109, REQ-110
+    """
+
+    if auto_adjust_opencv_dependencies is not None:
+        cv2_module, np_module = auto_adjust_opencv_dependencies
+    else:
+        resolved_dependencies = _resolve_auto_adjust_opencv_dependencies()
+        if resolved_dependencies is None:
+            raise RuntimeError("Missing required dependencies: opencv-python and numpy")
+        cv2_module, np_module = resolved_dependencies
+
+    ordered_paths = _order_bracket_paths(bracket_paths)
+    exposures_uint16 = []
+    for path in ordered_paths:
+        image_bgr = cv2_module.imread(str(path), cv2_module.IMREAD_UNCHANGED)
+        if image_bgr is None:
+            raise RuntimeError(f"OpenCV failed to read bracket image: {path}")
+        if len(image_bgr.shape) != 3 or image_bgr.shape[2] != 3:
+            raise RuntimeError(f"OpenCV bracket image must be RGB 3-channel: {path}")
+        dtype_name = str(getattr(image_bgr, "dtype", ""))
+        if dtype_name == "uint8":
+            image_bgr = (image_bgr.astype(np_module.uint16) * 257).astype(np_module.uint16)
+        elif dtype_name != "uint16":
+            raise RuntimeError(f"OpenCV bracket image must be uint16 or uint8: {path}")
+        image_rgb_uint16 = cv2_module.cvtColor(image_bgr, cv2_module.COLOR_BGR2RGB)
+        exposures_uint16.append(image_rgb_uint16.astype(np_module.uint16))
+
+    exposure_times = _build_ev_times_from_ev_zero_and_delta(ev_zero=ev_zero, ev_delta=ev_value)
+    merge_mertens = cv2_module.createMergeMertens()
+    fusion_rgb_float32 = merge_mertens.process(exposures_uint16)
+    merge_debevec = cv2_module.createMergeDebevec()
+    debevec_hdr_float32 = merge_debevec.process(exposures_uint16, times=exposure_times)
+    debevec_rgb_unit = _normalize_debevec_hdr_to_unit_range(
+        np_module=np_module,
+        hdr_rgb_float32=debevec_hdr_float32,
+        white_point_percentile=opencv_merge_options.debevec_white_point_percentile,
+    )
+    fusion_rgb_float32 = np_module.clip(
+        np_module.array(fusion_rgb_float32, dtype=np_module.float32),
+        0.0,
+        1.0,
+    )
+    blended_rgb_float32 = (fusion_rgb_float32 + debevec_rgb_unit) * 0.5
+    blended_rgb_u16 = np_module.clip(
+        np_module.round(blended_rgb_float32 * 65535.0),
+        0.0,
+        65535.0,
+    ).astype(np_module.uint16)
+    output_bgr_u16 = cv2_module.cvtColor(blended_rgb_u16, cv2_module.COLOR_RGB2BGR)
+    if not cv2_module.imwrite(str(output_hdr_tiff), output_bgr_u16):
+        raise RuntimeError(f"OpenCV failed to write merged HDR TIFF: {output_hdr_tiff}")
 
 
 def _convert_compression_to_quality(jpg_compression):
@@ -5350,11 +5528,12 @@ def run(args):
     bits-per-color from RAW metadata, resolves manual or automatic EV-zero center,
     resolves static or adaptive EV selector around resolved center using
     bit-derived EV ceilings, extracts three RAW brackets, executes selected
-    `enfuse` flow or selected luminance-hdr-cli flow, writes JPG output, and
+    `enfuse`, selected luminance-hdr-cli, or selected OpenCV Mertens+Debevec
+    flow, writes JPG output, and
     guarantees temporary artifact cleanup through isolated temporary directory lifecycle.
     @param args {list[str]} Command argument vector excluding command token.
     @return {int} `0` on success; `1` on parse/validation/dependency/processing failure.
-    @satisfies REQ-055, REQ-056, REQ-057, REQ-058, REQ-059, REQ-060, REQ-061, REQ-062, REQ-064, REQ-065, REQ-066, REQ-067, REQ-068, REQ-069, REQ-071, REQ-072, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-079, REQ-080, REQ-081, REQ-088, REQ-089, REQ-090, REQ-091, REQ-092, REQ-093, REQ-094, REQ-095, REQ-096, REQ-097, REQ-098, REQ-100, REQ-101, REQ-102
+    @satisfies REQ-055, REQ-056, REQ-057, REQ-058, REQ-059, REQ-060, REQ-061, REQ-062, REQ-064, REQ-065, REQ-066, REQ-067, REQ-068, REQ-069, REQ-071, REQ-072, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-079, REQ-080, REQ-081, REQ-088, REQ-089, REQ-090, REQ-091, REQ-092, REQ-093, REQ-094, REQ-095, REQ-096, REQ-097, REQ-098, REQ-100, REQ-101, REQ-102, REQ-107, REQ-108, REQ-109, REQ-110
     """
 
     if not _is_supported_runtime_os():
@@ -5372,7 +5551,9 @@ def run(args):
         gamma_value,
         postprocess_options,
         enable_luminance,
+        enable_opencv,
         luminance_options,
+        opencv_merge_options,
         ev_zero,
         auto_zero_enabled,
         auto_zero_pct,
@@ -5396,7 +5577,7 @@ def run(args):
         if shutil.which("luminance-hdr-cli") is None:
             print_error("Missing required dependency: luminance-hdr-cli")
             return 1
-    else:
+    elif not enable_opencv:
         if shutil.which("enfuse") is None:
             print_error("Missing required dependency: enfuse")
             return 1
@@ -5410,9 +5591,7 @@ def run(args):
         numpy_module = _resolve_numpy_dependency()
         if numpy_module is None:
             return 1
-    if (
-        postprocess_options.auto_adjust_mode == "OpenCV"
-    ):
+    if postprocess_options.auto_adjust_mode == "OpenCV" or enable_opencv:
         auto_adjust_opencv_dependencies = _resolve_auto_adjust_opencv_dependencies()
         if auto_adjust_opencv_dependencies is None:
             return 1
@@ -5488,6 +5667,11 @@ def run(args):
             f"hdrWeight={luminance_options.hdr_weight}, "
             f"hdrResponseCurve={luminance_options.hdr_response_curve}, "
             f"tmo={luminance_options.tmo}{extra_args_text})"
+        )
+    elif enable_opencv:
+        print_info(
+            "HDR backend: OpenCV "
+            f"(merge=Mertens+Debevec, debevecWhitePointPct={opencv_merge_options.debevec_white_point_percentile:g})"
         )
     else:
         print_info("HDR backend: enfuse")
@@ -5571,6 +5755,15 @@ def run(args):
                     ev_value=effective_ev_value,
                     ev_zero=resolved_ev_zero,
                     luminance_options=luminance_options,
+                )
+            elif enable_opencv:
+                _run_opencv_hdr_merge(
+                    bracket_paths=bracket_paths,
+                    output_hdr_tiff=merged_tiff,
+                    ev_value=effective_ev_value,
+                    ev_zero=resolved_ev_zero,
+                    opencv_merge_options=opencv_merge_options,
+                    auto_adjust_opencv_dependencies=auto_adjust_opencv_dependencies,
                 )
             else:
                 _run_enfuse(bracket_paths=bracket_paths, merged_tiff=merged_tiff)
