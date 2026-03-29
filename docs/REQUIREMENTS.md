@@ -117,7 +117,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-014**: MUST synchronize output file timestamps from EXIF datetime when EXIF datetime metadata is available.
 - **REQ-015**: MUST return `1` on parse, validation, dependency, and processing errors, and return `0` on successful processing.
 - **REQ-016**: MUST execute GitHub latest-release version checks with an idle-time cache file and print version status or check errors.
-- **REQ-017**: MUST render conversion usage prefix from internal constant `PROGRAM="shellscripts"`, which can differ from installed command names.
+- **REQ-017**: MUST render conversion usage with canonical executable name `dng2jpg` and MUST NOT prepend alternative launcher labels.
 - **REQ-018**: MUST support exactly one EV-zero selector between `--ev-zero` and `--auto-zero`.
 - **REQ-019**: MUST enforce `--auto-zero-pct` and `--auto-ev-pct` values in inclusive range `0..100`.
 - **REQ-020**: MUST parse `--gamma` as two positive numeric values and reject malformed pairs.
@@ -220,7 +220,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-014 | `src/dng2jpg/dng2jpg.py::_sync_output_file_timestamps_from_exif`; excerpt: applies `os.utime` when EXIF timestamp exists. |
 | REQ-015 | `src/dng2jpg/dng2jpg.py::run`; excerpt: parse/dependency/processing failures return `1`, success returns `0`. |
 | REQ-016 | `src/dng2jpg/core.py::_check_online_version`; excerpt: GitHub API check with idle-time cache policy and error/status outputs. |
-| REQ-017 | `src/dng2jpg/dng2jpg.py`; excerpt: `PROGRAM = "shellscripts"` is used in usage output text. |
+| REQ-017 | `src/dng2jpg/dng2jpg.py`; excerpt: `PROGRAM = "dng2jpg"` and help usage renders canonical command label without duplicated command token. |
 | REQ-018 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: rejects simultaneous `--ev-zero` and `--auto-zero`. |
 | REQ-019 | `src/dng2jpg/dng2jpg.py::_parse_percentage_option`; excerpt: enforces inclusive `0..100` bounds. |
 | REQ-020 | `src/dng2jpg/dng2jpg.py::_parse_gamma_option`; excerpt: requires two positive numeric values. |

@@ -146,7 +146,7 @@ import cv2 as cv2_module  # type: ignore
 
 ## Definitions
 
-- var `PROGRAM = "shellscripts"` (L31)
+- var `PROGRAM = "dng2jpg"` (L31)
 - var `DESCRIPTION = "Convert DNG to HDR-merged JPG with optional luminance-hdr-cli or OpenCV backend."` (L32)
 - var `DEFAULT_GAMMA = (2.222, 4.5)` (L33)
 - var `DEFAULT_POST_GAMMA = 1.0` (L34)

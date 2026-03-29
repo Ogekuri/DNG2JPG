@@ -59,7 +59,7 @@
       - `_write_version_cache(...)`: persist idle-time cache metadata [`src/dng2jpg/core.py`]
     - `_management_help(...)`: build management help text [`src/dng2jpg/core.py`]
     - `_run_management(...)`: execute uv management command on Linux or print manual command [`src/dng2jpg/core.py`]
-    - `print_help(...)`: render conversion help text [`src/dng2jpg/dng2jpg.py`]
+    - `print_help(...)`: render conversion help text with canonical `dng2jpg` command label [`src/dng2jpg/dng2jpg.py`]
       - `_build_two_line_operator_rows(...)`: flatten luminance operator table rows [`src/dng2jpg/dng2jpg.py`]
       - `_print_box_table(...)`: render fixed-width table output [`src/dng2jpg/dng2jpg.py`]
     - `run(...)`: execute conversion pipeline [`src/dng2jpg/dng2jpg.py`]

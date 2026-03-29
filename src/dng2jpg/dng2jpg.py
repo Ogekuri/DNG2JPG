@@ -28,7 +28,7 @@ from shell_scripts.utils import (
     print_success,
 )
 
-PROGRAM = "shellscripts"
+PROGRAM = "dng2jpg"
 DESCRIPTION = "Convert DNG to HDR-merged JPG with optional luminance-hdr-cli or OpenCV backend."
 DEFAULT_GAMMA = (2.222, 4.5)
 DEFAULT_POST_GAMMA = 1.0
@@ -528,7 +528,7 @@ def print_help(version):
     """
 
     print(
-        f"Usage: {PROGRAM} dng2jpg <input.dng> <output.jpg> "
+        f"Usage: {PROGRAM} <input.dng> <output.jpg> "
         f"(--ev=<value> | --auto-ev[=<1|true|yes|on>]) [--ev-zero=<value> | --auto-zero[=<1|true|yes|on>]] [--gamma=<a,b>] [--post-gamma=<value>] "
         "[--auto-zero-pct=<0..100>] [--auto-ev-pct=<0..100>] "
         f"[--brightness=<value>] [--contrast=<value>] [--saturation=<value>] "
