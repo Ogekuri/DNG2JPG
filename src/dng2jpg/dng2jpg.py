@@ -3,11 +3,11 @@
 
 @details Implements bracketed RAW extraction with three synthetic exposures
 (`ev_zero-ev`, `ev_zero`, `ev_zero+ev`), merges them through selected `enfuse`, selected
-`luminance-hdr-cli`, or selected OpenCV (`Mertens+Debevec`) flow with deterministic
-parameters, then writes
-final JPG to user-selected output path. Temporary artifacts are isolated in a
-temporary directory and removed automatically on success and failure.
-    @satisfies PRJ-003, DES-008, REQ-055, REQ-056, REQ-057, REQ-058, REQ-059, REQ-060, REQ-061, REQ-062, REQ-063, REQ-064, REQ-065, REQ-066, REQ-067, REQ-068, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-079, REQ-080, REQ-081, REQ-088, REQ-089, REQ-090, REQ-091, REQ-092, REQ-093, REQ-094, REQ-095, REQ-096, REQ-097, REQ-098
+`luminance-hdr-cli`, selected OpenCV (`Mertens+Debevec`), or selected HDR+
+tile-based flow with deterministic parameters, then writes final JPG to
+user-selected output path. Temporary artifacts are isolated in a temporary
+directory and removed automatically on success and failure.
+    @satisfies PRJ-003, DES-008, REQ-055, REQ-056, REQ-057, REQ-058, REQ-059, REQ-060, REQ-061, REQ-062, REQ-063, REQ-064, REQ-065, REQ-066, REQ-067, REQ-068, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-079, REQ-080, REQ-081, REQ-088, REQ-089, REQ-090, REQ-091, REQ-092, REQ-093, REQ-094, REQ-095, REQ-096, REQ-097, REQ-098, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115
 """
 
 import os
@@ -29,7 +29,7 @@ from shell_scripts.utils import (
 )
 
 PROGRAM = "dng2jpg"
-DESCRIPTION = "Convert DNG to HDR-merged JPG with optional luminance-hdr-cli or OpenCV backend."
+DESCRIPTION = "Convert DNG to HDR-merged JPG with enfuse, luminance-hdr-cli, OpenCV, or HDR+ backend."
 DEFAULT_GAMMA = (2.222, 4.5)
 DEFAULT_POST_GAMMA = 1.0
 DEFAULT_BRIGHTNESS = 1.0
@@ -74,6 +74,12 @@ DEFAULT_REINHARD02_CONTRAST = 0.85
 DEFAULT_REINHARD02_SATURATION = 0.55
 DEFAULT_MANTIUK08_CONTRAST = 1.2
 DEFAULT_OPENCV_DEBEVEC_WHITE_POINT_PERCENTILE = 99.5
+HDRPLUS_TILE_SIZE = 32
+HDRPLUS_TILE_STRIDE = HDRPLUS_TILE_SIZE // 2
+HDRPLUS_DOWNSAMPLED_TILE_SIZE = HDRPLUS_TILE_STRIDE
+HDRPLUS_TEMPORAL_FACTOR = 8.0
+HDRPLUS_TEMPORAL_MIN_DIST = 10
+HDRPLUS_TEMPORAL_MAX_DIST = 300
 EV_STEP = 0.25
 MIN_SUPPORTED_BITS_PER_COLOR = 9
 DEFAULT_DNG_BITS_PER_COLOR = 14
@@ -519,12 +525,12 @@ def print_help(version):
 
     @details Documents required positional arguments, required mutually
     exclusive exposure selectors (`--ev` or `--auto-ev`), optional RAW gamma
-    controls, optional `--ev-zero` and `--auto-zero` selectors, shared postprocessing controls,
-    backend selection, and
+    controls, optional `--ev-zero` and `--auto-zero` selectors, shared
+    postprocessing controls, backend selection including HDR+, and
     luminance-hdr-cli tone-mapping options.
     @param version {str} CLI version label to append in usage output.
     @return {None} Writes help text to stdout.
-    @satisfies DES-008, REQ-056, REQ-063, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-088, REQ-089, REQ-090, REQ-091, REQ-094, REQ-097, REQ-100, REQ-101, REQ-102
+    @satisfies DES-008, REQ-056, REQ-063, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-088, REQ-089, REQ-090, REQ-091, REQ-094, REQ-097, REQ-100, REQ-101, REQ-102, REQ-111
     """
 
     print(
@@ -546,7 +552,7 @@ def print_help(version):
         "[--aa-level-low-pct=<0..100>] [--aa-level-high-pct=<0..100>] "
         "[--aa-sigmoid-contrast=<value>] [--aa-sigmoid-midpoint=<0..1>] "
         "[--aa-saturation-gamma=<value>] [--aa-highpass-blur-sigma=<value>] "
-        f"(--enable-enfuse | --enable-luminance | --enable-opencv) "
+        f"(--enable-enfuse | --enable-luminance | --enable-opencv | --enable-hdr-plus) "
         f"[--luminance-hdr-model=<name>] [--luminance-hdr-weight=<name>] "
         f"[--luminance-hdr-response-curve=<name>] [--luminance-tmo=<name>] "
         f"[--tmo*=<value>] ({version})"
@@ -681,15 +687,19 @@ def print_help(version):
     )
     print("  --enable-enfuse")
     print(
-        "                   - Select enfuse backend (required, mutually exclusive with --enable-luminance)."
+        "                   - Select enfuse backend (required, mutually exclusive with --enable-luminance, --enable-opencv, and --enable-hdr-plus)."
     )
     print("  --enable-luminance")
     print(
-        "                   - Select luminance-hdr-cli backend (required, mutually exclusive with --enable-enfuse and --enable-opencv)."
+        "                   - Select luminance-hdr-cli backend (required, mutually exclusive with --enable-enfuse, --enable-opencv, and --enable-hdr-plus)."
     )
     print("  --enable-opencv")
     print(
-        "                   - Select OpenCV merge backend (Mertens+Debevec, required, mutually exclusive with --enable-enfuse and --enable-luminance)."
+        "                   - Select OpenCV merge backend (Mertens+Debevec, required, mutually exclusive with --enable-enfuse, --enable-luminance, and --enable-hdr-plus)."
+    )
+    print("  --enable-hdr-plus")
+    print(
+        "                   - Select HDR+ tile merge backend (Google Pixel temporal+spatial merge, ev_zero reference, required, mutually exclusive with --enable-enfuse, --enable-luminance, and --enable-opencv)."
     )
     print(
         "  [postprocess defaults]"
@@ -713,6 +723,11 @@ def print_help(version):
     )
     print(
         "                   - --enable-opencv: "
+        f"post-gamma={DEFAULT_POST_GAMMA}, brightness={DEFAULT_BRIGHTNESS}, "
+        f"contrast={DEFAULT_CONTRAST}, saturation={DEFAULT_SATURATION}."
+    )
+    print(
+        "                   - --enable-hdr-plus: "
         f"post-gamma={DEFAULT_POST_GAMMA}, brightness={DEFAULT_BRIGHTNESS}, "
         f"contrast={DEFAULT_CONTRAST}, saturation={DEFAULT_SATURATION}."
     )
@@ -1954,20 +1969,27 @@ def _parse_auto_adjust_mode_option(auto_adjust_raw):
     return None
 
 
-def _resolve_default_postprocess(enable_luminance, enable_opencv, luminance_tmo):
+def _resolve_default_postprocess(
+    enable_luminance,
+    enable_opencv,
+    enable_hdr_plus,
+    luminance_tmo,
+):
     """@brief Resolve backend-specific postprocess defaults.
 
-    @details Selects neutral defaults for enfuse/OpenCV and non-tuned luminance
+    @details Selects neutral defaults for enfuse/OpenCV/HDR+ and non-tuned luminance
     operators, and selects tuned defaults for luminance `reinhard02` and
     `mantiuk08`.
     @param enable_luminance {bool} Backend selector state.
     @param enable_opencv {bool} OpenCV backend selector state.
+    @param enable_hdr_plus {bool} HDR+ backend selector state.
     @param luminance_tmo {str} Selected luminance tone-mapping operator.
     @return {tuple[float, float, float, float]} Defaults in `(post_gamma, brightness, contrast, saturation)` order.
-    @satisfies REQ-069, REQ-071, REQ-072, REQ-091, REQ-107
+    @satisfies REQ-069, REQ-071, REQ-072, REQ-091, REQ-107, REQ-111
     """
 
     del enable_opencv
+    del enable_hdr_plus
     if not enable_luminance:
         return (
             DEFAULT_POST_GAMMA,
@@ -2011,13 +2033,14 @@ def _parse_run_options(args):
     optional postprocess controls, optional auto-brightness stage and
     `--ab-*` knobs, optional auto-levels stage and `--al-*` knobs,
     optional shared auto-adjust knobs, required backend selector
-    (`--enable-enfuse`, `--enable-luminance`, or `--enable-opencv`), and luminance backend controls
+    (`--enable-enfuse`, `--enable-luminance`, `--enable-opencv`, or
+    `--enable-hdr-plus`), and luminance backend controls
     including explicit `--tmo*` passthrough options and optional
     auto-adjust implementation selector (`--auto-adjust <ImageMagick|OpenCV>`);
     rejects unknown options and invalid arity.
     @param args {list[str]} Raw command argument vector.
-    @return {tuple[Path, Path, float|None, bool, tuple[float, float], PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, float, bool, float, float]|None} Parsed `(input, output, ev, auto_ev, gamma, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, ev_zero, auto_zero_enabled, auto_zero_pct, auto_ev_pct)` tuple; `None` on parse failure.
-    @satisfies REQ-055, REQ-056, REQ-057, REQ-060, REQ-061, REQ-064, REQ-065, REQ-067, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-079, REQ-080, REQ-081, REQ-082, REQ-083, REQ-084, REQ-085, REQ-087, REQ-088, REQ-089, REQ-090, REQ-091, REQ-094, REQ-097, REQ-107, REQ-108
+    @return {tuple[Path, Path, float|None, bool, tuple[float, float], PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, bool, float, bool, float, float]|None} Parsed `(input, output, ev, auto_ev, gamma, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, enable_hdr_plus, ev_zero, auto_zero_enabled, auto_zero_pct, auto_ev_pct)` tuple; `None` on parse failure.
+    @satisfies REQ-055, REQ-056, REQ-057, REQ-060, REQ-061, REQ-064, REQ-065, REQ-067, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-079, REQ-080, REQ-081, REQ-082, REQ-083, REQ-084, REQ-085, REQ-087, REQ-088, REQ-089, REQ-090, REQ-091, REQ-094, REQ-097, REQ-107, REQ-108, REQ-111
     """
 
     positional = []
@@ -2047,6 +2070,7 @@ def _parse_run_options(args):
     enable_enfuse = False
     enable_luminance = False
     enable_opencv = False
+    enable_hdr_plus = False
     luminance_hdr_model = DEFAULT_LUMINANCE_HDR_MODEL
     luminance_hdr_weight = DEFAULT_LUMINANCE_HDR_WEIGHT
     luminance_hdr_response_curve = DEFAULT_LUMINANCE_HDR_RESPONSE_CURVE
@@ -2069,6 +2093,11 @@ def _parse_run_options(args):
 
         if token == "--enable-opencv":
             enable_opencv = True
+            idx += 1
+            continue
+
+        if token == "--enable-hdr-plus":
+            enable_hdr_plus = True
             idx += 1
             continue
 
@@ -2609,10 +2638,15 @@ def _parse_run_options(args):
         print_error("Exactly one EV-zero selector is allowed: --ev-zero or --auto-zero")
         return None
 
-    backend_enabled_count = int(enable_enfuse) + int(enable_luminance) + int(enable_opencv)
+    backend_enabled_count = (
+        int(enable_enfuse)
+        + int(enable_luminance)
+        + int(enable_opencv)
+        + int(enable_hdr_plus)
+    )
     if backend_enabled_count != 1:
         print_error(
-            "Exactly one backend selector is required: --enable-enfuse, --enable-luminance, or --enable-opencv"
+            "Exactly one backend selector is required: --enable-enfuse, --enable-luminance, --enable-opencv, or --enable-hdr-plus"
         )
         return None
 
@@ -2642,7 +2676,12 @@ def _parse_run_options(args):
         backend_brightness,
         backend_contrast,
         backend_saturation,
-    ) = _resolve_default_postprocess(enable_luminance, enable_opencv, luminance_tmo)
+    ) = _resolve_default_postprocess(
+        enable_luminance,
+        enable_opencv,
+        enable_hdr_plus,
+        luminance_tmo,
+    )
     if not post_gamma_set:
         post_gamma = backend_post_gamma
     if not brightness_set:
@@ -2692,6 +2731,7 @@ def _parse_run_options(args):
         OpenCvMergeOptions(
             debevec_white_point_percentile=DEFAULT_OPENCV_DEBEVEC_WHITE_POINT_PERCENTILE
         ),
+        enable_hdr_plus,
         ev_zero,
         auto_zero_enabled,
         auto_zero_pct,
@@ -3235,11 +3275,11 @@ def _order_bracket_paths(bracket_paths):
     """@brief Validate and reorder bracket TIFF paths for deterministic backend argv.
 
     @details Enforces exact exposure order `<ev_minus.tif> <ev_zero.tif> <ev_plus.tif>`
-    required by luminance-hdr-cli command generation and raises on missing labels.
+    required by backend command generation and raises on missing labels.
     @param bracket_paths {list[Path]} Temporary bracket TIFF paths generated from RAW.
     @return {list[Path]} Reordered bracket path list in deterministic exposure order.
     @exception ValueError Raised when any expected bracket label is missing.
-    @satisfies REQ-062
+    @satisfies REQ-062, REQ-112
     """
 
     expected = ("ev_minus.tif", "ev_zero.tif", "ev_plus.tif")
@@ -3255,6 +3295,22 @@ def _order_bracket_paths(bracket_paths):
     if missing:
         raise ValueError(f"Missing expected bracket files: {', '.join(missing)}")
     return ordered
+
+
+def _order_hdr_plus_reference_paths(bracket_paths):
+    """@brief Reorder bracket TIFF paths into HDR+ reference-first frame order.
+
+    @details Converts canonical bracket order `(ev_minus, ev_zero, ev_plus)` to
+    source-algorithm frame order `(ev_zero, ev_minus, ev_plus)` so the central
+    bracket acts as temporal reference frame `n=0`, matching HDR+ temporal
+    merge semantics while preserving existing bracket export filenames.
+    @param bracket_paths {list[Path]} Temporary bracket TIFF paths generated from RAW.
+    @return {list[Path]} Ordered bracket paths in HDR+ reference-first order.
+    @satisfies REQ-112
+    """
+
+    ordered_paths = _order_bracket_paths(bracket_paths)
+    return [ordered_paths[1], ordered_paths[0], ordered_paths[2]]
 
 
 def _run_enfuse(bracket_paths, merged_tiff):
@@ -3467,6 +3523,314 @@ def _run_opencv_hdr_merge(
     output_bgr_u16 = cv2_module.cvtColor(blended_rgb_u16, cv2_module.COLOR_RGB2BGR)
     if not cv2_module.imwrite(str(output_hdr_tiff), output_bgr_u16):
         raise RuntimeError(f"OpenCV failed to write merged HDR TIFF: {output_hdr_tiff}")
+
+
+def _hdrplus_box_down2_uint16(np_module, frames_uint16):
+    """@brief Downsample HDR+ scalar frames with 2x2 box averaging.
+
+    @details Ports `box_down2` from `util.cpp` by reflect-padding odd image
+    sizes to even extents, summing each 2x2 region in `uint32`, and dividing by
+    `4` once to preserve integer averaging semantics.
+    @param np_module {ModuleType} Imported numpy module.
+    @param frames_uint16 {object} Scalar frame tensor with shape `(N,H,W)`.
+    @return {object} Downsampled `uint16` tensor with shape `(N,ceil(H/2),ceil(W/2))`.
+    @satisfies REQ-112, REQ-113
+    """
+
+    pad_bottom = int(frames_uint16.shape[1] % 2)
+    pad_right = int(frames_uint16.shape[2] % 2)
+    padded_frames = np_module.pad(
+        frames_uint16,
+        ((0, 0), (0, pad_bottom), (0, pad_right)),
+        mode="reflect",
+    )
+    summed = (
+        padded_frames[:, 0::2, 0::2].astype(np_module.uint32)
+        + padded_frames[:, 0::2, 1::2].astype(np_module.uint32)
+        + padded_frames[:, 1::2, 0::2].astype(np_module.uint32)
+        + padded_frames[:, 1::2, 1::2].astype(np_module.uint32)
+    )
+    return (summed // 4).astype(np_module.uint16)
+
+
+def _hdrplus_luminance_proxy_uint16(np_module, frames_rgb_uint16):
+    """@brief Convert RGB bracket tensor into scalar HDR+ merge proxy.
+
+    @details Adapts single-channel Bayer merge input to aligned RGB bracket TIFF
+    inputs by computing deterministic per-pixel arithmetic RGB mean, rounding to
+    `uint16`, and preserving source 16-bit scale for subsequent `box_down2` and
+    tile L1 distance steps.
+    @param np_module {ModuleType} Imported numpy module.
+    @param frames_rgb_uint16 {object} RGB frame tensor with shape `(N,H,W,3)`.
+    @return {object} Scalar `uint16` tensor with shape `(N,H,W)`.
+    @satisfies REQ-112, REQ-115
+    """
+
+    rgb_float = frames_rgb_uint16.astype(np_module.float64)
+    luminance_proxy = np_module.round(np_module.mean(rgb_float, axis=-1))
+    return np_module.clip(luminance_proxy, 0.0, 65535.0).astype(np_module.uint16)
+
+
+def _hdrplus_extract_overlapping_tiles(
+    np_module,
+    frames_array,
+    tile_size,
+    tile_stride,
+    pad_margin,
+):
+    """@brief Extract half-overlapped HDR+ tiles from padded frame tensor.
+
+    @details Reflect-pads frame tensor, builds sliding-window views for every
+    possible tile origin, then samples origins corresponding to source HDR+
+    overlap geometry (`stride = tile_size / 2`) including the leading virtual
+    tile at `-tile_stride`.
+    @param np_module {ModuleType} Imported numpy module.
+    @param frames_array {object} Frame tensor with shape `(N,H,W)` or `(N,H,W,C)`.
+    @param tile_size {int} Square tile edge length.
+    @param tile_stride {int} Tile stride between adjacent overlapping tiles.
+    @param pad_margin {int} Reflect padding added on each image edge.
+    @return {object} Tile tensor with shape `(N,Ty,Tx,tile_size,tile_size[,C])`.
+    @satisfies REQ-112, REQ-113, REQ-114
+    """
+
+    from numpy.lib.stride_tricks import sliding_window_view  # type: ignore
+
+    tile_count_y = int(math.ceil(frames_array.shape[1] / float(tile_stride)))
+    tile_count_x = int(math.ceil(frames_array.shape[2] / float(tile_stride)))
+    start_positions_y = pad_margin - tile_stride + (
+        np_module.arange(tile_count_y + 1, dtype=np_module.int32) * tile_stride
+    )
+    start_positions_x = pad_margin - tile_stride + (
+        np_module.arange(tile_count_x + 1, dtype=np_module.int32) * tile_stride
+    )
+    if frames_array.ndim == 3:
+        padded_frames = np_module.pad(
+            frames_array,
+            ((0, 0), (pad_margin, pad_margin), (pad_margin, pad_margin)),
+            mode="reflect",
+        )
+        windows = sliding_window_view(
+            padded_frames,
+            window_shape=(tile_size, tile_size),
+            axis=(1, 2),
+        )
+        return windows[:, start_positions_y[:, None], start_positions_x[None, :], ...]
+    padded_frames = np_module.pad(
+        frames_array,
+        ((0, 0), (pad_margin, pad_margin), (pad_margin, pad_margin), (0, 0)),
+        mode="reflect",
+    )
+    windows = sliding_window_view(
+        padded_frames,
+        window_shape=(tile_size, tile_size),
+        axis=(1, 2),
+    )
+    windows = np_module.moveaxis(windows, 3, -1)
+    return windows[:, start_positions_y[:, None], start_positions_x[None, :], ...]
+
+
+def _hdrplus_compute_temporal_weights(np_module, layer_tiles):
+    """@brief Compute HDR+ temporal tile weights against reference frame.
+
+    @details Ports `merge_temporal` weight equations from `merge.cpp` with
+    alignment offsets fixed to zero: computes integer tile L1 distance over each
+    16x16 downsampled tile, derives `norm_dist = max(1, dist/8 - 10/8)`,
+    applies hard cutoff when `norm_dist > 290`, and returns inverse-distance
+    weights for alternate frames only.
+    @param np_module {ModuleType} Imported numpy module.
+    @param layer_tiles {object} Downsampled scalar tile tensor with shape `(N,Ty,Tx,16,16)`.
+    @return {tuple[object, object]} `(weights, total_weight)` where `weights`
+      has shape `(N-1,Ty,Tx)` and `total_weight` has shape `(Ty,Tx)`.
+    @satisfies REQ-112, REQ-113
+    """
+
+    if layer_tiles.shape[0] <= 1:
+        total_weight = np_module.ones(layer_tiles.shape[1:3], dtype=np_module.float32)
+        return (
+            np_module.zeros((0,) + layer_tiles.shape[1:3], dtype=np_module.float32),
+            total_weight,
+        )
+    reference_tiles = layer_tiles[0].astype(np_module.int32)
+    alternate_tiles = layer_tiles[1:].astype(np_module.int32)
+    distances = np_module.sum(
+        np_module.abs(alternate_tiles - reference_tiles[None, ...]),
+        axis=(-2, -1),
+        dtype=np_module.int64,
+    )
+    distances = (distances // 256).astype(np_module.float32)
+    norm_dist = np_module.maximum(
+        1.0,
+        (distances / HDRPLUS_TEMPORAL_FACTOR)
+        - (HDRPLUS_TEMPORAL_MIN_DIST / HDRPLUS_TEMPORAL_FACTOR),
+    )
+    max_norm_dist = HDRPLUS_TEMPORAL_MAX_DIST - HDRPLUS_TEMPORAL_MIN_DIST
+    weights = np_module.where(norm_dist > max_norm_dist, 0.0, 1.0 / norm_dist)
+    weights = weights.astype(np_module.float32)
+    total_weight = (
+        np_module.sum(weights, axis=0, dtype=np_module.float32) + 1.0
+    ).astype(np_module.float32)
+    return (weights, total_weight)
+
+
+def _hdrplus_merge_temporal_rgb(np_module, full_tiles_rgb, weights, total_weight):
+    """@brief Merge HDR+ full-resolution tiles across temporal dimension.
+
+    @details Ports the temporal accumulation step from `merge.cpp` with zero
+    alignment offsets by normalizing the reference tile and all alternate tiles
+    with shared per-tile `total_weight`, while preserving RGB `uint16` content
+    in float64 accumulation until the spatial merge stage.
+    @param np_module {ModuleType} Imported numpy module.
+    @param full_tiles_rgb {object} RGB tile tensor with shape `(N,Ty,Tx,32,32,3)`.
+    @param weights {object} Alternate-frame weight tensor with shape `(N-1,Ty,Tx)`.
+    @param total_weight {object} Reference-inclusive tile total weights with shape `(Ty,Tx)`.
+    @return {object} Temporally merged RGB tile tensor with shape `(Ty,Tx,32,32,3)`.
+    @satisfies REQ-112, REQ-113
+    """
+
+    total_weight_expanded = total_weight[..., None, None, None].astype(np_module.float64)
+    merged_tiles = full_tiles_rgb[0].astype(np_module.float64) / total_weight_expanded
+    if weights.shape[0] > 0:
+        merged_tiles += np_module.sum(
+            full_tiles_rgb[1:].astype(np_module.float64)
+            * weights[..., None, None, None].astype(np_module.float64),
+            axis=0,
+            dtype=np_module.float64,
+        ) / total_weight_expanded
+    return merged_tiles
+
+
+def _hdrplus_merge_spatial_rgb(np_module, temporal_tiles, width, height):
+    """@brief Blend HDR+ temporally merged tiles with raised-cosine overlap.
+
+    @details Ports `merge_spatial` from `merge.cpp`: builds source
+    raised-cosine weights over `32` samples, gathers four overlapping tiles for
+    each output pixel using source index formulas derived from `tile_0`,
+    `tile_1`, `idx_0`, and `idx_1`, then computes weighted RGB sum once and
+    rounds/clamps to `uint16`.
+    @param np_module {ModuleType} Imported numpy module.
+    @param temporal_tiles {object} Temporally merged RGB tile tensor with shape `(Ty,Tx,32,32,3)`.
+    @param width {int} Output image width.
+    @param height {int} Output image height.
+    @return {object} RGB `uint16` merged image tensor with shape `(H,W,3)`.
+    @satisfies REQ-112, REQ-114
+    """
+
+    positions = np_module.arange(HDRPLUS_TILE_SIZE, dtype=np_module.float64)
+    weight_1d = 0.5 - 0.5 * np_module.cos(
+        (2.0 * np_module.pi * (positions + 0.5)) / HDRPLUS_TILE_SIZE
+    )
+    x_positions = np_module.arange(width, dtype=np_module.int32)
+    y_positions = np_module.arange(height, dtype=np_module.int32)
+    tile0_x = x_positions // HDRPLUS_TILE_STRIDE
+    tile1_x = tile0_x + 1
+    tile0_y = y_positions // HDRPLUS_TILE_STRIDE
+    tile1_y = tile0_y + 1
+    idx0_x = (x_positions % HDRPLUS_TILE_STRIDE) + HDRPLUS_TILE_STRIDE
+    idx1_x = x_positions % HDRPLUS_TILE_STRIDE
+    idx0_y = (y_positions % HDRPLUS_TILE_STRIDE) + HDRPLUS_TILE_STRIDE
+    idx1_y = y_positions % HDRPLUS_TILE_STRIDE
+    val_00 = temporal_tiles[
+        tile0_y[:, None],
+        tile0_x[None, :],
+        idx0_y[:, None],
+        idx0_x[None, :],
+    ]
+    val_10 = temporal_tiles[
+        tile0_y[:, None],
+        tile1_x[None, :],
+        idx0_y[:, None],
+        idx1_x[None, :],
+    ]
+    val_01 = temporal_tiles[
+        tile1_y[:, None],
+        tile0_x[None, :],
+        idx1_y[:, None],
+        idx0_x[None, :],
+    ]
+    val_11 = temporal_tiles[
+        tile1_y[:, None],
+        tile1_x[None, :],
+        idx1_y[:, None],
+        idx1_x[None, :],
+    ]
+    weight_00 = weight_1d[idx0_y][:, None] * weight_1d[idx0_x][None, :]
+    weight_10 = weight_1d[idx0_y][:, None] * weight_1d[idx1_x][None, :]
+    weight_01 = weight_1d[idx1_y][:, None] * weight_1d[idx0_x][None, :]
+    weight_11 = weight_1d[idx1_y][:, None] * weight_1d[idx1_x][None, :]
+    merged_image = (
+        (weight_00[..., None] * val_00)
+        + (weight_10[..., None] * val_10)
+        + (weight_01[..., None] * val_01)
+        + (weight_11[..., None] * val_11)
+    )
+    return np_module.clip(
+        np_module.round(merged_image),
+        0.0,
+        65535.0,
+    ).astype(np_module.uint16)
+
+
+def _run_hdr_plus_merge(bracket_paths, output_hdr_tiff, imageio_module, np_module):
+    """@brief Merge bracket TIFF files into one RGB uint16 TIFF via HDR+.
+
+    @details Ports the source HDR+ merge pipeline from `merge.cpp` and
+    `util.cpp` while intentionally omitting alignment stages per integration
+    requirements: reorders bracket inputs into reference-first frame order
+    `(ev_zero, ev_minus, ev_plus)`, computes scalar merge proxy from aligned RGB
+    TIFFs, executes source `box_down2`, source temporal tile weighting with zero
+    offsets, source temporal full-resolution tile accumulation, and source
+    raised-cosine spatial blending, then writes one merged RGB `uint16` TIFF.
+    @param bracket_paths {list[Path]} Temporary bracket TIFF paths generated from RAW.
+    @param output_hdr_tiff {Path} Output HDR TIFF target path.
+    @param imageio_module {ModuleType} Imported imageio module with `imread` and `imwrite`.
+    @param np_module {ModuleType} Imported numpy module.
+    @return {None} Side effects only.
+    @exception RuntimeError Raised when bracket payloads are invalid.
+    @satisfies REQ-077, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115
+    """
+
+    ordered_paths = _order_hdr_plus_reference_paths(bracket_paths)
+    frames_rgb_uint16 = []
+    for path in ordered_paths:
+        frame_data = imageio_module.imread(str(path))
+        normalized_frame = _normalize_uint16_rgb_image(
+            np_module=np_module,
+            image_data=frame_data,
+        )
+        frames_rgb_uint16.append(normalized_frame.astype(np_module.uint16))
+    frames_rgb_uint16 = np_module.stack(frames_rgb_uint16, axis=0)
+    if frames_rgb_uint16.shape[0] < 2:
+        raise RuntimeError("HDR+ merge requires at least two aligned frames")
+    scalar_frames = _hdrplus_luminance_proxy_uint16(np_module, frames_rgb_uint16)
+    downsampled_scalar_frames = _hdrplus_box_down2_uint16(np_module, scalar_frames)
+    scalar_tiles = _hdrplus_extract_overlapping_tiles(
+        np_module=np_module,
+        frames_array=downsampled_scalar_frames,
+        tile_size=HDRPLUS_DOWNSAMPLED_TILE_SIZE,
+        tile_stride=HDRPLUS_DOWNSAMPLED_TILE_SIZE // 2,
+        pad_margin=HDRPLUS_DOWNSAMPLED_TILE_SIZE,
+    )
+    full_tiles = _hdrplus_extract_overlapping_tiles(
+        np_module=np_module,
+        frames_array=frames_rgb_uint16,
+        tile_size=HDRPLUS_TILE_SIZE,
+        tile_stride=HDRPLUS_TILE_STRIDE,
+        pad_margin=HDRPLUS_TILE_SIZE,
+    )
+    weights, total_weight = _hdrplus_compute_temporal_weights(np_module, scalar_tiles)
+    temporal_tiles = _hdrplus_merge_temporal_rgb(
+        np_module=np_module,
+        full_tiles_rgb=full_tiles,
+        weights=weights,
+        total_weight=total_weight,
+    )
+    merged_rgb_uint16 = _hdrplus_merge_spatial_rgb(
+        np_module=np_module,
+        temporal_tiles=temporal_tiles,
+        width=int(frames_rgb_uint16.shape[2]),
+        height=int(frames_rgb_uint16.shape[1]),
+    )
+    imageio_module.imwrite(str(output_hdr_tiff), merged_rgb_uint16)
 
 
 def _convert_compression_to_quality(jpg_compression):
@@ -5336,7 +5700,7 @@ def _encode_jpg(
     final uint16-to-uint8 conversion immediately before JPEG save.
     @param imageio_module {ModuleType} Imported imageio module with `imread` and `imwrite`.
     @param pil_image_module {ModuleType} Imported Pillow image module.
-    @param merged_tiff {Path} Merged TIFF source path produced by `enfuse`.
+    @param merged_tiff {Path} Merged TIFF source path produced by selected backend.
     @param output_jpg {Path} Final JPG output path.
     @param postprocess_options {PostprocessOptions} Shared TIFF-to-JPG correction settings.
     @param imagemagick_command {str|None} Optional pre-resolved ImageMagick executable.
@@ -5528,12 +5892,12 @@ def run(args):
     bits-per-color from RAW metadata, resolves manual or automatic EV-zero center,
     resolves static or adaptive EV selector around resolved center using
     bit-derived EV ceilings, extracts three RAW brackets, executes selected
-    `enfuse`, selected luminance-hdr-cli, or selected OpenCV Mertens+Debevec
-    flow, writes JPG output, and
-    guarantees temporary artifact cleanup through isolated temporary directory lifecycle.
+    `enfuse`, selected luminance-hdr-cli, selected OpenCV Mertens+Debevec, or
+    selected HDR+ tile merge flow, writes JPG output, and guarantees temporary
+    artifact cleanup through isolated temporary directory lifecycle.
     @param args {list[str]} Command argument vector excluding command token.
     @return {int} `0` on success; `1` on parse/validation/dependency/processing failure.
-    @satisfies REQ-055, REQ-056, REQ-057, REQ-058, REQ-059, REQ-060, REQ-061, REQ-062, REQ-064, REQ-065, REQ-066, REQ-067, REQ-068, REQ-069, REQ-071, REQ-072, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-079, REQ-080, REQ-081, REQ-088, REQ-089, REQ-090, REQ-091, REQ-092, REQ-093, REQ-094, REQ-095, REQ-096, REQ-097, REQ-098, REQ-100, REQ-101, REQ-102, REQ-107, REQ-108, REQ-109, REQ-110
+    @satisfies REQ-055, REQ-056, REQ-057, REQ-058, REQ-059, REQ-060, REQ-061, REQ-062, REQ-064, REQ-065, REQ-066, REQ-067, REQ-068, REQ-069, REQ-071, REQ-072, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-079, REQ-080, REQ-081, REQ-088, REQ-089, REQ-090, REQ-091, REQ-092, REQ-093, REQ-094, REQ-095, REQ-096, REQ-097, REQ-098, REQ-100, REQ-101, REQ-102, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115
     """
 
     if not _is_supported_runtime_os():
@@ -5554,6 +5918,7 @@ def run(args):
         enable_opencv,
         luminance_options,
         opencv_merge_options,
+        enable_hdr_plus,
         ev_zero,
         auto_zero_enabled,
         auto_zero_pct,
@@ -5577,7 +5942,7 @@ def run(args):
         if shutil.which("luminance-hdr-cli") is None:
             print_error("Missing required dependency: luminance-hdr-cli")
             return 1
-    elif not enable_opencv:
+    elif not enable_opencv and not enable_hdr_plus:
         if shutil.which("enfuse") is None:
             print_error("Missing required dependency: enfuse")
             return 1
@@ -5587,6 +5952,7 @@ def run(args):
     if (
         postprocess_options.auto_brightness_enabled
         or postprocess_options.auto_levels_enabled
+        or enable_hdr_plus
     ):
         numpy_module = _resolve_numpy_dependency()
         if numpy_module is None:
@@ -5672,6 +6038,11 @@ def run(args):
         print_info(
             "HDR backend: OpenCV "
             f"(merge=Mertens+Debevec, debevecWhitePointPct={opencv_merge_options.debevec_white_point_percentile:g})"
+        )
+    elif enable_hdr_plus:
+        print_info(
+            "HDR backend: HDR+ "
+            "(reference=ev_zero, temporal=tile L1 inverse-distance, spatial=raised-cosine)"
         )
     else:
         print_info("HDR backend: enfuse")
@@ -5764,6 +6135,15 @@ def run(args):
                     ev_zero=resolved_ev_zero,
                     opencv_merge_options=opencv_merge_options,
                     auto_adjust_opencv_dependencies=auto_adjust_opencv_dependencies,
+                )
+            elif enable_hdr_plus:
+                if numpy_module is None:
+                    raise RuntimeError("Missing required dependency: numpy")
+                _run_hdr_plus_merge(
+                    bracket_paths=bracket_paths,
+                    output_hdr_tiff=merged_tiff,
+                    imageio_module=imageio_module,
+                    np_module=numpy_module,
                 )
             else:
                 _run_enfuse(bracket_paths=bracket_paths, merged_tiff=merged_tiff)

@@ -63,10 +63,10 @@ DNG2JPG/
 ### 1.5 Components and Libraries (Evidenced)
 - `rawpy`, `imageio`, `pillow`, `numpy`, `opencv-python-headless`, `piexif` (declared in `pyproject.toml` and imported in `src/dng2jpg/dng2jpg.py`).
 - `uv` CLI is used by launcher/runtime management flows (`scripts/d2j.sh`, `src/dng2jpg/core.py`) and release build workflow (`.github/workflows/release-uvx.yml`).
-- `enfuse`, `luminance-hdr-cli`, and ImageMagick (`magick` or `convert`) are runtime external executables resolved in `src/dng2jpg/dng2jpg.py`.
+- `enfuse`, `luminance-hdr-cli`, and ImageMagick (`magick` or `convert`) are runtime external executables resolved in `src/dng2jpg/dng2jpg.py`; HDR+ backend uses in-process Python/Numpy execution only.
 
 ### 1.6 Unit Test Coverage Summary
-No unit test files were identified under `tests/` during this analysis snapshot; therefore, no unit-test-derived behavioral evidence was available.
+One unit test file was identified under `tests/`: `tests/test_uint16_postprocess_pipeline.py`.
 
 ### 1.7 Performance Optimization Evidence
 Explicit optimization patterns are implemented in the OpenCV pipeline using vectorized NumPy operations (for example `_selective_blur_contrast_gated_vectorized`, `_level_per_channel_adaptive`, and tensor-domain clamp/overlay functions in `src/dng2jpg/dng2jpg.py`).
@@ -82,7 +82,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 
 ### 2.2 Project Constraints
 - **CTN-001**: MUST execute conversion only on Linux runtime and reject unsupported operating systems with explicit error output.
-- **CTN-002**: MUST require exactly one backend selector between `--enable-enfuse` and `--enable-luminance`.
+- **CTN-002**: MUST require exactly one backend selector between `--enable-enfuse`, `--enable-luminance`, `--enable-opencv`, and `--enable-hdr-plus`.
 - **CTN-003**: MUST require exactly one exposure selector between `--ev` and `--auto-ev`.
 - **CTN-004**: MUST require `.dng` input extension, existing input file, and existing output parent directory.
 - **CTN-005**: MUST fail when required Python modules or required backend executables for enabled features are unavailable.
@@ -159,10 +159,15 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-100**: MUST support optional `--auto-levels` stage executed after optional `--auto-brightness` and before post-gamma/brightness/contrast/saturation.
 - **REQ-101**: MUST parse `--auto-levels`, `--al-clip-pct`, and `--al-highlight-reconstruction-method`, requiring `--auto-levels` before any `--al-*` option.
 - **REQ-102**: MUST require highlight reconstruction method when enabled and accept only `Luminance`, `CIELab blending`, or `Blend`.
-- **REQ-107**: MUST accept `--enable-opencv` as HDR backend selector and enforce backend exclusivity across `--enable-enfuse`, `--enable-luminance`, and `--enable-opencv`.
+- **REQ-107**: MUST accept `--enable-opencv` as HDR backend selector and enforce backend exclusivity across `--enable-enfuse`, `--enable-luminance`, `--enable-opencv`, and `--enable-hdr-plus`.
 - **REQ-108**: MUST execute OpenCV backend merge using `MergeMertens` and `MergeDebevec` over bracket TIFFs ordered as `ev_minus`, `ev_zero`, `ev_plus` with EV-derived exposure times.
 - **REQ-109**: MUST normalize Debevec HDR radiance in float domain using robust luminance white-point percentile and blend it with Mertens fusion before writing merged TIFF.
 - **REQ-110**: MUST preserve 16-bit-per-channel processing in OpenCV backend by executing merge/blend in float domain and converting to `uint16` once when writing merged TIFF.
+- **REQ-111**: MUST accept `--enable-hdr-plus` as HDR backend selector and enforce backend exclusivity across `--enable-enfuse`, `--enable-luminance`, `--enable-opencv`, and `--enable-hdr-plus`.
+- **REQ-112**: MUST execute HDR+ backend in source step order `box_down2 -> temporal merge -> spatial merge`, using `ev_zero` as reference frame and zero alignment offsets for all tiles.
+- **REQ-113**: MUST compute HDR+ temporal alternate-frame weights from per-tile L1 distance over 16x16 downsampled tiles with `factor=8`, `min_dist=10`, `max_dist=300`, and reference-inclusive normalization.
+- **REQ-114**: MUST execute HDR+ spatial blending over half-overlapped 32x32 tiles using raised-cosine weights and write one RGB `uint16` merged TIFF without intermediate `uint8` quantization.
+- **REQ-115**: MUST adapt single-channel HDR+ merge input to aligned RGB bracket TIFFs by deriving one deterministic scalar merge proxy from each RGB pixel before `box_down2` and temporal weighting.
 
 ## 4. Test Requirements
 
@@ -192,7 +197,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | PRJ-004 | `.github/workflows/release-uvx.yml`; excerpt: semantic tag trigger, build job, attestation, and GitHub release upload flow. |
 | PRJ-005 | `scripts/d2j.sh`; excerpt: `exec "${UV_TOOL}" run --project "${BASE_DIR}" python -m dng2jpg "$@"`. |
 | CTN-001 | `src/dng2jpg/dng2jpg.py::_is_supported_runtime_os`; excerpt: returns true only on Linux and prints Linux-only error otherwise. |
-| CTN-002 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: emits "Exactly one backend selector is required". |
+| CTN-002 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: counts four backend selectors and emits "Exactly one backend selector is required: --enable-enfuse, --enable-luminance, --enable-opencv, or --enable-hdr-plus". |
 | CTN-003 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: emits "Exactly one exposure selector is required". |
 | CTN-004 | `src/dng2jpg/dng2jpg.py::run`; excerpt: validates `.dng` suffix, input existence, and output parent directory existence. |
 | CTN-005 | `src/dng2jpg/dng2jpg.py::_load_image_dependencies`, dependency checks in `run`; excerpt: explicit missing dependency diagnostics and return `1`. |
@@ -262,10 +267,15 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-100 | `src/dng2jpg/dng2jpg.py::_encode_jpg`, `_apply_auto_levels_uint16`; excerpt: optional auto-levels stage runs after auto-brightness and before postprocess factors. |
 | REQ-101 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `_parse_auto_levels_options`; excerpt: parses `--auto-levels` and `--al-*` with explicit coupling/validation. |
 | REQ-102 | `src/dng2jpg/dng2jpg.py::_parse_auto_levels_hr_method_option`, `_apply_auto_levels_uint16`; excerpt: requires and validates reconstruction method from fixed allowed set. |
-| REQ-107 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `print_help`; excerpt: parses `--enable-opencv`, enforces single backend selector, and documents backend exclusivity. |
+| REQ-107 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `print_help`; excerpt: parses `--enable-opencv`, enforces single backend selector, and documents exclusivity across four backend flags. |
 | REQ-108 | `src/dng2jpg/dng2jpg.py::_run_opencv_hdr_merge`, `_build_ev_times_from_ev_zero_and_delta`; excerpt: executes OpenCV Mertens+Debevec using ordered bracket inputs and EV-derived exposure times. |
 | REQ-109 | `src/dng2jpg/dng2jpg.py::_normalize_debevec_hdr_to_unit_range`, `_run_opencv_hdr_merge`; excerpt: applies robust luminance white-point percentile normalization and blends Debevec with Mertens in float domain. |
 | REQ-110 | `src/dng2jpg/dng2jpg.py::_run_opencv_hdr_merge`; excerpt: maintains float-domain processing and performs one float-to-uint16 conversion for merged TIFF write. |
+| REQ-111 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `print_help`, `run`; excerpt: accepts `--enable-hdr-plus`, documents backend, and routes execution to HDR+ merge path. |
+| REQ-112 | `src/dng2jpg/dng2jpg.py::_order_hdr_plus_reference_paths`, `_hdrplus_box_down2_uint16`, `_hdrplus_merge_temporal_rgb`, `_hdrplus_merge_spatial_rgb`, `_run_hdr_plus_merge`; excerpt: executes source order `box_down2 -> temporal merge -> spatial merge` with `ev_zero` reference and no alignment offsets. |
+| REQ-113 | `src/dng2jpg/dng2jpg.py::_hdrplus_compute_temporal_weights`; excerpt: applies 16x16 tile L1 distance with `factor=8`, `min_dist=10`, `max_dist=300`, and reference-inclusive normalization. |
+| REQ-114 | `src/dng2jpg/dng2jpg.py::_hdrplus_merge_spatial_rgb`, `_run_hdr_plus_merge`; excerpt: blends half-overlapped 32x32 tiles with raised-cosine weights and writes RGB `uint16` merged TIFF. |
+| REQ-115 | `src/dng2jpg/dng2jpg.py::_hdrplus_luminance_proxy_uint16`, `_run_hdr_plus_merge`; excerpt: derives deterministic scalar merge proxy from aligned RGB bracket TIFFs before downsampling and weighting. |
 | TST-001 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; branches for selector exclusivity and deterministic parse failures. |
 | TST-002 | `src/dng2jpg/dng2jpg.py::run`; branches for unsupported OS and dependency failures returning `1`. |
 | TST-003 | `src/dng2jpg/dng2jpg.py::run`; success branch prints `HDR JPG created: ...` and returns `0`. |
