@@ -217,7 +217,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 
 | Requirement ID | Evidence |
 |---|---|
-| PRJ-001 | `src/dng2jpg/dng2jpg.py::run` and `_write_bracket_images`; excerpt: writes `ev_minus.tif`, `ev_zero.tif`, `ev_plus.tif` then merges via selected backend. |
+| PRJ-001 | `src/dng2jpg/dng2jpg.py::run`, `_build_exposure_multipliers`, and `_extract_bracket_images_float`; excerpt: derives `ev_minus`, `ev_zero`, `ev_plus` multipliers, extracts three normalized RGB float brackets with `output_bps=16`, then merges via selected backend. |
 | PRJ-002 | `src/dng2jpg/dng2jpg.py::print_help`, `_parse_run_options`; excerpt: documents and parses exposure, EV-center, backend, postprocess, auto-adjust, and auto-brightness controls. |
 | PRJ-003 | `src/dng2jpg/core.py::main`; excerpt: handles `--help`, `--ver`, `--version`, `--upgrade`, `--uninstall`, and conversion dispatch. |
 | PRJ-004 | `.github/workflows/release-uvx.yml`; excerpt: semantic tag trigger, build job, attestation, and GitHub release upload flow. |
@@ -244,7 +244,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-007 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: rejects `--aa-*` without `--auto-adjust` and `--ab-*` without `--auto-brightness`. |
 | REQ-008 | `src/dng2jpg/dng2jpg.py::_resolve_ev_zero`; excerpt: auto-zero path and safe-range check with `SAFE_ZERO_MAX`. |
 | REQ-009 | `src/dng2jpg/dng2jpg.py::_resolve_ev_value`, `_compute_auto_ev_value_from_stats`; excerpt: adaptive EV from preview stats with clamp. |
-| REQ-010 | `src/dng2jpg/dng2jpg.py::_write_bracket_images`; excerpt: writes `ev_minus.tif`, `ev_zero.tif`, `ev_plus.tif` at `output_bps=16`. |
+| REQ-010 | `src/dng2jpg/dng2jpg.py::_extract_bracket_images_float`; excerpt: calls `rawpy.postprocess(..., output_bps=16)`, normalizes to RGB float `[0,1]`, and returns ordered `ev_minus`, `ev_zero`, `ev_plus` bracket tensors. |
 | REQ-011 | `src/dng2jpg/dng2jpg.py::_run_enfuse`, `_run_luminance_hdr_cli`; excerpt: `--compression=lzw`, deterministic luminance args, and `--ldrTiff 16b`. |
 | REQ-012 | `src/dng2jpg/dng2jpg.py::_encode_jpg`; excerpt: gamma LUT + brightness/contrast/saturation + quality mapping save flow. |
 | REQ-013 | `src/dng2jpg/dng2jpg.py::_encode_jpg`; excerpt: auto-brightness executes before auto-levels and postprocess factors; optional auto-adjust executes before final JPEG save. |
@@ -284,23 +284,23 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-047 | `.github/workflows/release-uvx.yml`; excerpt: `softprops/action-gh-release@v2` uploads `dist/**/*` with unmatched-file failure enabled. |
 | REQ-048 | `pyproject.toml`; excerpt: `[project.scripts] dng2jpg = "dng2jpg.core:main"` and `d2j = "dng2jpg.core:main"`. |
 | REQ-049 | `pyproject.toml`; excerpt: both `dng2jpg` and `d2j` map to identical entrypoint. |
-| REQ-050 | `src/dng2jpg/dng2jpg.py::_apply_auto_brightness_rgb_uint16`; excerpt: executes the original auto-brightness step order in uint16 I/O with float internals and optional post-tonemap local contrast. |
+| REQ-050 | `src/dng2jpg/dng2jpg.py::_apply_auto_brightness_rgb_float`; excerpt: executes the original auto-brightness step order on normalized RGB float I/O with optional post-tonemap local contrast. |
 | REQ-051 | `src/dng2jpg/dng2jpg.py::_apply_validated_auto_adjust_pipeline`, `_apply_validated_auto_adjust_pipeline_opencv`; excerpt: two implementations using shared knob dataclass. |
 | REQ-052 | `src/dng2jpg/dng2jpg.py::run`; excerpt: deterministic `print_info` diagnostic lines for runtime selections and computed EV values. |
 | REQ-103 | `src/dng2jpg/dng2jpg.py::_analyze_luminance_key`; excerpt: classifies `low-key`/`normal-key`/`high-key` with the original median and percentile thresholds. |
-| REQ-104 | `src/dng2jpg/dng2jpg.py::_reinhard_global_tonemap_luminance`, `_apply_auto_brightness_rgb_uint16`; excerpt: percentile robust `Lwhite` and burn-out compression before RGB scaling. |
+| REQ-104 | `src/dng2jpg/dng2jpg.py::_reinhard_global_tonemap_luminance`, `_apply_auto_brightness_rgb_float`; excerpt: percentile robust `Lwhite` and burn-out compression before RGB scaling. |
 | REQ-105 | `src/dng2jpg/dng2jpg.py::_luminance_preserving_desaturate_to_fit`; excerpt: overflow-only luminance-preserving grayscale blending with minimal factor selection. |
-| REQ-100 | `src/dng2jpg/dng2jpg.py::_apply_static_postprocess_uint16`, `_apply_auto_levels_uint16`; excerpt: executes auto-levels in the static postprocess chain without leaving uint16/float domains. |
+| REQ-100 | `src/dng2jpg/dng2jpg.py::_encode_jpg`, `_apply_auto_levels_float`, `_apply_static_postprocess_float`; excerpt: executes auto-levels between optional auto-brightness and static postprocess on RGB float stage interfaces. |
 | REQ-101 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `_parse_auto_levels_options`; excerpt: parses `--auto-levels` plus all `--al-*` knobs with explicit coupling and validation. |
-| REQ-102 | `src/dng2jpg/dng2jpg.py::_parse_auto_levels_hr_method_option`, `_apply_auto_levels_uint16`; excerpt: validates the full RawTherapee-aligned highlight reconstruction method set. |
+| REQ-102 | `src/dng2jpg/dng2jpg.py::_parse_auto_levels_hr_method_option`, `_apply_auto_levels_float`; excerpt: validates and executes the full RawTherapee-aligned highlight reconstruction method set. |
 | REQ-116 | `src/dng2jpg/dng2jpg.py::AutoLevelsOptions`, `_parse_auto_levels_options`; excerpt: sets parser defaults for clip percentage, gamut clipping, highlight method, and gain threshold. |
 | REQ-117 | `src/dng2jpg/dng2jpg.py::_build_autoexp_histogram_rgb_uint16`, `_compute_auto_levels_from_histogram`; excerpt: derives RawTherapee-compatible histogram statistics and clipping points. |
 | REQ-118 | `src/dng2jpg/dng2jpg.py::_compute_auto_levels_from_histogram`; excerpt: implements RawTherapee-compatible formulas for `expcomp`, `black`, `brightness`, `contrast`, and highlight-compression outputs. |
-| REQ-119 | `src/dng2jpg/dng2jpg.py::_apply_auto_levels_uint16`; excerpt: maps CLI method names to RawTherapee `Color`/`Coloropp` semantics and applies deterministic RGB-space approximations. |
-| REQ-120 | `src/dng2jpg/dng2jpg.py::_clip_auto_levels_out_of_gamut_uint16`, `_apply_auto_levels_uint16`; excerpt: normalizes overflowing RGB triplets to the uint16 ceiling while preserving channel ratios. |
+| REQ-119 | `src/dng2jpg/dng2jpg.py::_apply_auto_levels_float`; excerpt: maps CLI method names to RawTherapee `Color`/`Coloropp` semantics and applies deterministic RGB-space approximations. |
+| REQ-120 | `src/dng2jpg/dng2jpg.py::_clip_auto_levels_out_of_gamut_uint16`, `_apply_auto_levels_float`; excerpt: normalizes overflowing RGB triplets to the uint16 ceiling while preserving channel ratios. |
 | REQ-121 | `src/dng2jpg/dng2jpg.py::_analyze_luminance_key`; excerpt: computes `log_avg_lum`, `median_lum`, `p05`, `p95`, `shadow_clip_in`, and `highlight_clip_in` using normalized `1/255` and `254/255` thresholds. |
 | REQ-122 | `src/dng2jpg/dng2jpg.py::_choose_auto_key_value`; excerpt: selects `0.09/0.18/0.36`, applies under/over hints, and clamps to `[a_min,a_max]`. |
-| REQ-123 | `src/dng2jpg/dng2jpg.py::_apply_auto_brightness_rgb_uint16`, `_apply_mild_local_contrast_bgr_uint16`; excerpt: applies optional CLAHE Y-channel local contrast after sRGB re-encoding. |
+| REQ-123 | `src/dng2jpg/dng2jpg.py::_apply_auto_brightness_rgb_float`, `_apply_mild_local_contrast_bgr_uint16`; excerpt: applies optional CLAHE Y-channel local contrast after sRGB re-encoding. |
 | REQ-124 | `src/dng2jpg/dng2jpg.py::AutoBrightnessOptions`, `_parse_auto_brightness_options`, `print_help`; excerpt: exposes `key_value`, `white_point_percentile`, `a_min`, `a_max`, `max_auto_boost_factor`, and `eps` as CLI-configurable controls. |
 | REQ-125 | `src/dng2jpg/dng2jpg.py::AutoBrightnessOptions`, `_parse_auto_brightness_options`, `print_help`; excerpt: exposes local-contrast enable, local-contrast strength, CLAHE clip limit, CLAHE tile grid size, and desaturation enable as CLI-configurable controls. |
 | REQ-107 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `print_help`; excerpt: parses `--enable-opencv`, enforces single backend selector, and documents exclusivity across four backend flags. |
@@ -328,7 +328,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | TST-008 | `src/dng2jpg/dng2jpg.py::_refresh_output_jpg_exif_thumbnail_after_save`; orientation handling in `0th` and `1st` IFDs. |
 | TST-009 | `.github/workflows/release-uvx.yml`; release job condition depends on `is_master` gate output. |
 | TST-010 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; branch checks for `--auto-levels` coupling and all `--al-*` knob validations. |
-| TST-011 | `tests/test_uint16_postprocess_pipeline.py::test_apply_auto_brightness_rgb_uint16_executes_original_stage_order`; verifies uint16 auto-brightness stage order, optional desaturation, and optional CLAHE local contrast. |
+| TST-011 | `tests/test_uint16_postprocess_pipeline.py::test_apply_auto_brightness_rgb_float_executes_original_stage_order`; verifies float-interface auto-brightness stage order, optional desaturation, and optional CLAHE local contrast. |
 | TST-013 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_accepts_enable_opencv_backend`, `test_parse_run_options_rejects_multiple_backends_with_opencv`; validates acceptance and exclusivity for `--enable-opencv`. |
 | TST-014 | `tests/test_uint16_postprocess_pipeline.py::test_build_ev_times_from_ev_zero_and_delta_matches_bracket_sequence`; verifies deterministic stop-space EV-time sequence generation. |
 | TST-015 | `tests/test_uint16_postprocess_pipeline.py::test_normalize_debevec_hdr_to_unit_range_clamps_to_valid_interval`; verifies Debevec normalization clamps float output to `[0,1]`. |
