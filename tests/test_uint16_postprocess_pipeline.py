@@ -1333,25 +1333,25 @@ def test_parse_run_options_rejects_invalid_hdrplus_controls() -> None:
 def test_hdrplus_proxy_rggb_matches_green_weighted_scalar() -> None:
     """`rggb` proxy mode must match the Bayer-inspired green-weighted scalar."""
 
-    frames_rgb_uint16 = np.array(
+    frames_rgb_float32 = np.array(
         [
             [
                 [[100, 200, 300], [500, 1000, 1500]],
                 [[40, 80, 120], [7, 11, 19]],
             ]
         ],
-        dtype=np.uint16,
-    )
+        dtype=np.float32,
+    ) / 65535.0
 
     scalar_proxy = dng2jpg_module._hdrplus_build_scalar_proxy_float32(  # pylint: disable=protected-access
         np_module=np,
-        frames_rgb_uint16=frames_rgb_uint16,
+        frames_rgb_float32=frames_rgb_float32,
         hdrplus_options=dng2jpg_module.HdrPlusOptions(proxy_mode="rggb"),
     )
 
     np.testing.assert_allclose(
         scalar_proxy,
-        np.array([[[200.0, 1000.0], [80.0, 12.0]]], dtype=np.float32),
+        np.array([[[200.0, 1000.0], [80.0, 12.0]]], dtype=np.float32) / 65535.0,
         rtol=1e-6,
         atol=1e-6,
     )
@@ -1361,7 +1361,10 @@ def test_hdrplus_align_layers_detects_translated_alternate_frame() -> None:
     """Hierarchical HDR+ alignment must recover non-zero alternate-frame offsets."""
 
     rng = np.random.default_rng(1234)
-    reference = rng.integers(0, 4096, size=(96, 96), dtype=np.int16).astype(np.float32)
+    reference = (
+        rng.integers(0, 4096, size=(96, 96), dtype=np.int16).astype(np.float32)
+        / 65535.0
+    )
     alternate = _reflect_shift_2d(reference, shift_y=1, shift_x=2).astype(np.float32)
     alignments = dng2jpg_module._hdrplus_align_layers(  # pylint: disable=protected-access
         np_module=np,
@@ -1369,6 +1372,7 @@ def test_hdrplus_align_layers_detects_translated_alternate_frame() -> None:
         hdrplus_options=dng2jpg_module.HdrPlusOptions(),
     )
 
+    assert alignments.dtype == np.int32
     assert np.all(alignments[0] == 0)
     central_offsets = alignments[1, 2:-2, 2:-2].reshape(-1, 2)
     assert central_offsets.size > 0
@@ -1382,22 +1386,22 @@ def test_hdrplus_temporal_merge_uses_alignment_offsets() -> None:
     """Temporal HDR+ weighting and merge must improve when alignment offsets are applied."""
 
     rng = np.random.default_rng(5678)
-    reference_rgb_uint16 = rng.integers(
+    reference_rgb_float32 = rng.integers(
         0,
         200,
         size=(64, 64, 3),
         dtype=np.uint16,
-    )
-    alternate_rgb_uint16 = _reflect_shift_rgb(
-        reference_rgb_uint16,
+    ).astype(np.float32) / 65535.0
+    alternate_rgb_float32 = _reflect_shift_rgb(
+        reference_rgb_float32,
         shift_y=0,
         shift_x=2,
     )
-    frames_rgb_uint16 = np.stack([reference_rgb_uint16, alternate_rgb_uint16], axis=0)
+    frames_rgb_float32 = np.stack([reference_rgb_float32, alternate_rgb_float32], axis=0)
     hdrplus_options = dng2jpg_module.HdrPlusOptions()
     scalar_frames = dng2jpg_module._hdrplus_build_scalar_proxy_float32(  # pylint: disable=protected-access
         np_module=np,
-        frames_rgb_uint16=frames_rgb_uint16,
+        frames_rgb_float32=frames_rgb_float32,
         hdrplus_options=hdrplus_options,
     )
     downsampled_scalar_frames = dng2jpg_module._hdrplus_box_down2_float32(  # pylint: disable=protected-access
@@ -1406,13 +1410,13 @@ def test_hdrplus_temporal_merge_uses_alignment_offsets() -> None:
     )
     tile_start_positions_y = dng2jpg_module._hdrplus_compute_tile_start_positions(  # pylint: disable=protected-access
         np_module=np,
-        axis_length=frames_rgb_uint16.shape[1],
+        axis_length=frames_rgb_float32.shape[1],
         tile_stride=dng2jpg_module.HDRPLUS_TILE_STRIDE,
         pad_margin=dng2jpg_module.HDRPLUS_TILE_SIZE,
     )
     tile_start_positions_x = dng2jpg_module._hdrplus_compute_tile_start_positions(  # pylint: disable=protected-access
         np_module=np,
-        axis_length=frames_rgb_uint16.shape[2],
+        axis_length=frames_rgb_float32.shape[2],
         tile_stride=dng2jpg_module.HDRPLUS_TILE_STRIDE,
         pad_margin=dng2jpg_module.HDRPLUS_TILE_SIZE,
     )
@@ -1436,7 +1440,6 @@ def test_hdrplus_temporal_merge_uses_alignment_offsets() -> None:
         hdrplus_options=hdrplus_options,
     )
 
-    frames_rgb_float32 = frames_rgb_uint16.astype(np.float32)
     temporal_aligned = dng2jpg_module._hdrplus_merge_temporal_rgb(  # pylint: disable=protected-access
         np_module=np,
         frames_rgb_float32=frames_rgb_float32,
@@ -1468,8 +1471,95 @@ def test_hdrplus_temporal_merge_uses_alignment_offsets() -> None:
     assert aligned_error < zero_error
 
 
+def test_hdrplus_temporal_runtime_options_preserve_code_domain_weights() -> None:
+    """Temporal runtime remap must preserve the historical 16-bit-domain weight curve."""
+
+    runtime_options = dng2jpg_module._hdrplus_resolve_temporal_runtime_options(  # pylint: disable=protected-access
+        dng2jpg_module.HdrPlusOptions()
+    )
+    np.testing.assert_allclose(
+        runtime_options.distance_factor,
+        np.float32(8.0 / 65535.0),
+        rtol=1e-6,
+        atol=1e-9,
+    )
+    np.testing.assert_allclose(
+        runtime_options.min_distance,
+        np.float32(10.0 / 65535.0),
+        rtol=1e-6,
+        atol=1e-9,
+    )
+    np.testing.assert_allclose(
+        runtime_options.max_weight_distance,
+        np.float32(290.0),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+
+    tile_start_positions_y = dng2jpg_module._hdrplus_compute_tile_start_positions(  # pylint: disable=protected-access
+        np_module=np,
+        axis_length=32,
+        tile_stride=dng2jpg_module.HDRPLUS_TILE_STRIDE,
+        pad_margin=dng2jpg_module.HDRPLUS_TILE_SIZE,
+    )
+    tile_start_positions_x = dng2jpg_module._hdrplus_compute_tile_start_positions(  # pylint: disable=protected-access
+        np_module=np,
+        axis_length=32,
+        tile_stride=dng2jpg_module.HDRPLUS_TILE_STRIDE,
+        pad_margin=dng2jpg_module.HDRPLUS_TILE_SIZE,
+    )
+    alignment_offsets = np.zeros(
+        (2, len(tile_start_positions_y), len(tile_start_positions_x), 2),
+        dtype=np.int32,
+    )
+
+    near_distance_frames = np.stack(
+        [
+            np.zeros((32, 32), dtype=np.float32),
+            np.full((32, 32), 20.0 / 65535.0, dtype=np.float32),
+        ],
+        axis=0,
+    )
+    near_weights, _near_total = dng2jpg_module._hdrplus_compute_temporal_weights(  # pylint: disable=protected-access
+        np_module=np,
+        downsampled_scalar_frames=dng2jpg_module._hdrplus_box_down2_float32(  # pylint: disable=protected-access
+            np_module=np,
+            frames_float32=near_distance_frames,
+        ),
+        alignment_offsets=alignment_offsets,
+        hdrplus_options=dng2jpg_module.HdrPlusOptions(),
+    )
+    np.testing.assert_allclose(
+        near_weights,
+        np.full_like(near_weights, 0.8, dtype=np.float32),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+
+    far_distance_frames = np.stack(
+        [
+            np.zeros((32, 32), dtype=np.float32),
+            np.full((32, 32), 3000.0 / 65535.0, dtype=np.float32),
+        ],
+        axis=0,
+    )
+    far_weights, _far_total = dng2jpg_module._hdrplus_compute_temporal_weights(  # pylint: disable=protected-access
+        np_module=np,
+        downsampled_scalar_frames=dng2jpg_module._hdrplus_box_down2_float32(  # pylint: disable=protected-access
+            np_module=np,
+            frames_float32=far_distance_frames,
+        ),
+        alignment_offsets=alignment_offsets,
+        hdrplus_options=dng2jpg_module.HdrPlusOptions(),
+    )
+    np.testing.assert_array_equal(
+        far_weights,
+        np.zeros_like(far_weights, dtype=np.float32),
+    )
+
+
 def test_run_hdr_plus_merge_preserves_float_internal_and_float_io(monkeypatch) -> None:
-    """HDR+ merge must keep float intermediates while preserving float image boundaries."""
+    """HDR+ merge must keep normalized float32 intermediates and avoid uint16 staging."""
 
     bracket_images_float = [
         np.full((32, 32, 3), 1000 + (offset * 500), dtype=np.float32) / 65535.0
@@ -1477,6 +1567,18 @@ def test_run_hdr_plus_merge_preserves_float_internal_and_float_io(monkeypatch) -
     ]
 
     call_trace: list[str] = []
+
+    def _fail_uint16_conversion(**_kwargs):
+        raise AssertionError("HDR+ merge called _to_uint16_image_array unexpectedly")
+
+    def _fake_build_scalar_proxy_float32(*, np_module, frames_rgb_float32, hdrplus_options):
+        del hdrplus_options  # Unused by fake stage.
+        assert np_module is np
+        assert frames_rgb_float32.dtype == np.float32
+        assert float(np.min(frames_rgb_float32)) >= 0.0
+        assert float(np.max(frames_rgb_float32)) <= 1.0
+        call_trace.append("proxy")
+        return np.zeros((3, 32, 32), dtype=np.float32)
 
     def _fake_align_layers(*, np_module, scalar_frames, hdrplus_options):
         del hdrplus_options  # Unused by fake stage.
@@ -1520,8 +1622,14 @@ def test_run_hdr_plus_merge_preserves_float_internal_and_float_io(monkeypatch) -
         assert np_module is np
         assert temporal_tiles.dtype.kind == "f"
         call_trace.append("merge_spatial")
-        return np.full((height, width, 3), 1234, dtype=np.uint16)
+        return np.full((height, width, 3), 1234.0 / 65535.0, dtype=np.float32)
 
+    monkeypatch.setattr(dng2jpg_module, "_to_uint16_image_array", _fail_uint16_conversion)
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_hdrplus_build_scalar_proxy_float32",
+        _fake_build_scalar_proxy_float32,
+    )
     monkeypatch.setattr(dng2jpg_module, "_hdrplus_align_layers", _fake_align_layers)
     monkeypatch.setattr(
         dng2jpg_module,
@@ -1545,8 +1653,12 @@ def test_run_hdr_plus_merge_preserves_float_internal_and_float_io(monkeypatch) -
         hdrplus_options=dng2jpg_module.HdrPlusOptions(),
     )
 
-    assert call_trace == ["align", "weights", "merge_temporal", "merge_spatial"]
+    assert call_trace == ["proxy", "align", "weights", "merge_temporal", "merge_spatial"]
     assert output_image.dtype == np.float32
     assert output_image.shape == (32, 32, 3)
-    assert float(np.min(output_image)) >= 0.0
-    assert float(np.max(output_image)) <= 1.0
+    np.testing.assert_allclose(
+        output_image,
+        np.full((32, 32, 3), 1234.0 / 65535.0, dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )

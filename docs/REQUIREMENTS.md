@@ -178,16 +178,19 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-109**: MUST normalize Debevec HDR radiance in float domain using robust luminance white-point percentile, blend it with Mertens fusion in float domain, and return one normalized RGB float image.
 - **REQ-110**: MUST confine any OpenCV-backend float-to-uint16 adaptation required by `MergeDebevec` to the merge step itself and MUST preserve RGB float input/output interfaces for the merge step.
 - **REQ-111**: MUST accept `--hdr-merge HDR-Plus` as HDR backend selector and execute HDR+ backend behavior when selected.
-- **REQ-112**: MUST execute HDR+ backend in source step order `scalar proxy -> hierarchical alignment -> box_down2 -> temporal merge -> spatial merge`, using `ev_zero` as reference frame.
+- **REQ-112**: MUST execute HDR+ backend in source step order `scalar proxy -> hierarchical alignment -> box_down2 -> temporal merge -> spatial merge`, with internal frame order `(ev_zero, ev_minus, ev_plus)` and `ev_zero` at index `0`.
 - **REQ-113**: MUST compute three-level HDR+ alignment on the scalar proxy with `box_down2`, two `gauss_down4` levels, per-tile L1 minimization over offsets `[-4,+3]`, and final full-resolution offset lift by `2`.
-- **REQ-114**: MUST compute HDR+ temporal alternate-frame weights from aligned 16x16 downsampled tiles with `factor=8`, `min_dist=10`, `max_dist=300`, hard cutoff, and reference-inclusive normalization.
-- **REQ-115**: MUST execute HDR+ spatial blending over aligned half-overlapped 32x32 tiles using raised-cosine weights and return one normalized RGB float image without intermediate `uint8` quantization.
-- **REQ-126**: MUST adapt RGB float bracket images to the single-channel HDR+ source domain by deriving one deterministic scalar proxy with default mode `rggb`.
+- **REQ-114**: MUST compute HDR+ temporal alternate-frame weights from aligned 16x16 downsampled tiles with user-facing `factor`, `min_dist`, and `max_dist`, hard cutoff, and reference-inclusive normalization.
+- **REQ-115**: MUST execute HDR+ spatial blending over aligned half-overlapped 32x32 tiles using raised-cosine weights and return one normalized RGB float32 image without `uint8` or `uint16` quantization.
+- **REQ-126**: MUST adapt RGB float bracket images to one deterministic normalized float32 scalar proxy on `[0,1]` with default mode `rggb`.
 - **REQ-127**: MUST expose HDR+ CLI knobs `--hdrplus-proxy-mode`, `--hdrplus-search-radius`, `--hdrplus-temporal-factor`, `--hdrplus-temporal-min-dist`, and `--hdrplus-temporal-max-dist`.
 - **REQ-128**: MUST default HDR+ CLI knobs to `proxy_mode=rggb`, `search_radius=4`, `temporal_factor=8`, `temporal_min_dist=10`, and `temporal_max_dist=300`.
-- **REQ-129**: MUST execute HDR+ alignment and merge arithmetic in float domain and confine any required uint16 adaptation to the HDR+ step while preserving RGB float input/output interfaces.
+- **REQ-129**: MUST execute HDR+ scalar-proxy, alignment, temporal, and spatial radiometric arithmetic on normalized float32 arrays in domain `[0,1]` without additional stage-local radiometric renormalization.
 - **REQ-130**: MUST reject HDR+ knob values when `search_radius<1`, `temporal_factor<=0`, `temporal_min_dist<0`, or `temporal_max_dist<=temporal_min_dist`.
-- **REQ-131**: MUST print resolved HDR+ proxy, alignment, and temporal knob values in deterministic runtime diagnostics.
+- **REQ-131**: MUST print resolved HDR+ proxy, alignment, and temporal knob values in deterministic runtime diagnostics using user-facing CLI values, not normalized internal parameters.
+- **REQ-138**: MUST internally remap HDR+ temporal weighting parameters for normalized float32 `[0,1]` distance inputs so numeric behavior remains equivalent to the historical 16-bit code-domain formulation.
+- **REQ-139**: MUST keep HDR+ alignment offsets as `int32` and keep tile indices, stride, margins, bounds, and search geometry discrete integers.
+- **REQ-140**: MUST NOT convert HDR+ RGB frames or HDR+ scalar proxy arrays to `uint16` at any point in the HDR+ backend.
 - **REQ-132**: MUST execute static postprocess gamma, brightness, contrast, and saturation directly on RGB float tensors without uint16 or other quantized intermediates.
 - **REQ-133**: MUST perform exactly one float-to-uint8 quantization immediately before final JPEG save.
 - **REQ-134**: MUST preserve legacy post-gamma, brightness, contrast, and saturation equations and parameter semantics in the float-domain port; output differences MUST derive only from removed quantization.
@@ -217,8 +220,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-021**: MUST verify `_parse_run_options` accepts HDR+ knob overrides and rejects invalid HDR+ knob combinations with deterministic parse errors.
 - **TST-022**: MUST verify HDR+ scalar proxy mode `rggb` produces deterministic green-weighted scalar conversion from RGB float input.
 - **TST-023**: MUST verify HDR+ hierarchical alignment resolves non-zero alternate-frame tile offsets for translated inputs and keeps reference offsets at zero.
-- **TST-024**: MUST verify HDR+ temporal weighting and RGB accumulation apply resolved alignment offsets before distance evaluation and tile merge.
-- **TST-025**: MUST verify HDR+ merge preserves float internal arithmetic and float input/output boundaries.
+- **TST-024**: MUST verify HDR+ temporal weighting applies resolved alignment offsets and internally normalized temporal parameters before distance evaluation and RGB accumulation.
+- **TST-025**: MUST verify HDR+ merge preserves normalized float32 arithmetic and float input/output boundaries without any HDR+ `uint16` conversion path.
 - **TST-026**: MUST verify `_apply_static_postprocess_float` preserves float I/O and does not call uint16 adaptation helpers or legacy uint16 static-stage helpers.
 - **TST-027**: MUST verify float-domain static postprocess matches legacy gamma, brightness, contrast, and saturation outputs within quantization-only tolerance on deterministic fixtures.
 - **TST-028**: MUST verify OpenCV auto-adjust CLI parsing exposes CLAHE-luma enable, strength, clip-limit, and tile-grid controls with deterministic defaults and validation.
@@ -325,16 +328,19 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-109 | `src/dng2jpg/dng2jpg.py::_normalize_debevec_hdr_to_unit_range`, `_run_opencv_hdr_merge`; excerpt: applies robust luminance white-point percentile normalization and blends Debevec with Mertens in float domain. |
 | REQ-110 | `src/dng2jpg/dng2jpg.py::_run_opencv_hdr_merge`; excerpt: maintains float-domain processing and performs one float-to-uint16 conversion for merged TIFF write. |
 | REQ-111 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `print_help`, `run`; excerpt: accepts `--hdr-merge HDR-Plus`, documents backend, and routes execution to HDR+ merge path. |
-| REQ-112 | `src/dng2jpg/dng2jpg.py::_order_hdr_plus_reference_paths`, `_hdrplus_build_scalar_proxy_float32`, `_hdrplus_align_layers`, `_hdrplus_box_down2_float32`, `_hdrplus_compute_temporal_weights`, `_hdrplus_merge_temporal_rgb`, `_hdrplus_merge_spatial_rgb`, `_run_hdr_plus_merge`; excerpt: executes source order `scalar proxy -> hierarchical alignment -> box_down2 -> temporal merge -> spatial merge` with `ev_zero` reference. |
+| REQ-112 | `src/dng2jpg/dng2jpg.py::_order_hdr_plus_reference_paths`, `_hdrplus_build_scalar_proxy_float32`, `_hdrplus_align_layers`, `_hdrplus_box_down2_float32`, `_hdrplus_compute_temporal_weights`, `_hdrplus_merge_temporal_rgb`, `_hdrplus_merge_spatial_rgb`, `_run_hdr_plus_merge`; excerpt: executes source order `scalar proxy -> hierarchical alignment -> box_down2 -> temporal merge -> spatial merge` with internal frame order `(ev_zero, ev_minus, ev_plus)` and `ev_zero` reference index `0`. |
 | REQ-113 | `src/dng2jpg/dng2jpg.py::_hdrplus_align_layer`, `_hdrplus_align_layers`; excerpt: applies three-level hierarchical tile alignment with `box_down2`, two `gauss_down4` levels, search offsets `[-4,+3]`, and final full-resolution offset lift. |
-| REQ-114 | `src/dng2jpg/dng2jpg.py::_hdrplus_compute_temporal_weights`, `_hdrplus_merge_temporal_rgb`; excerpt: applies aligned 16x16 tile L1 weights with `factor=8`, `min_dist=10`, `max_dist=300`, cutoff, and reference-inclusive normalization. |
-| REQ-115 | `src/dng2jpg/dng2jpg.py::_hdrplus_merge_spatial_rgb`, `_run_hdr_plus_merge`; excerpt: blends aligned half-overlapped 32x32 tiles with raised-cosine weights and writes RGB `uint16` merged TIFF. |
-| REQ-126 | `src/dng2jpg/dng2jpg.py::HdrPlusOptions`, `_parse_hdrplus_options`, `_hdrplus_build_scalar_proxy_float32`; excerpt: adapts RGB bracket TIFFs into deterministic scalar proxy with default `rggb` mode. |
+| REQ-114 | `src/dng2jpg/dng2jpg.py::_hdrplus_resolve_temporal_runtime_options`, `_hdrplus_compute_temporal_weights`, `_hdrplus_merge_temporal_rgb`; excerpt: applies aligned 16x16 tile L1 weights with user-facing temporal knobs, remapped runtime controls, hard cutoff, and reference-inclusive normalization. |
+| REQ-115 | `src/dng2jpg/dng2jpg.py::_hdrplus_merge_spatial_rgb`, `_run_hdr_plus_merge`; excerpt: blends aligned half-overlapped 32x32 tiles with raised-cosine weights and returns normalized RGB float32 output without `uint8` or `uint16` quantization. |
+| REQ-126 | `src/dng2jpg/dng2jpg.py::HdrPlusOptions`, `_parse_hdrplus_options`, `_hdrplus_build_scalar_proxy_float32`; excerpt: adapts normalized RGB float brackets into deterministic normalized scalar proxy with default `rggb` mode. |
 | REQ-127 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `print_help`, `HdrPlusOptions`; excerpt: exposes HDR+ CLI knobs for proxy, search radius, and temporal weighting. |
 | REQ-128 | `src/dng2jpg/dng2jpg.py::HdrPlusOptions`; excerpt: stores source-matching default values for HDR+ proxy, alignment, and temporal weights. |
-| REQ-129 | `src/dng2jpg/dng2jpg.py::_run_hdr_plus_merge`, `_hdrplus_align_layers`, `_hdrplus_compute_temporal_weights`, `_hdrplus_merge_temporal_rgb`; excerpt: preserves float internals with `uint16` input/output boundaries. |
+| REQ-129 | `src/dng2jpg/dng2jpg.py::_run_hdr_plus_merge`, `_hdrplus_build_scalar_proxy_float32`, `_hdrplus_align_layers`, `_hdrplus_compute_temporal_weights`, `_hdrplus_merge_temporal_rgb`, `_hdrplus_merge_spatial_rgb`; excerpt: preserves normalized float32 HDR+ radiometric arithmetic without stage-local renormalization. |
 | REQ-130 | `src/dng2jpg/dng2jpg.py::_parse_hdrplus_options`, `_parse_run_options`; excerpt: rejects invalid HDR+ knob ranges and inconsistent temporal thresholds. |
-| REQ-131 | `src/dng2jpg/dng2jpg.py::run`; excerpt: prints resolved HDR+ proxy, alignment, and temporal knob diagnostics. |
+| REQ-131 | `src/dng2jpg/dng2jpg.py::HdrPlusOptions`, `_hdrplus_resolve_temporal_runtime_options`, `run`; excerpt: preserves user-facing HDR+ temporal diagnostics while runtime remapping stays internal. |
+| REQ-138 | `src/dng2jpg/dng2jpg.py::HdrPlusOptions`, `HdrPlusTemporalRuntimeOptions`, `_hdrplus_resolve_temporal_runtime_options`, `_hdrplus_compute_temporal_weights`; excerpt: remaps temporal weighting controls for normalized `[0,1]` distances while preserving historical 16-bit code-domain behavior. |
+| REQ-139 | `src/dng2jpg/dng2jpg.py::_hdrplus_compute_tile_start_positions`, `_hdrplus_trunc_divide_int32`, `_hdrplus_align_layers`; excerpt: keeps alignment offsets, tile geometry, and search-domain indexing in integer form. |
+| REQ-140 | `src/dng2jpg/dng2jpg.py::_hdrplus_build_scalar_proxy_float32`, `_hdrplus_merge_temporal_rgb`, `_hdrplus_merge_spatial_rgb`, `_run_hdr_plus_merge`; excerpt: keeps HDR+ RGB frames and scalar proxy on float32 path with no `uint16` adaptation. |
 | REQ-132 | `src/dng2jpg/dng2jpg.py::_apply_static_postprocess_float`, `_apply_post_gamma_float`, `_apply_brightness_float`, `_apply_contrast_float`, `_apply_saturation_float`; excerpt: executes static postprocess directly on RGB float tensors without quantized intermediates. |
 | REQ-133 | `src/dng2jpg/dng2jpg.py::_encode_jpg`; excerpt: performs the only float-to-uint8 quantization immediately before Pillow JPEG save. |
 | REQ-134 | `src/dng2jpg/dng2jpg.py::_apply_post_gamma_float`, `_apply_brightness_float`, `_apply_contrast_float`, `_apply_saturation_float`; excerpt: preserves the legacy transfer equations and parameter semantics in float domain. |
@@ -361,8 +367,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | TST-021 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_accepts_hdrplus_controls`, `test_parse_run_options_rejects_invalid_hdrplus_controls`; verifies HDR+ CLI control parsing and validation. |
 | TST-022 | `tests/test_uint16_postprocess_pipeline.py::test_hdrplus_proxy_rggb_matches_green_weighted_scalar`; verifies deterministic `rggb` scalar proxy conversion. |
 | TST-023 | `tests/test_uint16_postprocess_pipeline.py::test_hdrplus_align_layers_detects_translated_alternate_frame`; verifies non-zero alternate-frame alignment and zero reference offsets. |
-| TST-024 | `tests/test_uint16_postprocess_pipeline.py::test_hdrplus_temporal_merge_uses_alignment_offsets`; verifies resolved alignment offsets affect temporal weighting and RGB accumulation. |
-| TST-025 | `tests/test_uint16_postprocess_pipeline.py::test_run_hdr_plus_merge_preserves_float_internal_and_uint16_io`; verifies HDR+ float internals with `uint16` image boundaries. |
+| TST-024 | `tests/test_uint16_postprocess_pipeline.py::test_hdrplus_temporal_merge_uses_alignment_offsets`, `test_hdrplus_temporal_runtime_options_preserve_code_domain_weights`; verifies resolved alignment offsets and normalized temporal runtime remap affect weighting and RGB accumulation. |
+| TST-025 | `tests/test_uint16_postprocess_pipeline.py::test_run_hdr_plus_merge_preserves_float_internal_and_float_io`; verifies HDR+ normalized float32 internals and float image boundaries without `uint16` conversion. |
 | TST-026 | `tests/test_uint16_postprocess_pipeline.py::test_apply_static_postprocess_float_does_not_call_uint16_conversion`; verifies static postprocess avoids uint16 adaptation helpers. |
 | TST-027 | `tests/test_uint16_postprocess_pipeline.py::test_apply_static_postprocess_float_matches_legacy_within_quantization_tolerance`; verifies float-domain static postprocess remains within quantization-only deviation from legacy output. |
 | TST-028 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_accepts_auto_adjust_clahe_controls`; verifies OpenCV auto-adjust parser coverage for CLAHE-luma controls. |
