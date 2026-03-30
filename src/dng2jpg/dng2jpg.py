@@ -42,6 +42,10 @@ DEFAULT_AA_BLUR_SIGMA = 0.9
 DEFAULT_AA_BLUR_THRESHOLD_PCT = 5.0
 DEFAULT_AA_LEVEL_LOW_PCT = 0.1
 DEFAULT_AA_LEVEL_HIGH_PCT = 99.9
+DEFAULT_AA_ENABLE_LOCAL_CONTRAST = True
+DEFAULT_AA_LOCAL_CONTRAST_STRENGTH = 0.20
+DEFAULT_AA_CLAHE_CLIP_LIMIT = 1.6
+DEFAULT_AA_CLAHE_TILE_GRID_SIZE = (8, 8)
 DEFAULT_AA_SIGMOID_CONTRAST = 1.8
 DEFAULT_AA_SIGMOID_MIDPOINT = 0.5
 DEFAULT_AA_SATURATION_GAMMA = 0.8
@@ -51,10 +55,6 @@ DEFAULT_AB_WHITE_POINT_PERCENTILE = 99.8
 DEFAULT_AB_A_MIN = 0.045
 DEFAULT_AB_A_MAX = 0.72
 DEFAULT_AB_MAX_AUTO_BOOST_FACTOR = 1.25
-DEFAULT_AB_ENABLE_MILD_LOCAL_CONTRAST = True
-DEFAULT_AB_LOCAL_CONTRAST_STRENGTH = 0.20
-DEFAULT_AB_CLAHE_CLIP_LIMIT = 1.6
-DEFAULT_AB_CLAHE_TILE_GRID_SIZE = (8, 8)
 DEFAULT_AB_ENABLE_LUMINANCE_PRESERVING_DESAT = True
 DEFAULT_AB_EPS = 1e-6
 DEFAULT_AB_LOW_KEY_VALUE = 0.09
@@ -133,6 +133,10 @@ _AUTO_ADJUST_KNOB_OPTIONS = (
     "--aa-blur-threshold-pct",
     "--aa-level-low-pct",
     "--aa-level-high-pct",
+    "--aa-enable-local-contrast",
+    "--aa-local-contrast-strength",
+    "--aa-clahe-clip-limit",
+    "--aa-clahe-tile-grid-size",
     "--aa-sigmoid-contrast",
     "--aa-sigmoid-midpoint",
     "--aa-saturation-gamma",
@@ -144,10 +148,6 @@ _AUTO_BRIGHTNESS_KNOB_OPTIONS = (
     "--ab-key-min",
     "--ab-key-max",
     "--ab-max-auto-boost",
-    "--ab-enable-local-contrast",
-    "--ab-local-contrast-strength",
-    "--ab-clahe-clip-limit",
-    "--ab-clahe-tile-grid-size",
     "--ab-enable-luminance-preserving-desat",
     "--ab-eps",
 )
@@ -323,25 +323,34 @@ _LUMINANCE_CONTROL_TABLE_ROWS = (
 class AutoAdjustOptions:
     """@brief Hold shared auto-adjust knob values used by ImageMagick and OpenCV.
 
-    @details Encapsulates validated knob values consumed by both auto-adjust
-    implementations so both pipelines remain numerically aligned and backward
-    compatible when no explicit overrides are provided.
+    @details Encapsulates validated shared blur/level/sigmoid/vibrance/high-pass
+    controls plus OpenCV-only CLAHE-luma controls so both auto-adjust
+    implementations share one parser contract while the OpenCV path can insert
+    local-contrast processing without quantized intermediates.
     @param blur_sigma {float} Selective blur Gaussian sigma (`> 0`).
     @param blur_threshold_pct {float} Selective blur threshold percentage in `[0, 100]`.
     @param level_low_pct {float} Low percentile for level normalization in `[0, 100]`.
     @param level_high_pct {float} High percentile for level normalization in `[0, 100]`.
+    @param enable_local_contrast {bool} `True` enables CLAHE-luma stage in the OpenCV auto-adjust pipeline.
+    @param local_contrast_strength {float} CLAHE-luma blend factor in `[0, 1]`.
+    @param clahe_clip_limit {float} CLAHE clip limit in `(0, +inf)`.
+    @param clahe_tile_grid_size {tuple[int, int]} CLAHE tile grid size `(rows, cols)`, each `>=1`.
     @param sigmoid_contrast {float} Sigmoidal contrast slope (`> 0`).
     @param sigmoid_midpoint {float} Sigmoidal contrast midpoint in `[0, 1]`.
     @param saturation_gamma {float} HSL saturation gamma denominator (`> 0`).
     @param highpass_blur_sigma {float} High-pass Gaussian blur sigma (`> 0`).
     @return {None} Immutable dataclass container.
-    @satisfies REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087
+    @satisfies REQ-051, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-123, REQ-125, REQ-136, REQ-137
     """
 
     blur_sigma: float = DEFAULT_AA_BLUR_SIGMA
     blur_threshold_pct: float = DEFAULT_AA_BLUR_THRESHOLD_PCT
     level_low_pct: float = DEFAULT_AA_LEVEL_LOW_PCT
     level_high_pct: float = DEFAULT_AA_LEVEL_HIGH_PCT
+    enable_local_contrast: bool = DEFAULT_AA_ENABLE_LOCAL_CONTRAST
+    local_contrast_strength: float = DEFAULT_AA_LOCAL_CONTRAST_STRENGTH
+    clahe_clip_limit: float = DEFAULT_AA_CLAHE_CLIP_LIMIT
+    clahe_tile_grid_size: tuple[int, int] = DEFAULT_AA_CLAHE_TILE_GRID_SIZE
     sigmoid_contrast: float = DEFAULT_AA_SIGMOID_CONTRAST
     sigmoid_midpoint: float = DEFAULT_AA_SIGMOID_MIDPOINT
     saturation_gamma: float = DEFAULT_AA_SATURATION_GAMMA
@@ -355,21 +364,16 @@ class AutoBrightnessOptions:
     @details Encapsulates parameters for the 16-bit BT.709 photographic
     tonemap pipeline: key-classification, key-value selection, robust white
     point, optional luminance-preserving anti-clipping desaturation, and
-    optional mild CLAHE micro-contrast blending in the Y channel after sRGB
-    re-encoding.
+    numerical stability control for float-domain luminance processing.
     @param key_value {float|None} Manual Reinhard key value override in `(0, +inf)`; `None` enables automatic key selection.
     @param white_point_percentile {float} Percentile in `(0, 100)` used to derive robust `Lwhite`.
     @param a_min {float} Minimum allowed automatic key value clamp in `(0, +inf)`.
     @param a_max {float} Maximum allowed automatic key value clamp in `(0, +inf)`.
     @param max_auto_boost_factor {float} Multiplicative adjustment factor for automatic key adaptation in `(0, +inf)`.
-    @param enable_mild_local_contrast {bool} `True` enables post-tonemap CLAHE blending in YCrCb luminance space.
-    @param local_contrast_strength {float} CLAHE blend factor in `[0, 1]`.
-    @param clahe_clip_limit {float} OpenCV CLAHE clip limit in `(0, +inf)`.
-    @param clahe_tile_grid_size {tuple[int, int]} OpenCV CLAHE tile grid size `(rows, cols)`, each `>=1`.
     @param enable_luminance_preserving_desat {bool} `True` enables minimal grayscale blending for out-of-gamut linear RGB triplets.
     @param eps {float} Positive numerical stability guard used in divisions and logarithms.
     @return {None} Immutable dataclass container.
-    @satisfies REQ-050, REQ-065, REQ-088, REQ-089, REQ-090, REQ-103, REQ-104, REQ-105, REQ-123, REQ-124, REQ-125
+    @satisfies REQ-050, REQ-065, REQ-088, REQ-089, REQ-090, REQ-103, REQ-104, REQ-105, REQ-124, REQ-135
     """
 
     key_value: float | None = DEFAULT_AB_KEY_VALUE
@@ -377,10 +381,6 @@ class AutoBrightnessOptions:
     a_min: float = DEFAULT_AB_A_MIN
     a_max: float = DEFAULT_AB_A_MAX
     max_auto_boost_factor: float = DEFAULT_AB_MAX_AUTO_BOOST_FACTOR
-    enable_mild_local_contrast: bool = DEFAULT_AB_ENABLE_MILD_LOCAL_CONTRAST
-    local_contrast_strength: float = DEFAULT_AB_LOCAL_CONTRAST_STRENGTH
-    clahe_clip_limit: float = DEFAULT_AB_CLAHE_CLIP_LIMIT
-    clahe_tile_grid_size: tuple[int, int] = DEFAULT_AB_CLAHE_TILE_GRID_SIZE
     enable_luminance_preserving_desat: bool = (
         DEFAULT_AB_ENABLE_LUMINANCE_PRESERVING_DESAT
     )
@@ -616,10 +616,6 @@ def print_help(version):
         "[--ab-key-value=<value>] [--ab-white-point-pct=<(0,100)>] "
         "[--ab-key-min=<value>] [--ab-key-max=<value>] "
         "[--ab-max-auto-boost=<value>] "
-        "[--ab-enable-local-contrast[=<0|1|false|true|no|yes|off|on>]] "
-        "[--ab-local-contrast-strength=<0..1>] "
-        "[--ab-clahe-clip-limit=<value>] "
-        "[--ab-clahe-tile-grid-size=<rows>x<cols>] "
         "[--ab-enable-luminance-preserving-desat[=<0|1|false|true|no|yes|off|on>]] "
         "[--ab-eps=<value>] "
         "[--auto-levels=<enable|disable>] "
@@ -630,6 +626,10 @@ def print_help(version):
         f"[--jpg-compression=<0..100>] [--auto-adjust <ImageMagick|OpenCV>] "
         "[--aa-blur-sigma=<value>] [--aa-blur-threshold-pct=<0..100>] "
         "[--aa-level-low-pct=<0..100>] [--aa-level-high-pct=<0..100>] "
+        "[--aa-enable-local-contrast[=<0|1|false|true|no|yes|off|on>]] "
+        "[--aa-local-contrast-strength=<0..1>] "
+        "[--aa-clahe-clip-limit=<value>] "
+        "[--aa-clahe-tile-grid-size=<rows>x<cols>] "
         "[--aa-sigmoid-contrast=<value>] [--aa-sigmoid-midpoint=<0..1>] "
         "[--aa-saturation-gamma=<value>] [--aa-highpass-blur-sigma=<value>] "
         f"[--hdr-merge <{HDR_MERGE_MODE_ENFUSE}|{HDR_MERGE_MODE_LUMINANCE}|{HDR_MERGE_MODE_OPENCV}|{HDR_MERGE_MODE_HDR_PLUS}>] "
@@ -705,19 +705,6 @@ def print_help(version):
         f"  --ab-max-auto-boost=<value> - Auto key adaptation factor (>0, default: {DEFAULT_AB_MAX_AUTO_BOOST_FACTOR:g})."
     )
     print(
-        f"  --ab-enable-local-contrast[=<bool>] - Enable post-tonemap CLAHE Y-channel blending (default: {'true' if DEFAULT_AB_ENABLE_MILD_LOCAL_CONTRAST else 'false'})."
-    )
-    print(
-        f"  --ab-local-contrast-strength=<0..1> - CLAHE Y-channel blend factor for mild local contrast (default: {DEFAULT_AB_LOCAL_CONTRAST_STRENGTH:g})."
-    )
-    print(
-        f"  --ab-clahe-clip-limit=<value> - CLAHE clip limit for local contrast (>0, default: {DEFAULT_AB_CLAHE_CLIP_LIMIT:g})."
-    )
-    print(
-        "  --ab-clahe-tile-grid-size=<rows>x<cols> - CLAHE tile grid size for local contrast"
-        f" (default: {DEFAULT_AB_CLAHE_TILE_GRID_SIZE[0]}x{DEFAULT_AB_CLAHE_TILE_GRID_SIZE[1]})."
-    )
-    print(
         f"  --ab-enable-luminance-preserving-desat[=<bool>] - Enable anti-clipping grayscale blending (default: {'true' if DEFAULT_AB_ENABLE_LUMINANCE_PRESERVING_DESAT else 'false'})."
     )
     print(
@@ -769,6 +756,19 @@ def print_help(version):
     )
     print(
         f"  --aa-level-high-pct=<0..100> - Level high percentile; must be > --aa-level-low-pct (default: {DEFAULT_AA_LEVEL_HIGH_PCT:g})."
+    )
+    print(
+        f"  --aa-enable-local-contrast[=<bool>] - Enable float-domain CLAHE-luma stage in OpenCV auto-adjust (default: {'true' if DEFAULT_AA_ENABLE_LOCAL_CONTRAST else 'false'})."
+    )
+    print(
+        f"  --aa-local-contrast-strength=<0..1> - CLAHE-luma blend factor for OpenCV auto-adjust (default: {DEFAULT_AA_LOCAL_CONTRAST_STRENGTH:g})."
+    )
+    print(
+        f"  --aa-clahe-clip-limit=<value> - CLAHE clip limit for OpenCV auto-adjust local contrast (>0, default: {DEFAULT_AA_CLAHE_CLIP_LIMIT:g})."
+    )
+    print(
+        "  --aa-clahe-tile-grid-size=<rows>x<cols> - CLAHE tile grid size for OpenCV auto-adjust local contrast"
+        f" (default: {DEFAULT_AA_CLAHE_TILE_GRID_SIZE[0]}x{DEFAULT_AA_CLAHE_TILE_GRID_SIZE[1]})."
     )
     print(
         f"  --aa-sigmoid-contrast=<value> - Sigmoidal contrast slope > 0 (default: {DEFAULT_AA_SIGMOID_CONTRAST:g})."
@@ -1829,7 +1829,7 @@ def _parse_positive_int_pair_option(option_name, option_raw):
     @param option_name {str} Long-option identifier used in error messages.
     @param option_raw {str} Raw option token value from CLI args.
     @return {tuple[int, int]|None} Parsed positive integer pair when valid; `None` otherwise.
-    @satisfies REQ-065, REQ-123, REQ-125
+    @satisfies REQ-065, REQ-125
     """
 
     normalized_value = option_raw.lower().replace("x", ",")
@@ -1856,11 +1856,11 @@ def _parse_auto_brightness_options(auto_brightness_raw_values):
     """@brief Parse and validate auto-brightness parameters.
 
     @details Parses optional controls for the original photographic BT.709
-    16-bit tonemap pipeline and applies deterministic defaults for omitted
+    float-domain tonemap pipeline and applies deterministic defaults for omitted
     auto-brightness options.
     @param auto_brightness_raw_values {dict[str, str]} Raw `--ab-*` option values keyed by long option name.
     @return {AutoBrightnessOptions|None} Parsed auto-brightness options or `None` on validation error.
-    @satisfies REQ-088, REQ-089, REQ-103, REQ-104, REQ-105, REQ-123, REQ-124, REQ-125
+    @satisfies REQ-088, REQ-089, REQ-103, REQ-104, REQ-105, REQ-124, REQ-135
     """
 
     defaults = AutoBrightnessOptions()
@@ -1869,10 +1869,6 @@ def _parse_auto_brightness_options(auto_brightness_raw_values):
     a_min = defaults.a_min
     a_max = defaults.a_max
     max_auto_boost_factor = defaults.max_auto_boost_factor
-    enable_mild_local_contrast = defaults.enable_mild_local_contrast
-    local_contrast_strength = defaults.local_contrast_strength
-    clahe_clip_limit = defaults.clahe_clip_limit
-    clahe_tile_grid_size = defaults.clahe_tile_grid_size
     enable_luminance_preserving_desat = defaults.enable_luminance_preserving_desat
     eps = defaults.eps
 
@@ -1925,44 +1921,6 @@ def _parse_auto_brightness_options(auto_brightness_raw_values):
             return None
         max_auto_boost_factor = parsed
 
-    if "--ab-enable-local-contrast" in auto_brightness_raw_values:
-        parsed = _parse_explicit_boolean_option(
-            "--ab-enable-local-contrast",
-            auto_brightness_raw_values["--ab-enable-local-contrast"],
-        )
-        if parsed is None:
-            return None
-        enable_mild_local_contrast = parsed
-
-    if "--ab-local-contrast-strength" in auto_brightness_raw_values:
-        parsed = _parse_float_in_range_option(
-            "--ab-local-contrast-strength",
-            auto_brightness_raw_values["--ab-local-contrast-strength"],
-            0.0,
-            1.0,
-        )
-        if parsed is None:
-            return None
-        local_contrast_strength = parsed
-
-    if "--ab-clahe-clip-limit" in auto_brightness_raw_values:
-        parsed = _parse_positive_float_option(
-            "--ab-clahe-clip-limit",
-            auto_brightness_raw_values["--ab-clahe-clip-limit"],
-        )
-        if parsed is None:
-            return None
-        clahe_clip_limit = parsed
-
-    if "--ab-clahe-tile-grid-size" in auto_brightness_raw_values:
-        parsed = _parse_positive_int_pair_option(
-            "--ab-clahe-tile-grid-size",
-            auto_brightness_raw_values["--ab-clahe-tile-grid-size"],
-        )
-        if parsed is None:
-            return None
-        clahe_tile_grid_size = parsed
-
     if "--ab-enable-luminance-preserving-desat" in auto_brightness_raw_values:
         parsed = _parse_explicit_boolean_option(
             "--ab-enable-luminance-preserving-desat",
@@ -1986,10 +1944,6 @@ def _parse_auto_brightness_options(auto_brightness_raw_values):
         a_min=a_min,
         a_max=a_max,
         max_auto_boost_factor=max_auto_boost_factor,
-        enable_mild_local_contrast=enable_mild_local_contrast,
-        local_contrast_strength=local_contrast_strength,
-        clahe_clip_limit=clahe_clip_limit,
-        clahe_tile_grid_size=clahe_tile_grid_size,
         enable_luminance_preserving_desat=enable_luminance_preserving_desat,
         eps=eps,
     )
@@ -2095,10 +2049,11 @@ def _parse_auto_adjust_options(auto_adjust_raw_values):
     """@brief Parse and validate shared auto-adjust knobs for both implementations.
 
     @details Applies defaults for omitted knobs, validates scalar/range
-    constraints, and enforces level percentile ordering contract.
+    constraints, validates OpenCV-only CLAHE-luma controls, and enforces level
+    percentile ordering contract.
     @param auto_adjust_raw_values {dict[str, str]} Raw `--aa-*` option values keyed by long option name.
     @return {AutoAdjustOptions|None} Parsed shared auto-adjust options or `None` on validation error.
-    @satisfies REQ-082, REQ-083, REQ-084
+    @satisfies REQ-051, REQ-082, REQ-083, REQ-084, REQ-123, REQ-125
     """
 
     options = AutoAdjustOptions()
@@ -2106,6 +2061,10 @@ def _parse_auto_adjust_options(auto_adjust_raw_values):
     blur_threshold_pct = options.blur_threshold_pct
     level_low_pct = options.level_low_pct
     level_high_pct = options.level_high_pct
+    enable_local_contrast = options.enable_local_contrast
+    local_contrast_strength = options.local_contrast_strength
+    clahe_clip_limit = options.clahe_clip_limit
+    clahe_tile_grid_size = options.clahe_tile_grid_size
     sigmoid_contrast = options.sigmoid_contrast
     sigmoid_midpoint = options.sigmoid_midpoint
     saturation_gamma = options.saturation_gamma
@@ -2153,6 +2112,40 @@ def _parse_auto_adjust_options(auto_adjust_raw_values):
             "Invalid auto-adjust levels: --aa-level-low-pct must be lower than --aa-level-high-pct"
         )
         return None
+    if "--aa-enable-local-contrast" in auto_adjust_raw_values:
+        parsed = _parse_explicit_boolean_option(
+            "--aa-enable-local-contrast",
+            auto_adjust_raw_values["--aa-enable-local-contrast"],
+        )
+        if parsed is None:
+            return None
+        enable_local_contrast = parsed
+    if "--aa-local-contrast-strength" in auto_adjust_raw_values:
+        parsed = _parse_float_in_range_option(
+            "--aa-local-contrast-strength",
+            auto_adjust_raw_values["--aa-local-contrast-strength"],
+            0.0,
+            1.0,
+        )
+        if parsed is None:
+            return None
+        local_contrast_strength = parsed
+    if "--aa-clahe-clip-limit" in auto_adjust_raw_values:
+        parsed = _parse_positive_float_option(
+            "--aa-clahe-clip-limit",
+            auto_adjust_raw_values["--aa-clahe-clip-limit"],
+        )
+        if parsed is None:
+            return None
+        clahe_clip_limit = parsed
+    if "--aa-clahe-tile-grid-size" in auto_adjust_raw_values:
+        parsed = _parse_positive_int_pair_option(
+            "--aa-clahe-tile-grid-size",
+            auto_adjust_raw_values["--aa-clahe-tile-grid-size"],
+        )
+        if parsed is None:
+            return None
+        clahe_tile_grid_size = parsed
     if "--aa-sigmoid-contrast" in auto_adjust_raw_values:
         parsed = _parse_positive_float_option(
             "--aa-sigmoid-contrast", auto_adjust_raw_values["--aa-sigmoid-contrast"]
@@ -2191,6 +2184,10 @@ def _parse_auto_adjust_options(auto_adjust_raw_values):
         blur_threshold_pct=blur_threshold_pct,
         level_low_pct=level_low_pct,
         level_high_pct=level_high_pct,
+        enable_local_contrast=enable_local_contrast,
+        local_contrast_strength=local_contrast_strength,
+        clahe_clip_limit=clahe_clip_limit,
+        clahe_tile_grid_size=clahe_tile_grid_size,
         sigmoid_contrast=sigmoid_contrast,
         sigmoid_midpoint=sigmoid_midpoint,
         saturation_gamma=saturation_gamma,
@@ -2415,7 +2412,7 @@ def _parse_run_options(args):
     rejects unknown options and invalid arity.
     @param args {list[str]} Raw command argument vector.
     @return {tuple[Path, Path, float|None, bool, tuple[float, float], PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, bool, float, float]|None} Parsed `(input, output, ev, auto_ev, gamma, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, auto_zero_enabled, auto_zero_pct, auto_ev_pct)` tuple; `None` on parse failure.
-    @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111
+    @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135
     """
 
     positional = []
@@ -2547,14 +2544,6 @@ def _parse_run_options(args):
             continue
 
         if token.startswith("--ab-"):
-            if token == "--ab-enable-local-contrast":
-                if idx + 1 < len(args) and not args[idx + 1].startswith("--"):
-                    auto_brightness_raw_values[token] = args[idx + 1]
-                    idx += 2
-                    continue
-                auto_brightness_raw_values[token] = "true"
-                idx += 1
-                continue
             if token == "--ab-enable-luminance-preserving-desat":
                 if idx + 1 < len(args) and not args[idx + 1].startswith("--"):
                     auto_brightness_raw_values[token] = args[idx + 1]
@@ -2634,6 +2623,14 @@ def _parse_run_options(args):
             continue
 
         if token.startswith("--aa-"):
+            if token == "--aa-enable-local-contrast":
+                if idx + 1 < len(args) and not args[idx + 1].startswith("--"):
+                    auto_adjust_raw_values[token] = args[idx + 1]
+                    idx += 2
+                    continue
+                auto_adjust_raw_values[token] = "true"
+                idx += 1
+                continue
             option_name = token
             option_value = None
             consume_count = 1
@@ -5466,20 +5463,21 @@ def _luminance_preserving_desaturate_to_fit(np_module, rgb_linear, luminance, ep
 
 
 def _apply_mild_local_contrast_bgr_uint16(cv2_module, np_module, image_bgr_uint16, options):
-    """@brief Apply optional mild CLAHE micro-contrast on 16-bit Y channel.
+    """@brief Apply legacy uint16 CLAHE micro-contrast on 16-bit Y channel.
 
     @details Converts BGR16 to YCrCb, runs CLAHE on 16-bit Y with configured
     clip/tile controls, then blends original and CLAHE outputs using configured
-    local-contrast strength when local contrast is enabled.
+    local-contrast strength. Retained as quantized reference implementation for
+    float-domain CLAHE-luma equivalence verification.
     @param cv2_module {ModuleType} Imported cv2 module.
     @param np_module {ModuleType} Imported numpy module.
     @param image_bgr_uint16 {object} BGR uint16 image tensor.
-    @param options {AutoBrightnessOptions} Parsed auto-brightness options.
+    @param options {AutoAdjustOptions} Parsed OpenCV auto-adjust CLAHE options.
     @return {object} BGR uint16 image tensor after optional local contrast.
-    @satisfies REQ-050, REQ-123
+    @satisfies REQ-125, REQ-137
     """
 
-    if not options.enable_mild_local_contrast:
+    if not options.enable_local_contrast:
         return image_bgr_uint16
     strength = float(min(max(options.local_contrast_strength, 0.0), 1.0))
     if strength <= 0.0:
@@ -5501,6 +5499,55 @@ def _apply_mild_local_contrast_bgr_uint16(cv2_module, np_module, image_bgr_uint1
         0.0,
     )
     return np_module.clip(blended, 0, 65535).astype(np_module.uint16)
+
+
+def _apply_clahe_luma_rgb_float(cv2_module, np_module, image_rgb_float, auto_adjust_options):
+    """@brief Apply CLAHE-luma local contrast directly on RGB float buffers.
+
+    @details Converts normalized RGB float input to float YCrCb, quantizes only
+    the luminance plane for OpenCV CLAHE evaluation, reconstructs one RGB float
+    CLAHE candidate from preserved chroma plus mapped luminance, and blends that
+    candidate with the original float RGB image using configured strength.
+    @param cv2_module {ModuleType} Imported cv2 module.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_float {object} RGB float tensor in `[0,1]`.
+    @param auto_adjust_options {AutoAdjustOptions} Parsed OpenCV auto-adjust CLAHE controls.
+    @return {object} RGB float tensor after optional CLAHE-luma stage.
+    @satisfies REQ-123, REQ-125, REQ-136, REQ-137
+    """
+
+    rgb_float = _clamp01(
+        np_module,
+        np_module.asarray(image_rgb_float, dtype=np_module.float64),
+    )
+    if not auto_adjust_options.enable_local_contrast:
+        return rgb_float
+    strength = float(min(max(auto_adjust_options.local_contrast_strength, 0.0), 1.0))
+    if strength <= 0.0:
+        return rgb_float
+
+    ycrcb_float = cv2_module.cvtColor(
+        rgb_float.astype(np_module.float32),
+        cv2_module.COLOR_RGB2YCrCb,
+    ).astype(np_module.float64)
+    luminance_uint16 = np_module.clip(
+        np_module.rint(ycrcb_float[..., 0] * 65535.0),
+        0.0,
+        65535.0,
+    ).astype(np_module.uint16)
+    clahe = cv2_module.createCLAHE(
+        clipLimit=float(auto_adjust_options.clahe_clip_limit),
+        tileGridSize=tuple(auto_adjust_options.clahe_tile_grid_size),
+    )
+    ycrcb_clahe = ycrcb_float.copy()
+    ycrcb_clahe[..., 0] = clahe.apply(luminance_uint16).astype(np_module.float64) / 65535.0
+    rgb_clahe = cv2_module.cvtColor(
+        ycrcb_clahe.astype(np_module.float32),
+        cv2_module.COLOR_YCrCb2RGB,
+    ).astype(np_module.float64)
+    rgb_clahe = _clamp01(np_module, rgb_clahe)
+    blended = ((1.0 - strength) * rgb_float) + (strength * rgb_clahe)
+    return _clamp01(np_module, blended)
 
 
 def _rt_gamma2(np_module, values):
@@ -6344,7 +6391,6 @@ def _apply_auto_brightness_rgb_float(
     np_module,
     image_rgb_float,
     auto_brightness_options,
-    cv2_module=None,
 ):
     """@brief Apply original photographic auto-brightness flow on RGB float tensor.
 
@@ -6353,15 +6399,12 @@ def _apply_auto_brightness_rgb_float(
     normalized distribution thresholds, choose or override key value `a`,
     apply Reinhard global tonemap with robust percentile white-point, preserve
     chromaticity by luminance scaling, optionally desaturate only overflowing
-    linear RGB pixels, re-encode to sRGB, and optionally run the CLAHE local
-    contrast substep behind a step-local 16-bit boundary required by OpenCV.
+    linear RGB pixels, then re-encode to sRGB without any CLAHE substep.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} RGB float tensor.
     @param auto_brightness_options {AutoBrightnessOptions} Parsed auto-brightness parameters.
-    @param cv2_module {ModuleType|None} Optional imported cv2 module used only when local contrast is enabled.
     @return {object} RGB float tensor after BT.709 auto-brightness.
-    @exception RuntimeError Raised when local contrast is enabled and `cv2` dependency cannot be imported.
-    @satisfies REQ-050, REQ-103, REQ-104, REQ-105, REQ-121, REQ-122, REQ-123
+    @satisfies REQ-050, REQ-103, REQ-104, REQ-105, REQ-121, REQ-122
     """
 
     image_srgb = _normalize_float_rgb_image(
@@ -6400,30 +6443,7 @@ def _apply_auto_brightness_rgb_float(
             eps=auto_brightness_options.eps,
         )
     bright_srgb = _from_linear_srgb(np_module=np_module, image_linear=bright_linear)
-    if not auto_brightness_options.enable_mild_local_contrast:
-        return np_module.clip(bright_srgb, 0.0, 1.0).astype(np_module.float32)
-    if auto_brightness_options.local_contrast_strength <= 0.0:
-        return np_module.clip(bright_srgb, 0.0, 1.0).astype(np_module.float32)
-    if cv2_module is None:
-        try:
-            import cv2 as cv2_module  # type: ignore
-        except ModuleNotFoundError as exc:
-            raise RuntimeError("Missing required dependency: opencv-python") from exc
-    bright_rgb_uint16 = _to_uint16_image_array(
-        np_module=np_module,
-        image_data=bright_srgb,
-    )
-    bright_bgr_uint16 = cv2_module.cvtColor(bright_rgb_uint16, cv2_module.COLOR_RGB2BGR)
-    bright_bgr_uint16 = _apply_mild_local_contrast_bgr_uint16(
-        cv2_module=cv2_module,
-        np_module=np_module,
-        image_bgr_uint16=bright_bgr_uint16,
-        options=auto_brightness_options,
-    )
-    return _normalize_float_rgb_image(
-        np_module=np_module,
-        image_data=cv2_module.cvtColor(bright_bgr_uint16, cv2_module.COLOR_BGR2RGB),
-    )
+    return np_module.clip(bright_srgb, 0.0, 1.0).astype(np_module.float32)
 
 
 
@@ -6854,15 +6874,15 @@ def _apply_validated_auto_adjust_pipeline_opencv(
     """@brief Execute validated auto-adjust pipeline using OpenCV and numpy.
 
     @details Accepts one normalized RGB float image, executes selective blur,
-    adaptive levels, sigmoidal contrast, HSL saturation gamma, and
-    high-pass/overlay stages entirely in float domain, and returns normalized
-    RGB float output without any file round-trip.
+    adaptive levels, float-domain CLAHE-luma, sigmoidal contrast, HSL
+    saturation gamma, and high-pass/overlay stages entirely in float domain,
+    and returns normalized RGB float output without any file round-trip.
     @param image_rgb_float {object} RGB float tensor.
     @param cv2_module {ModuleType} Imported cv2 module.
     @param np_module {ModuleType} Imported numpy module.
     @param auto_adjust_options {AutoAdjustOptions} Shared auto-adjust knob values.
     @return {object} RGB float tensor after OpenCV auto-adjust.
-    @satisfies REQ-051, REQ-075, REQ-106
+    @satisfies REQ-051, REQ-075, REQ-106, REQ-123, REQ-136, REQ-137
     """
 
     rgb_float = _normalize_float_rgb_image(
@@ -6880,6 +6900,12 @@ def _apply_validated_auto_adjust_pipeline_opencv(
         rgb_float,
         low_pct=auto_adjust_options.level_low_pct,
         high_pct=auto_adjust_options.level_high_pct,
+    )
+    rgb_float = _apply_clahe_luma_rgb_float(
+        cv2_module=cv2_module,
+        np_module=np_module,
+        image_rgb_float=rgb_float,
+        auto_adjust_options=auto_adjust_options,
     )
     rgb_float = _sigmoidal_contrast(
         np_module,
@@ -6970,21 +6996,10 @@ def _encode_jpg(
         image_data=merged_image_float,
     )
     if postprocess_options.auto_brightness_enabled:
-        cv2_module = None
-        if postprocess_options.auto_brightness_options.enable_mild_local_contrast:
-            if auto_adjust_opencv_dependencies is not None:
-                cv2_module, _opencv_np_module = auto_adjust_opencv_dependencies
-                del _opencv_np_module
-            else:
-                try:
-                    import cv2 as cv2_module  # type: ignore
-                except ModuleNotFoundError as exc:
-                    raise RuntimeError("Missing required dependency: opencv-python") from exc
         image_rgb_float = _apply_auto_brightness_rgb_float(
             np_module=np_module,
             image_rgb_float=image_rgb_float,
             auto_brightness_options=postprocess_options.auto_brightness_options,
-            cv2_module=cv2_module,
         )
     if postprocess_options.auto_levels_enabled:
         image_rgb_float = _apply_auto_levels_float(
@@ -7231,16 +7246,28 @@ def run(args):
             f"key-min={postprocess_options.auto_brightness_options.a_min:g}, "
             f"key-max={postprocess_options.auto_brightness_options.a_max:g}, "
             f"max-auto-boost={postprocess_options.auto_brightness_options.max_auto_boost_factor:g}, "
-            "local-contrast="
-            f"{'enabled' if postprocess_options.auto_brightness_options.enable_mild_local_contrast else 'disabled'}, "
-            f"local-contrast-strength={postprocess_options.auto_brightness_options.local_contrast_strength:g}, "
-            f"clahe-clip-limit={postprocess_options.auto_brightness_options.clahe_clip_limit:g}, "
-            "clahe-tile-grid-size="
-            f"{postprocess_options.auto_brightness_options.clahe_tile_grid_size[0]}x"
-            f"{postprocess_options.auto_brightness_options.clahe_tile_grid_size[1]}, "
             "luminance-preserving-desat="
             f"{'enabled' if postprocess_options.auto_brightness_options.enable_luminance_preserving_desat else 'disabled'}, "
             f"eps={postprocess_options.auto_brightness_options.eps:g}"
+        )
+    if postprocess_options.auto_adjust_mode is not None:
+        print_info(
+            "Auto-adjust knobs: "
+            f"blur-sigma={postprocess_options.auto_adjust_options.blur_sigma:g}, "
+            f"blur-threshold-pct={postprocess_options.auto_adjust_options.blur_threshold_pct:g}, "
+            f"level-low-pct={postprocess_options.auto_adjust_options.level_low_pct:g}, "
+            f"level-high-pct={postprocess_options.auto_adjust_options.level_high_pct:g}, "
+            "local-contrast="
+            f"{'enabled' if postprocess_options.auto_adjust_options.enable_local_contrast else 'disabled'}, "
+            f"local-contrast-strength={postprocess_options.auto_adjust_options.local_contrast_strength:g}, "
+            f"clahe-clip-limit={postprocess_options.auto_adjust_options.clahe_clip_limit:g}, "
+            "clahe-tile-grid-size="
+            f"{postprocess_options.auto_adjust_options.clahe_tile_grid_size[0]}x"
+            f"{postprocess_options.auto_adjust_options.clahe_tile_grid_size[1]}, "
+            f"sigmoid-contrast={postprocess_options.auto_adjust_options.sigmoid_contrast:g}, "
+            f"sigmoid-midpoint={postprocess_options.auto_adjust_options.sigmoid_midpoint:g}, "
+            f"saturation-gamma={postprocess_options.auto_adjust_options.saturation_gamma:g}, "
+            f"highpass-blur-sigma={postprocess_options.auto_adjust_options.highpass_blur_sigma:g}"
         )
     if postprocess_options.auto_levels_enabled:
         print_info(

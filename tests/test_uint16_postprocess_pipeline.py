@@ -466,8 +466,8 @@ def test_encode_jpg_imagemagick_auto_adjust_runs_in_temp_workspace(
     assert not (tmp_path / "output.jpg.pp3").exists()
 
 
-def test_parse_run_options_accepts_all_original_auto_brightness_controls() -> None:
-    """Parser must expose every control carried by the original TonemapParams."""
+def test_parse_run_options_accepts_remaining_auto_brightness_controls() -> None:
+    """Parser must expose the surviving float-domain auto-brightness controls."""
 
     parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         [
@@ -480,10 +480,6 @@ def test_parse_run_options_accepts_all_original_auto_brightness_controls() -> No
             "--ab-key-min=0.05",
             "--ab-key-max=0.7",
             "--ab-max-auto-boost=1.1",
-            "--ab-enable-local-contrast=false",
-            "--ab-local-contrast-strength=0.3",
-            "--ab-clahe-clip-limit=1.7",
-            "--ab-clahe-tile-grid-size=6x10",
             "--ab-enable-luminance-preserving-desat=false",
             "--ab-eps=1e-5",
             "--hdr-merge=OpenCV",
@@ -499,12 +495,36 @@ def test_parse_run_options_accepts_all_original_auto_brightness_controls() -> No
         a_min=0.05,
         a_max=0.7,
         max_auto_boost_factor=1.1,
-        enable_mild_local_contrast=False,
-        local_contrast_strength=0.3,
-        clahe_clip_limit=1.7,
-        clahe_tile_grid_size=(6, 10),
         enable_luminance_preserving_desat=False,
         eps=1e-5,
+    )
+
+
+def test_parse_run_options_accepts_auto_adjust_clahe_controls() -> None:
+    """Parser must expose OpenCV auto-adjust CLAHE-luma controls."""
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        [
+            "input.dng",
+            "output.jpg",
+            "--ev=1",
+            "--auto-adjust=OpenCV",
+            "--aa-enable-local-contrast=false",
+            "--aa-local-contrast-strength=0.35",
+            "--aa-clahe-clip-limit=1.7",
+            "--aa-clahe-tile-grid-size=6x10",
+            "--hdr-merge=OpenCV",
+        ]
+    )
+
+    assert parsed is not None
+    postprocess = parsed[5]
+    assert postprocess.auto_adjust_mode == "OpenCV"
+    assert postprocess.auto_adjust_options == dng2jpg_module.AutoAdjustOptions(
+        enable_local_contrast=False,
+        local_contrast_strength=0.35,
+        clahe_clip_limit=1.7,
+        clahe_tile_grid_size=(6, 10),
     )
 
 
@@ -562,7 +582,6 @@ def test_apply_auto_brightness_rgb_float_executes_original_stage_order(
 
     call_trace: list[str] = []
     image_rgb_float = np.array([[[1024, 2048, 4096]]], dtype=np.float32) / 65535.0
-    fake_cv2 = _FakeOpenCvModule()
 
     def _fake_to_linear(*, np_module, image_srgb):
         del np_module, image_srgb  # Unused by fake stage.
@@ -599,11 +618,6 @@ def test_apply_auto_brightness_rgb_float_executes_original_stage_order(
         call_trace.append("from_linear")
         return np.full((1, 1, 3), 0.5, dtype=np.float64)
 
-    def _fake_local_contrast(*, cv2_module, np_module, image_bgr_uint16, options):
-        del cv2_module, np_module, options  # Unused by fake stage.
-        call_trace.append("local_contrast")
-        return image_bgr_uint16
-
     monkeypatch.setattr(dng2jpg_module, "_to_linear_srgb", _fake_to_linear)
     monkeypatch.setattr(
         dng2jpg_module,
@@ -623,21 +637,13 @@ def test_apply_auto_brightness_rgb_float_executes_original_stage_order(
         _fake_desaturate,
     )
     monkeypatch.setattr(dng2jpg_module, "_from_linear_srgb", _fake_from_linear)
-    monkeypatch.setattr(
-        dng2jpg_module,
-        "_apply_mild_local_contrast_bgr_uint16",
-        _fake_local_contrast,
-    )
 
     output = dng2jpg_module._apply_auto_brightness_rgb_float(  # pylint: disable=protected-access
         np_module=np,
         image_rgb_float=image_rgb_float,
         auto_brightness_options=dng2jpg_module.AutoBrightnessOptions(
-            enable_mild_local_contrast=True,
-            local_contrast_strength=0.2,
             enable_luminance_preserving_desat=True,
         ),
-        cv2_module=fake_cv2,
     )
 
     assert output.dtype == np.float32
@@ -649,8 +655,136 @@ def test_apply_auto_brightness_rgb_float_executes_original_stage_order(
         "reinhard",
         "desaturate",
         "from_linear",
-        "local_contrast",
     ]
+
+
+def test_apply_validated_auto_adjust_pipeline_opencv_executes_clahe_stage_order(
+    monkeypatch,
+) -> None:
+    """OpenCV auto-adjust must insert float-domain CLAHE-luma after level."""
+
+    call_trace: list[str] = []
+    image_rgb_float = np.array([[[0.25, 0.5, 0.75]]], dtype=np.float32)
+
+    def _fake_blur(np_module, rgb, sigma, threshold_percent):
+        del np_module, rgb, sigma, threshold_percent  # Unused by fake stage.
+        call_trace.append("blur")
+        return np.full((1, 1, 3), 0.2, dtype=np.float64)
+
+    def _fake_level(np_module, rgb, low_pct, high_pct):
+        del np_module, rgb, low_pct, high_pct  # Unused by fake stage.
+        call_trace.append("level")
+        return np.full((1, 1, 3), 0.3, dtype=np.float64)
+
+    def _fake_clahe(cv2_module, np_module, image_rgb_float, auto_adjust_options):
+        del cv2_module, np_module, image_rgb_float, auto_adjust_options  # Unused by fake stage.
+        call_trace.append("clahe")
+        return np.full((1, 1, 3), 0.4, dtype=np.float64)
+
+    def _fake_sigmoid(np_module, rgb, contrast, midpoint):
+        del np_module, rgb, contrast, midpoint  # Unused by fake stage.
+        call_trace.append("sigmoid")
+        return np.full((1, 1, 3), 0.5, dtype=np.float64)
+
+    def _fake_vibrance(np_module, rgb, saturation_gamma):
+        del np_module, rgb, saturation_gamma  # Unused by fake stage.
+        call_trace.append("vibrance")
+        return np.full((1, 1, 3), 0.6, dtype=np.float64)
+
+    def _fake_high_pass(cv2_module, np_module, rgb, blur_sigma):
+        del cv2_module, np_module, rgb, blur_sigma  # Unused by fake stage.
+        call_trace.append("highpass")
+        return np.full((1, 1), 0.7, dtype=np.float64)
+
+    def _fake_overlay(np_module, base_rgb, overlay_gray):
+        del np_module, base_rgb, overlay_gray  # Unused by fake stage.
+        call_trace.append("overlay")
+        return np.full((1, 1, 3), 0.8, dtype=np.float64)
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_selective_blur_contrast_gated_vectorized",
+        _fake_blur,
+    )
+    monkeypatch.setattr(dng2jpg_module, "_level_per_channel_adaptive", _fake_level)
+    monkeypatch.setattr(dng2jpg_module, "_apply_clahe_luma_rgb_float", _fake_clahe)
+    monkeypatch.setattr(dng2jpg_module, "_sigmoidal_contrast", _fake_sigmoid)
+    monkeypatch.setattr(dng2jpg_module, "_vibrance_hsl_gamma", _fake_vibrance)
+    monkeypatch.setattr(dng2jpg_module, "_high_pass_math_gray", _fake_high_pass)
+    monkeypatch.setattr(dng2jpg_module, "_overlay_composite", _fake_overlay)
+
+    output = dng2jpg_module._apply_validated_auto_adjust_pipeline_opencv(  # pylint: disable=protected-access
+        image_rgb_float=image_rgb_float,
+        cv2_module=object(),
+        np_module=np,
+        auto_adjust_options=dng2jpg_module.AutoAdjustOptions(),
+    )
+
+    assert output.dtype == np.float32
+    assert call_trace == [
+        "blur",
+        "level",
+        "clahe",
+        "sigmoid",
+        "vibrance",
+        "highpass",
+        "overlay",
+    ]
+
+
+def test_apply_clahe_luma_rgb_float_matches_uint16_reference_within_quantization_tolerance() -> None:
+    """Float-domain CLAHE-luma must stay within quantization-only deviation."""
+
+    import cv2  # pylint: disable=import-outside-toplevel
+
+    ramp = np.linspace(0.0, 1.0, 16, dtype=np.float32)
+    grid_x, grid_y = np.meshgrid(ramp, ramp)
+    image_rgb_float = np.stack(
+        [
+            grid_x,
+            (0.65 * grid_y) + (0.35 * grid_x),
+            np.clip(1.0 - (0.55 * grid_x) - (0.25 * grid_y), 0.0, 1.0),
+        ],
+        axis=-1,
+    ).astype(np.float32)
+    options = dng2jpg_module.AutoAdjustOptions(
+        enable_local_contrast=True,
+        local_contrast_strength=0.35,
+        clahe_clip_limit=1.7,
+        clahe_tile_grid_size=(4, 4),
+    )
+
+    float_output = dng2jpg_module._apply_clahe_luma_rgb_float(  # pylint: disable=protected-access
+        cv2_module=cv2,
+        np_module=np,
+        image_rgb_float=image_rgb_float,
+        auto_adjust_options=options,
+    )
+
+    reference_rgb_uint16 = dng2jpg_module._to_uint16_image_array(  # pylint: disable=protected-access
+        np_module=np,
+        image_data=image_rgb_float,
+    )
+    reference_bgr_uint16 = cv2.cvtColor(reference_rgb_uint16, cv2.COLOR_RGB2BGR)
+    reference_bgr_uint16 = dng2jpg_module._apply_mild_local_contrast_bgr_uint16(  # pylint: disable=protected-access
+        cv2_module=cv2,
+        np_module=np,
+        image_bgr_uint16=reference_bgr_uint16,
+        options=options,
+    )
+    reference_rgb_float = dng2jpg_module._normalize_float_rgb_image(  # pylint: disable=protected-access
+        np_module=np,
+        image_data=cv2.cvtColor(reference_bgr_uint16, cv2.COLOR_BGR2RGB),
+    )
+
+    assert float_output.dtype == np.float64
+    assert reference_rgb_float.dtype == np.float32
+    np.testing.assert_allclose(
+        float_output.astype(np.float32),
+        reference_rgb_float,
+        rtol=0.0,
+        atol=3.0 / 65535.0,
+    )
 
 
 def test_parse_run_options_accepts_hdr_merge_opencv_backend() -> None:
