@@ -59,11 +59,15 @@ DEFAULT_AB_LOW_KEY_VALUE = 0.09
 DEFAULT_AB_NORMAL_KEY_VALUE = 0.18
 DEFAULT_AB_HIGH_KEY_VALUE = 0.36
 DEFAULT_AL_CLIP_PERCENT = 0.02
+DEFAULT_AL_CLIP_OUT_OF_GAMUT = True
+DEFAULT_AL_GAIN_THRESHOLD = 1.0
 DEFAULT_AL_HISTCOMPR = 3
 _AUTO_LEVELS_HIGHLIGHT_METHODS = (
-    "Luminance",
-    "CIELab blending",
+    "Luminance Recovery",
+    "CIELab Blending",
     "Blend",
+    "Color Propagation",
+    "Inpaint Opposed",
 )
 DEFAULT_LUMINANCE_HDR_MODEL = "debevec"
 DEFAULT_LUMINANCE_HDR_WEIGHT = "flat"
@@ -130,7 +134,9 @@ _AUTO_BRIGHTNESS_KNOB_OPTIONS = (
 )
 _AUTO_LEVELS_KNOB_OPTIONS = (
     "--al-clip-pct",
+    "--al-clip-out-of-gamut",
     "--al-highlight-reconstruction-method",
+    "--al-gain-threshold",
 )
 _LUMINANCE_OPERATOR_TABLE_HEADERS = (
     "Operator",
@@ -350,17 +356,21 @@ class AutoLevelsOptions:
     from the attached RawTherapee-oriented source and adapted for RGB uint16
     stage execution in the current post-merge pipeline.
     @param clip_percent {float} Histogram clipping percentage in `[0, +inf)`.
+    @param clip_out_of_gamut {bool} `True` to normalize overflowing RGB triplets back into uint16 gamut after gain/reconstruction.
     @param histcompr {int} Histogram compression shift in `[0, 15]`.
     @param highlight_reconstruction_enabled {bool} `True` when highlight reconstruction is enabled.
-    @param highlight_reconstruction_method {str|None} Highlight reconstruction method (`Luminance`, `CIELab blending`, `Blend`) when enabled.
+    @param highlight_reconstruction_method {str} Highlight reconstruction method selector.
+    @param gain_threshold {float} Inpaint Opposed gain threshold in `(0, +inf)`.
     @return {None} Immutable dataclass container.
-    @satisfies REQ-100, REQ-101, REQ-102
+    @satisfies REQ-100, REQ-101, REQ-102, REQ-116
     """
 
     clip_percent: float = DEFAULT_AL_CLIP_PERCENT
+    clip_out_of_gamut: bool = DEFAULT_AL_CLIP_OUT_OF_GAMUT
     histcompr: int = DEFAULT_AL_HISTCOMPR
     highlight_reconstruction_enabled: bool = False
-    highlight_reconstruction_method: str | None = None
+    highlight_reconstruction_method: str = "Inpaint Opposed"
+    gain_threshold: float = DEFAULT_AL_GAIN_THRESHOLD
 
 
 @dataclass(frozen=True)
@@ -546,7 +556,9 @@ def print_help(version):
         "[--ab-clahe-clip-limit=<value>] "
         "[--auto-levels[=<1|true|yes|on>]] "
         "[--al-clip-pct=<value>] "
-        "[--al-highlight-reconstruction-method <Luminance|CIELab blending|Blend>] "
+        "[--al-clip-out-of-gamut[=<0|1|false|true|no|yes|off|on>]] "
+        "[--al-highlight-reconstruction-method <Luminance Recovery|CIELab Blending|Blend|Color Propagation|Inpaint Opposed>] "
+        "[--al-gain-threshold=<value>] "
         f"[--jpg-compression=<0..100>] [--auto-adjust <ImageMagick|OpenCV>] "
         "[--aa-blur-sigma=<value>] [--aa-blur-threshold-pct=<0..100>] "
         "[--aa-level-low-pct=<0..100>] [--aa-level-high-pct=<0..100>] "
@@ -645,12 +657,21 @@ def print_help(version):
         f"  --al-clip-pct=<value> - Histogram clipping percentage >= 0 (default: {DEFAULT_AL_CLIP_PERCENT:g})."
     )
     print(
-        "  --al-highlight-reconstruction-method <name> - Enable highlight reconstruction and require one method."
+        "  --al-clip-out-of-gamut - Normalize overflowing RGB triplets after auto-levels gain/reconstruction."
+    )
+    print(
+        "                     Optional value forms: --al-clip-out-of-gamut=0, --al-clip-out-of-gamut=false, --al-clip-out-of-gamut=yes."
+    )
+    print(
+        "  --al-highlight-reconstruction-method <name> - Enable highlight reconstruction and select one RawTherapee-aligned method."
     )
     print(
         "                     Allowed values: "
         + ", ".join(_AUTO_LEVELS_HIGHLIGHT_METHODS)
         + "."
+    )
+    print(
+        f"  --al-gain-threshold=<value> - Inpaint Opposed gain threshold (>0, default: {DEFAULT_AL_GAIN_THRESHOLD:g})."
     )
     print(
         f"  --jpg-compression=<0..100> - JPEG compression level (default: {DEFAULT_JPG_COMPRESSION})."
@@ -1060,6 +1081,27 @@ def _parse_auto_levels_option(auto_levels_raw):
         return True
     print_error(f"Invalid --auto-levels value: {auto_levels_raw}")
     print_error("Allowed values: 1, true, yes, on")
+    return None
+
+
+def _parse_explicit_boolean_option(option_name, option_raw):
+    """@brief Parse one explicit boolean option value.
+
+    @details Accepts canonical true/false token families to keep deterministic
+    toggle parsing for CLI knobs that support both enabling and disabling.
+    @param option_name {str} Long-option identifier used in error messages.
+    @param option_raw {str} Raw option token value from CLI args.
+    @return {bool|None} Parsed boolean value; `None` on parse failure.
+    @satisfies REQ-101
+    """
+
+    option_text = option_raw.strip().lower()
+    if option_text in ("1", "true", "yes", "on"):
+        return True
+    if option_text in ("0", "false", "no", "off"):
+        return False
+    print_error(f"Invalid {option_name} value: {option_raw}")
+    print_error("Allowed values: 0, 1, false, true, no, yes, off, on")
     return None
 
 
@@ -1773,7 +1815,7 @@ def _parse_auto_levels_hr_method_option(auto_levels_method_raw):
     values to canonical tokens used by runtime dispatch.
     @param auto_levels_method_raw {str} Raw `--al-highlight-reconstruction-method` option token.
     @return {str|None} Canonical method token or `None` on parse failure.
-    @satisfies REQ-101, REQ-102
+    @satisfies REQ-101, REQ-102, REQ-119
     """
 
     method_text = auto_levels_method_raw.strip()
@@ -1801,18 +1843,21 @@ def _parse_auto_levels_hr_method_option(auto_levels_method_raw):
 def _parse_auto_levels_options(auto_levels_raw_values):
     """@brief Parse and validate auto-levels parameters.
 
-    @details Parses optional histogram clip percentage and optional mandatory
-    highlight reconstruction method when reconstruction is enabled.
+    @details Parses histogram clip percentage, explicit gamut clipping toggle,
+    optional highlight reconstruction method, and Inpaint Opposed gain
+    threshold using RawTherapee-aligned defaults.
     @param auto_levels_raw_values {dict[str, str]} Raw `--al-*` option values keyed by long option name.
     @return {AutoLevelsOptions|None} Parsed auto-levels options or `None` on validation error.
-    @satisfies REQ-100, REQ-101, REQ-102
+    @satisfies REQ-100, REQ-101, REQ-102, REQ-116
     """
 
     options = AutoLevelsOptions()
     clip_percent = options.clip_percent
+    clip_out_of_gamut = options.clip_out_of_gamut
     histcompr = options.histcompr
     highlight_reconstruction_enabled = options.highlight_reconstruction_enabled
     highlight_reconstruction_method = options.highlight_reconstruction_method
+    gain_threshold = options.gain_threshold
 
     if "--al-clip-pct" in auto_levels_raw_values:
         parsed = _parse_non_negative_float_option(
@@ -1821,6 +1866,16 @@ def _parse_auto_levels_options(auto_levels_raw_values):
         if parsed is None:
             return None
         clip_percent = parsed
+
+    if "--al-clip-out-of-gamut" in auto_levels_raw_values:
+        parsed = _parse_explicit_boolean_option(
+            "--al-clip-out-of-gamut",
+            auto_levels_raw_values["--al-clip-out-of-gamut"],
+        )
+        if parsed is None:
+            return None
+        clip_out_of_gamut = parsed
+
     if "--al-highlight-reconstruction-method" in auto_levels_raw_values:
         parsed = _parse_auto_levels_hr_method_option(
             auto_levels_raw_values["--al-highlight-reconstruction-method"]
@@ -1830,11 +1885,22 @@ def _parse_auto_levels_options(auto_levels_raw_values):
         highlight_reconstruction_enabled = True
         highlight_reconstruction_method = parsed
 
+    if "--al-gain-threshold" in auto_levels_raw_values:
+        parsed = _parse_positive_float_option(
+            "--al-gain-threshold",
+            auto_levels_raw_values["--al-gain-threshold"],
+        )
+        if parsed is None:
+            return None
+        gain_threshold = parsed
+
     return AutoLevelsOptions(
         clip_percent=clip_percent,
+        clip_out_of_gamut=clip_out_of_gamut,
         histcompr=histcompr,
         highlight_reconstruction_enabled=highlight_reconstruction_enabled,
         highlight_reconstruction_method=highlight_reconstruction_method,
+        gain_threshold=gain_threshold,
     )
 
 
@@ -2190,6 +2256,14 @@ def _parse_run_options(args):
             continue
 
         if token.startswith("--al-"):
+            if token == "--al-clip-out-of-gamut":
+                if idx + 1 < len(args) and not args[idx + 1].startswith("--"):
+                    auto_levels_raw_values[token] = args[idx + 1]
+                    idx += 2
+                    continue
+                auto_levels_raw_values[token] = "true"
+                idx += 1
+                continue
             option_name = token
             option_value = None
             consume_count = 1
@@ -4536,42 +4610,44 @@ def _rt_igamma2(np_module, values):
 def _build_autoexp_histogram_rgb_uint16(np_module, image_rgb_uint16, histcompr):
     """@brief Build RGB auto-levels histogram from uint16 image tensor.
 
-    @details Ports histogram accumulation logic from attached auto-levels source:
-    per-channel histogram with `hist_size = 65536 >> histcompr`, channel sum
-    accumulation, and deterministic index clipping.
+    @details Builds one RawTherapee-compatible luminance histogram from the
+    post-merge RGB tensor using BT.709 luminance, compressed bins
+    (`hist_size = 65536 >> histcompr`), and deterministic index clipping.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_uint16 {object} RGB uint16 image tensor.
     @param histcompr {int} Histogram compression shift in `[0, 15]`.
     @return {object} Histogram tensor.
-    @satisfies REQ-100
+    @satisfies REQ-100, REQ-117
     """
 
     hist_size = 65536 >> histcompr
-    histogram = np_module.zeros(hist_size, dtype=np_module.uint64)
     scale = 1.0 / float(1 << histcompr)
-    for channel_index in range(3):
-        channel = image_rgb_uint16[..., channel_index].astype(np_module.float64)
-        histogram_index = np_module.clip(
-            (channel * scale).astype(np_module.int64), 0, hist_size - 1
-        )
-        histogram += np_module.bincount(
-            histogram_index.ravel(), minlength=hist_size
-        ).astype(np_module.uint64)
-    return histogram
+    luminance = (
+        0.2126729 * image_rgb_uint16[..., 0].astype(np_module.float64)
+        + 0.7151521 * image_rgb_uint16[..., 1].astype(np_module.float64)
+        + 0.0721750 * image_rgb_uint16[..., 2].astype(np_module.float64)
+    )
+    histogram_index = np_module.clip(
+        (luminance * scale).astype(np_module.int64), 0, hist_size - 1
+    )
+    return np_module.bincount(
+        histogram_index.ravel(), minlength=hist_size
+    ).astype(np_module.uint64)
 
 
 def _compute_auto_levels_from_histogram(np_module, histogram, histcompr, clip_percent):
     """@brief Compute auto-levels gain metrics from histogram.
 
     @details Ports `get_autoexp_from_histogram` from attached source as-is in
-    numeric behavior for RGB uint16 histogram: octile spread, white/black clip,
-    exposure compensation, brightness/contrast, and highlight compression metrics.
+    numeric behavior for one luminance histogram: octile spread, white/black
+    clip, exposure compensation, brightness/contrast, and highlight compression
+    metrics.
     @param np_module {ModuleType} Imported numpy module.
     @param histogram {object} Flattened histogram tensor.
     @param histcompr {int} Histogram compression shift.
     @param clip_percent {float} Clip percentage.
     @return {dict[str, int|float]} Auto-levels metrics dictionary.
-    @satisfies REQ-100
+    @satisfies REQ-100, REQ-117, REQ-118
     """
 
     rt_maxval = 65535.0
@@ -4817,14 +4893,15 @@ def _apply_auto_levels_uint16(np_module, image_rgb_uint16, auto_levels_options):
     """@brief Apply auto-levels stage on RGB uint16 tensor.
 
     @details Executes auto-levels histogram analysis ported from attached source,
-    applies gain derived from exposure compensation, and conditionally runs
-    mandatory-method highlight reconstruction when enabled.
+    applies gain derived from exposure compensation, conditionally runs
+    highlight reconstruction, and optionally normalizes overflowing RGB triplets
+    back into uint16 gamut.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_uint16 {object} RGB uint16 image tensor.
     @param auto_levels_options {AutoLevelsOptions} Parsed auto-levels options.
     @return {object} RGB uint16 tensor after auto-levels stage.
     @exception ValueError Raised when input tensor is not uint16 RGB.
-    @satisfies REQ-100, REQ-101, REQ-102
+    @satisfies REQ-100, REQ-101, REQ-102, REQ-119, REQ-120
     """
 
     if str(getattr(image_rgb_uint16, "dtype", "")) != "uint16":
@@ -4846,17 +4923,13 @@ def _apply_auto_levels_uint16(np_module, image_rgb_uint16, auto_levels_options):
     image_float = image_rgb_uint16.astype(np_module.float64) * gain
     if auto_levels_options.highlight_reconstruction_enabled:
         method = auto_levels_options.highlight_reconstruction_method
-        if method is None:
-            raise ValueError(
-                "Highlight reconstruction method is required when reconstruction is enabled"
-            )
-        if method == "Luminance":
+        if method == "Luminance Recovery":
             image_float = _hlrecovery_luminance_uint16(
                 np_module=np_module,
                 image_rgb=image_float,
                 maxval=65535.0,
             )
-        elif method == "CIELab blending":
+        elif method == "CIELab Blending":
             image_float = _hlrecovery_cielab_uint16(
                 np_module=np_module,
                 image_rgb=image_float,
@@ -4870,11 +4943,49 @@ def _apply_auto_levels_uint16(np_module, image_rgb_uint16, auto_levels_options):
                 hlmax=channel_max,
                 maxval=65535.0,
             )
+        elif method == "Color Propagation":
+            image_float = _hlrecovery_color_propagation_uint16(
+                np_module=np_module,
+                image_rgb=image_float,
+                maxval=65535.0,
+            )
+        elif method == "Inpaint Opposed":
+            image_float = _hlrecovery_inpaint_opposed_uint16(
+                np_module=np_module,
+                image_rgb=image_float,
+                gain_threshold=auto_levels_options.gain_threshold,
+                maxval=65535.0,
+            )
         else:
             raise ValueError(f"Unsupported highlight reconstruction method: {method}")
+    if auto_levels_options.clip_out_of_gamut:
+        image_float = _clip_auto_levels_out_of_gamut_uint16(
+            np_module=np_module,
+            image_rgb=image_float,
+            maxval=65535.0,
+        )
     return np_module.clip(np_module.round(image_float), 0.0, 65535.0).astype(
         np_module.uint16
     )
+
+
+def _clip_auto_levels_out_of_gamut_uint16(np_module, image_rgb, maxval=65535.0):
+    """@brief Normalize overflowing RGB triplets back into uint16 gamut.
+
+    @details Computes per-pixel maximum channel value, derives one scale factor
+    for overflowing pixels, and preserves RGB ratios while bounding the triplet
+    to `maxval`.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb {object} RGB float tensor on uint16 scale.
+    @param maxval {float} Maximum allowed channel value.
+    @return {object} RGB float tensor with no channel above `maxval`.
+    @satisfies REQ-120
+    """
+
+    rgb = np_module.asarray(image_rgb, dtype=np_module.float64)
+    channel_max = np_module.max(rgb, axis=-1, keepdims=True)
+    scale = np_module.where(channel_max > maxval, maxval / channel_max, 1.0)
+    return rgb * scale
 
 
 def _hlrecovery_luminance_uint16(np_module, image_rgb, maxval=65535.0):
@@ -5107,6 +5218,152 @@ def _hlrecovery_blend_uint16(np_module, image_rgb, hlmax, maxval=65535.0):
     output[..., 0] = np_module.where(desat_mask, rec_red, output[..., 0])
     output[..., 1] = np_module.where(desat_mask, rec_green, output[..., 1])
     output[..., 2] = np_module.where(desat_mask, rec_blue, output[..., 2])
+    return output
+
+
+def _dilate_mask_uint16(np_module, mask):
+    """@brief Expand one boolean mask by one Chebyshev pixel.
+
+    @details Pads the mask by one pixel and OR-combines the `3x3` neighborhood
+    so later highlight-reconstruction stages can estimate one border region
+    around clipped pixels without external dependencies.
+    @param np_module {ModuleType} Imported numpy module.
+    @param mask {object} Boolean tensor with shape `H,W`.
+    @return {object} Boolean tensor with the same shape as `mask`.
+    @satisfies REQ-119
+    """
+
+    padded = np_module.pad(mask.astype(bool), 1, mode="constant", constant_values=False)
+    dilated = np_module.zeros(mask.shape, dtype=bool)
+    for row_offset in range(3):
+        for col_offset in range(3):
+            dilated |= padded[
+                row_offset : row_offset + mask.shape[0],
+                col_offset : col_offset + mask.shape[1],
+            ]
+    return dilated
+
+
+def _box_mean_3x3_uint16(np_module, image_2d):
+    """@brief Compute one deterministic `3x3` box mean over a 2D float tensor.
+
+    @details Uses edge padding and exact neighborhood averaging to approximate
+    RawTherapee local neighborhood probes needed by RGB-space color-propagation
+    and inpaint-opposed highlight reconstruction.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_2d {object} Float tensor with shape `H,W`.
+    @return {object} Float tensor with shape `H,W`.
+    @satisfies REQ-119
+    """
+
+    source = np_module.asarray(image_2d, dtype=np_module.float64)
+    padded = np_module.pad(source, 1, mode="edge")
+    window_sum = np_module.zeros(source.shape, dtype=np_module.float64)
+    for row_offset in range(3):
+        for col_offset in range(3):
+            window_sum += padded[
+                row_offset : row_offset + source.shape[0],
+                col_offset : col_offset + source.shape[1],
+            ]
+    return window_sum / 9.0
+
+
+def _hlrecovery_color_propagation_uint16(np_module, image_rgb, maxval=65535.0):
+    """@brief Apply Color Propagation highlight reconstruction on RGB tensor.
+
+    @details Approximates RawTherapee `Color` recovery in post-merge RGB space:
+    detect clipped channel regions, estimate one local opposite-channel
+    reference from `3x3` means, derive one border chrominance offset, and fill
+    clipped samples deterministically.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb {object} RGB float tensor on uint16 scale.
+    @param maxval {float} Maximum channel value.
+    @return {object} Highlight-reconstructed RGB float tensor.
+    @satisfies REQ-102, REQ-119
+    """
+
+    rgb = np_module.asarray(image_rgb, dtype=np_module.float64)
+    output = rgb.copy()
+    clip_level = 0.95 * maxval
+    dark_floor = 0.25 * clip_level
+    for channel_index in range(3):
+        channel = output[..., channel_index]
+        channel_mask = channel >= clip_level
+        if not np_module.any(channel_mask):
+            continue
+        other_indices = [index for index in range(3) if index != channel_index]
+        reference = 0.5 * (
+            _box_mean_3x3_uint16(np_module, output[..., other_indices[0]])
+            + _box_mean_3x3_uint16(np_module, output[..., other_indices[1]])
+        )
+        border_mask = _dilate_mask_uint16(np_module, channel_mask) & (~channel_mask)
+        border_mask &= channel > dark_floor
+        border_mask &= channel < clip_level
+        chroma_offset = 0.0
+        if np_module.any(border_mask):
+            chroma_offset = float(
+                np_module.mean(channel[border_mask] - reference[border_mask])
+            )
+        restored = reference + chroma_offset
+        output[..., channel_index] = np_module.where(
+            channel_mask,
+            np_module.maximum(channel, restored),
+            channel,
+        )
+    return output
+
+
+def _hlrecovery_inpaint_opposed_uint16(
+    np_module, image_rgb, gain_threshold, maxval=65535.0
+):
+    """@brief Apply Inpaint Opposed highlight reconstruction on RGB tensor.
+
+    @details Approximates RawTherapee `Coloropp` recovery in post-merge RGB
+    space: derive the RawTherapee clip threshold from `gain_threshold`,
+    construct one cubic-root opposite-channel neighborhood predictor, estimate
+    one border chrominance offset, and inpaint only pixels above the clip
+    threshold.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb {object} RGB float tensor on uint16 scale.
+    @param gain_threshold {float} Positive Inpaint Opposed gain threshold.
+    @param maxval {float} Maximum channel value.
+    @return {object} Highlight-reconstructed RGB float tensor.
+    @satisfies REQ-102, REQ-119
+    """
+
+    rgb = np_module.asarray(image_rgb, dtype=np_module.float64)
+    output = rgb.copy()
+    gain = 1.2 * float(gain_threshold)
+    clip_level = (0.987 / max(gain, 1e-12)) * maxval
+    clip_dark_levels = (0.03 * clip_level, 0.125 * clip_level, 0.03 * clip_level)
+    for channel_index in range(3):
+        channel = output[..., channel_index]
+        channel_mask = channel >= clip_level
+        if not np_module.any(channel_mask):
+            continue
+        local_means = []
+        for source_channel in range(3):
+            local_mean = _box_mean_3x3_uint16(np_module, output[..., source_channel])
+            local_means.append(np_module.cbrt(np_module.maximum(local_mean, 0.0)))
+        other_indices = [index for index in range(3) if index != channel_index]
+        reference = np_module.power(
+            0.5 * (local_means[other_indices[0]] + local_means[other_indices[1]]),
+            3.0,
+        )
+        border_mask = _dilate_mask_uint16(np_module, channel_mask) & (~channel_mask)
+        border_mask &= channel > clip_dark_levels[channel_index]
+        border_mask &= channel < clip_level
+        chroma_offset = 0.0
+        if np_module.any(border_mask):
+            chroma_offset = float(
+                np_module.mean(channel[border_mask] - reference[border_mask])
+            )
+        restored = reference + chroma_offset
+        output[..., channel_index] = np_module.where(
+            channel_mask,
+            np_module.maximum(channel, restored),
+            channel,
+        )
     return output
 
 
@@ -6023,10 +6280,13 @@ def run(args):
         print_info(
             "Auto-levels knobs: "
             f"clip-pct={postprocess_options.auto_levels_options.clip_percent:g}, "
+            "clip-out-of-gamut="
+            f"{'enabled' if postprocess_options.auto_levels_options.clip_out_of_gamut else 'disabled'}, "
             f"highlight-reconstruction="
             f"{'enabled' if postprocess_options.auto_levels_options.highlight_reconstruction_enabled else 'disabled'}, "
             "highlight-reconstruction-method="
-            f"{postprocess_options.auto_levels_options.highlight_reconstruction_method or 'none'}"
+            f"{postprocess_options.auto_levels_options.highlight_reconstruction_method}, "
+            f"gain-threshold={postprocess_options.auto_levels_options.gain_threshold:g}"
         )
     if enable_luminance:
         extra_args_text = ""

@@ -361,3 +361,207 @@ def test_normalize_debevec_hdr_to_unit_range_clamps_to_valid_interval() -> None:
     assert normalized.shape == hdr_rgb.shape
     assert float(np.min(normalized)) >= 0.0
     assert float(np.max(normalized)) <= 1.0
+
+
+def test_parse_auto_levels_options_defaults_match_rawtherapee() -> None:
+    """Auto-levels defaults must match the RawTherapee exposure tool defaults."""
+
+    options = dng2jpg_module._parse_auto_levels_options({})  # pylint: disable=protected-access
+    assert options == dng2jpg_module.AutoLevelsOptions(
+        clip_percent=0.02,
+        clip_out_of_gamut=True,
+        histcompr=3,
+        highlight_reconstruction_enabled=False,
+        highlight_reconstruction_method="Inpaint Opposed",
+        gain_threshold=1.0,
+    )
+
+
+def test_parse_run_options_accepts_extended_auto_levels_knobs() -> None:
+    """Parser must accept the expanded RawTherapee-aligned auto-levels knobs."""
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        [
+            "input.dng",
+            "output.jpg",
+            "--ev=1",
+            "--auto-levels",
+            "--al-clip-pct=0.5",
+            "--al-clip-out-of-gamut=false",
+            "--al-highlight-reconstruction-method",
+            "Inpaint Opposed",
+            "--al-gain-threshold=1.25",
+            "--enable-opencv",
+        ]
+    )
+    assert parsed is not None
+    postprocess = parsed[5]
+    assert postprocess.auto_levels_enabled is True
+    assert postprocess.auto_levels_options.clip_percent == 0.5
+    assert postprocess.auto_levels_options.clip_out_of_gamut is False
+    assert postprocess.auto_levels_options.highlight_reconstruction_enabled is True
+    assert (
+        postprocess.auto_levels_options.highlight_reconstruction_method
+        == "Inpaint Opposed"
+    )
+    assert postprocess.auto_levels_options.gain_threshold == 1.25
+
+
+def test_compute_auto_levels_from_histogram_matches_rawtherapee_reference() -> None:
+    """Auto-levels metric solver must keep the frozen RawTherapee reference output."""
+
+    histogram = np.zeros(65536 >> dng2jpg_module.DEFAULT_AL_HISTCOMPR, dtype=np.uint64)
+    histogram_updates = {
+        8: 10,
+        16: 20,
+        32: 35,
+        64: 60,
+        128: 90,
+        256: 130,
+        512: 170,
+        1024: 220,
+        1536: 200,
+        2048: 180,
+        2560: 140,
+        3072: 100,
+        3584: 60,
+        4096: 30,
+        4608: 10,
+        5120: 3,
+    }
+    for histogram_index, count in histogram_updates.items():
+        histogram[histogram_index] = count
+
+    metrics = dng2jpg_module._compute_auto_levels_from_histogram(  # pylint: disable=protected-access
+        np_module=np,
+        histogram=histogram,
+        histcompr=dng2jpg_module.DEFAULT_AL_HISTCOMPR,
+        clip_percent=dng2jpg_module.DEFAULT_AL_CLIP_PERCENT,
+    )
+
+    assert metrics["black"] == 102
+    assert metrics["brightness"] == 0
+    assert metrics["contrast"] == 21
+    assert metrics["hlcompr"] == 0
+    assert metrics["hlcomprthresh"] == 0
+    assert metrics["whiteclip"] == 40960
+    assert metrics["rawmax"] == 40960
+    assert metrics["shc"] == 64
+    assert metrics["median"] == 8192
+    assert metrics["overex"] == 2
+    np.testing.assert_allclose(metrics["expcomp"], 0.24540694839048818, rtol=1e-9)
+    np.testing.assert_allclose(metrics["gain"], 1.1854271032896186, rtol=1e-9)
+    np.testing.assert_allclose(metrics["average"], 11540.631001371743, rtol=1e-9)
+    np.testing.assert_allclose(metrics["ospread"], 0.6606658566861634, rtol=1e-9)
+
+
+def test_apply_auto_levels_clip_out_of_gamut_normalizes_triplet(monkeypatch) -> None:
+    """Out-of-gamut clipping must preserve channel ratios instead of hard clipping."""
+
+    image_rgb_uint16 = np.array([[[40000, 30000, 20000]]], dtype=np.uint16)
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_build_autoexp_histogram_rgb_uint16",
+        lambda **_kwargs: np.zeros(1, dtype=np.uint64),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_compute_auto_levels_from_histogram",
+        lambda **_kwargs: {"gain": 2.0},
+    )
+
+    disabled = dng2jpg_module._apply_auto_levels_uint16(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_uint16=image_rgb_uint16,
+        auto_levels_options=dng2jpg_module.AutoLevelsOptions(
+            clip_out_of_gamut=False,
+        ),
+    )
+    enabled = dng2jpg_module._apply_auto_levels_uint16(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_uint16=image_rgb_uint16,
+        auto_levels_options=dng2jpg_module.AutoLevelsOptions(
+            clip_out_of_gamut=True,
+        ),
+    )
+
+    np.testing.assert_array_equal(disabled, np.array([[[65535, 60000, 40000]]], dtype=np.uint16))
+    np.testing.assert_array_equal(enabled, np.array([[[65535, 49151, 32768]]], dtype=np.uint16))
+
+
+def test_apply_auto_levels_dispatches_new_color_methods(monkeypatch) -> None:
+    """New method selectors must dispatch deterministically through the auto-levels stage."""
+
+    image_rgb_uint16 = np.array(
+        [[[1000, 2000, 3000], [4000, 5000, 6000]]],
+        dtype=np.uint16,
+    )
+    call_trace: list[tuple[str, float | None]] = []
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_build_autoexp_histogram_rgb_uint16",
+        lambda **_kwargs: np.zeros(1, dtype=np.uint64),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_compute_auto_levels_from_histogram",
+        lambda **_kwargs: {"gain": 1.0},
+    )
+
+    def _fake_color_propagation(*, np_module, image_rgb, maxval):
+        del np_module, maxval  # Unused by fake dispatcher.
+        call_trace.append(("Color Propagation", None))
+        return image_rgb + 100.0
+
+    def _fake_inpaint_opposed(*, np_module, image_rgb, gain_threshold, maxval):
+        del np_module, maxval  # Unused by fake dispatcher.
+        call_trace.append(("Inpaint Opposed", gain_threshold))
+        return image_rgb + 200.0
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_hlrecovery_color_propagation_uint16",
+        _fake_color_propagation,
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_hlrecovery_inpaint_opposed_uint16",
+        _fake_inpaint_opposed,
+    )
+
+    color_output = dng2jpg_module._apply_auto_levels_uint16(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_uint16=image_rgb_uint16,
+        auto_levels_options=dng2jpg_module.AutoLevelsOptions(
+            highlight_reconstruction_enabled=True,
+            highlight_reconstruction_method="Color Propagation",
+            clip_out_of_gamut=False,
+        ),
+    )
+    inpaint_output = dng2jpg_module._apply_auto_levels_uint16(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_uint16=image_rgb_uint16,
+        auto_levels_options=dng2jpg_module.AutoLevelsOptions(
+            highlight_reconstruction_enabled=True,
+            highlight_reconstruction_method="Inpaint Opposed",
+            gain_threshold=1.25,
+            clip_out_of_gamut=False,
+        ),
+    )
+
+    assert color_output.dtype == np.uint16
+    assert inpaint_output.dtype == np.uint16
+    np.testing.assert_array_equal(
+        color_output,
+        np.array([[[1100, 2100, 3100], [4100, 5100, 6100]]], dtype=np.uint16),
+    )
+    np.testing.assert_array_equal(
+        inpaint_output,
+        np.array([[[1200, 2200, 3200], [4200, 5200, 6200]]], dtype=np.uint16),
+    )
+    assert call_trace == [
+        ("Color Propagation", None),
+        ("Inpaint Opposed", 1.25),
+    ]
