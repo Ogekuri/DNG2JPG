@@ -272,6 +272,7 @@
           - `_blend_uint16(...)`: execute deterministic uint16 linear blending helper [`src/dng2jpg/dng2jpg.py`]
           - `_normalize_float_rgb_image(...)`: normalize static-postprocess output back to RGB float `[0,1]` [`src/dng2jpg/dng2jpg.py`]
         - `_apply_validated_auto_adjust_pipeline(...)`: run ImageMagick auto-adjust chain behind step-local TIFF16 artifacts and return RGB float [`src/dng2jpg/dng2jpg.py`]
+          - external process boundary executes with working directory bound to the auto-adjust temporary workspace so generated sidecars remain isolated from user paths
           - `_write_rgb_float_tiff16(...)`: convert one RGB float tensor to TIFF16 artifact [`src/dng2jpg/dng2jpg.py`]
             - `_normalize_float_rgb_image(...)`: normalize stage payloads to RGB float `[0,1]` [`src/dng2jpg/dng2jpg.py`]
             - `_to_uint16_image_array(...)`: quantize normalized float tensors to `uint16` for ImageMagick input [`src/dng2jpg/dng2jpg.py`]

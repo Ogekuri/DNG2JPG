@@ -277,6 +277,65 @@ def test_encode_jpg_quantizes_once_at_final_boundary(monkeypatch, tmp_path) -> N
     assert call_trace.index("to_uint8") > call_trace.index("static")
 
 
+def test_encode_jpg_imagemagick_auto_adjust_runs_in_temp_workspace(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """ImageMagick auto-adjust subprocess must execute inside step temp workspace."""
+
+    merged_rgb_float = np.array(
+        [
+            [[0.05, 0.15, 0.25], [0.35, 0.45, 0.55]],
+            [[0.65, 0.75, 0.85], [0.95, 0.60, 0.40]],
+        ],
+        dtype=np.float32,
+    )
+    imageio_module = _FakePathImageIoModule()
+    pil_module = _FakePilModule()
+    postprocess_options = dng2jpg_module.PostprocessOptions(
+        post_gamma=1.0,
+        brightness=1.0,
+        contrast=1.0,
+        saturation=1.0,
+        jpg_compression=25,
+        auto_brightness_enabled=False,
+        auto_levels_enabled=False,
+        auto_adjust_mode="ImageMagick",
+    )
+    subprocess_cwd: dict[str, str | None] = {}
+
+    def _fake_subprocess_run(command, check, **kwargs):
+        del check  # Deterministic fake execution.
+        subprocess_cwd["cwd"] = kwargs.get("cwd")
+        imageio_module.register_image(
+            Path(command[-1]),
+            (merged_rgb_float * 65535.0).astype(np.uint16),
+        )
+        sidecar_root = (
+            Path(kwargs["cwd"])
+            if kwargs.get("cwd") is not None
+            else Path.cwd()
+        )
+        (sidecar_root / "output.jpg.pp3").write_text("sidecar", encoding="utf-8")
+        return None
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(dng2jpg_module.subprocess, "run", _fake_subprocess_run)
+
+    dng2jpg_module._encode_jpg(  # pylint: disable=protected-access
+        imageio_module=imageio_module,
+        pil_image_module=pil_module,
+        merged_image_float=merged_rgb_float,
+        output_jpg=tmp_path / "output.jpg",
+        postprocess_options=postprocess_options,
+        imagemagick_command="convert",
+        numpy_module=np,
+    )
+
+    assert subprocess_cwd["cwd"] is not None
+    assert not (tmp_path / "output.jpg.pp3").exists()
+
+
 def test_parse_run_options_accepts_all_original_auto_brightness_controls() -> None:
     """Parser must expose every control carried by the original TonemapParams."""
 

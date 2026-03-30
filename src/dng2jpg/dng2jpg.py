@@ -6550,7 +6550,8 @@ def _apply_validated_auto_adjust_pipeline(
 
     @details Serializes the normalized RGB float input to one local 16-bit TIFF,
     applies deterministic ImageMagick denoise/level/sigmoidal/vibrance/
-    high-pass overlay stages parameterized by the shared knobs, and re-loads
+    high-pass overlay stages parameterized by the shared knobs, executes the
+    subprocess in `temp_dir` so any sidecar files remain isolated, and re-loads
     the produced TIFF as normalized RGB float output.
     @param image_rgb_float {object} RGB float tensor.
     @param imageio_module {ModuleType} Imported imageio module with `imread` and `imwrite`.
@@ -6560,7 +6561,7 @@ def _apply_validated_auto_adjust_pipeline(
     @param auto_adjust_options {AutoAdjustOptions} Shared auto-adjust knob values.
     @return {object} RGB float tensor after ImageMagick auto-adjust.
     @exception subprocess.CalledProcessError Raised when ImageMagick returns non-zero.
-    @satisfies REQ-051, REQ-106
+    @satisfies DES-004, REQ-051, REQ-106
     """
 
     auto_adjust_input_16 = temp_dir / "auto_adjust_input_16.tif"
@@ -6619,7 +6620,7 @@ def _apply_validated_auto_adjust_pipeline(
         "LZW",
         str(auto_adjust_output),
     ]
-    subprocess.run(auto_adjust_command, check=True)
+    subprocess.run(auto_adjust_command, check=True, cwd=str(temp_dir))
     return _normalize_float_rgb_image(
         np_module=np_module,
         image_data=imageio_module.imread(str(auto_adjust_output)),
