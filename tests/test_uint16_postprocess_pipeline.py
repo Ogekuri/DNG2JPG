@@ -68,6 +68,26 @@ class _FakeImageIoModule:
         self.writes.append((path, np.array(image, copy=True)))
 
 
+class _FakePathImageIoModule:
+    """Minimal imageio shim with per-path deterministic image payloads."""
+
+    def __init__(self) -> None:
+        self._images_by_path: dict[str, np.ndarray] = {}
+        self.writes: list[tuple[str, np.ndarray]] = []
+
+    def register_image(self, path: Path, image: np.ndarray) -> None:
+        self._images_by_path[str(path)] = np.array(image, copy=True)
+
+    def imread(self, path: str) -> np.ndarray:
+        image = self._images_by_path.get(path)
+        if image is None:
+            raise AssertionError(f"Unexpected imageio read path: {path}")
+        return np.array(image, copy=True)
+
+    def imwrite(self, path: str, image: np.ndarray) -> None:
+        self.writes.append((path, np.array(image, copy=True)))
+
+
 class _FakeMergeMertens:
     """Minimal OpenCV MergeMertens shim for HDR backend tests."""
 
@@ -143,6 +163,30 @@ def _build_postprocess_options():
         auto_levels_enabled=False,
         auto_adjust_mode=None,
     )
+
+
+def _reflect_shift_2d(image: np.ndarray, shift_y: int, shift_x: int) -> np.ndarray:
+    """Shift 2D image content using reflect padding instead of wraparound."""
+
+    pad_y = abs(shift_y) + 4
+    pad_x = abs(shift_x) + 4
+    padded = np.pad(image, ((pad_y, pad_y), (pad_x, pad_x)), mode="reflect")
+    start_y = pad_y - shift_y
+    start_x = pad_x - shift_x
+    return np.array(
+        padded[start_y : start_y + image.shape[0], start_x : start_x + image.shape[1]],
+        copy=True,
+    )
+
+
+def _reflect_shift_rgb(image: np.ndarray, shift_y: int, shift_x: int) -> np.ndarray:
+    """Shift RGB image content using reflect padding instead of wraparound."""
+
+    shifted_channels = [
+        _reflect_shift_2d(image[..., channel_index], shift_y, shift_x)
+        for channel_index in range(image.shape[2])
+    ]
+    return np.stack(shifted_channels, axis=-1).astype(image.dtype, copy=False)
 
 
 def test_apply_brightness_uint16_keeps_16bit_gradation_without_u8_lift() -> None:
@@ -754,3 +798,284 @@ def test_apply_auto_levels_color_methods_preserve_uint16_pipeline(monkeypatch) -
         ("Color Propagation", None),
         ("Inpaint Opposed", 1.25),
     ]
+
+
+def test_parse_run_options_accepts_hdrplus_controls() -> None:
+    """Parser must expose HDR+ proxy, alignment, and temporal knobs."""
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        [
+            "input.dng",
+            "output.jpg",
+            "--ev=1",
+            "--enable-hdr-plus",
+            "--hdrplus-proxy-mode=bt709",
+            "--hdrplus-search-radius=3",
+            "--hdrplus-temporal-factor=6.5",
+            "--hdrplus-temporal-min-dist=4",
+            "--hdrplus-temporal-max-dist=120",
+        ]
+    )
+
+    assert parsed is not None
+    hdrplus_options = parsed[10]
+    enable_hdr_plus = parsed[11]
+    assert enable_hdr_plus is True
+    assert hdrplus_options == dng2jpg_module.HdrPlusOptions(
+        proxy_mode="bt709",
+        search_radius=3,
+        temporal_factor=6.5,
+        temporal_min_dist=4.0,
+        temporal_max_dist=120.0,
+    )
+
+
+def test_parse_run_options_rejects_invalid_hdrplus_controls() -> None:
+    """Parser must reject inconsistent HDR+ temporal threshold combinations."""
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        [
+            "input.dng",
+            "output.jpg",
+            "--ev=1",
+            "--enable-hdr-plus",
+            "--hdrplus-temporal-min-dist=30",
+            "--hdrplus-temporal-max-dist=30",
+        ]
+    )
+
+    assert parsed is None
+
+
+def test_hdrplus_proxy_rggb_matches_green_weighted_scalar() -> None:
+    """`rggb` proxy mode must match the Bayer-inspired green-weighted scalar."""
+
+    frames_rgb_uint16 = np.array(
+        [
+            [
+                [[100, 200, 300], [500, 1000, 1500]],
+                [[40, 80, 120], [7, 11, 19]],
+            ]
+        ],
+        dtype=np.uint16,
+    )
+
+    scalar_proxy = dng2jpg_module._hdrplus_build_scalar_proxy_float32(  # pylint: disable=protected-access
+        np_module=np,
+        frames_rgb_uint16=frames_rgb_uint16,
+        hdrplus_options=dng2jpg_module.HdrPlusOptions(proxy_mode="rggb"),
+    )
+
+    np.testing.assert_allclose(
+        scalar_proxy,
+        np.array([[[200.0, 1000.0], [80.0, 12.0]]], dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+
+
+def test_hdrplus_align_layers_detects_translated_alternate_frame() -> None:
+    """Hierarchical HDR+ alignment must recover non-zero alternate-frame offsets."""
+
+    rng = np.random.default_rng(1234)
+    reference = rng.integers(0, 4096, size=(96, 96), dtype=np.int16).astype(np.float32)
+    alternate = _reflect_shift_2d(reference, shift_y=1, shift_x=2).astype(np.float32)
+    alignments = dng2jpg_module._hdrplus_align_layers(  # pylint: disable=protected-access
+        np_module=np,
+        scalar_frames=np.stack([reference, alternate], axis=0),
+        hdrplus_options=dng2jpg_module.HdrPlusOptions(),
+    )
+
+    assert np.all(alignments[0] == 0)
+    central_offsets = alignments[1, 2:-2, 2:-2].reshape(-1, 2)
+    assert central_offsets.size > 0
+    median_x = int(np.median(central_offsets[:, 0]))
+    median_y = int(np.median(central_offsets[:, 1]))
+    assert median_x <= -1
+    assert median_y <= -1
+
+
+def test_hdrplus_temporal_merge_uses_alignment_offsets() -> None:
+    """Temporal HDR+ weighting and merge must improve when alignment offsets are applied."""
+
+    rng = np.random.default_rng(5678)
+    reference_rgb_uint16 = rng.integers(
+        0,
+        200,
+        size=(64, 64, 3),
+        dtype=np.uint16,
+    )
+    alternate_rgb_uint16 = _reflect_shift_rgb(
+        reference_rgb_uint16,
+        shift_y=0,
+        shift_x=2,
+    )
+    frames_rgb_uint16 = np.stack([reference_rgb_uint16, alternate_rgb_uint16], axis=0)
+    hdrplus_options = dng2jpg_module.HdrPlusOptions()
+    scalar_frames = dng2jpg_module._hdrplus_build_scalar_proxy_float32(  # pylint: disable=protected-access
+        np_module=np,
+        frames_rgb_uint16=frames_rgb_uint16,
+        hdrplus_options=hdrplus_options,
+    )
+    downsampled_scalar_frames = dng2jpg_module._hdrplus_box_down2_float32(  # pylint: disable=protected-access
+        np_module=np,
+        frames_float32=scalar_frames,
+    )
+    tile_start_positions_y = dng2jpg_module._hdrplus_compute_tile_start_positions(  # pylint: disable=protected-access
+        np_module=np,
+        axis_length=frames_rgb_uint16.shape[1],
+        tile_stride=dng2jpg_module.HDRPLUS_TILE_STRIDE,
+        pad_margin=dng2jpg_module.HDRPLUS_TILE_SIZE,
+    )
+    tile_start_positions_x = dng2jpg_module._hdrplus_compute_tile_start_positions(  # pylint: disable=protected-access
+        np_module=np,
+        axis_length=frames_rgb_uint16.shape[2],
+        tile_stride=dng2jpg_module.HDRPLUS_TILE_STRIDE,
+        pad_margin=dng2jpg_module.HDRPLUS_TILE_SIZE,
+    )
+    alignment_offsets = np.zeros(
+        (2, len(tile_start_positions_y), len(tile_start_positions_x), 2),
+        dtype=np.int32,
+    )
+    alignment_offsets[1, :, :, 0] = -2
+    zero_offsets = np.zeros_like(alignment_offsets)
+
+    aligned_weights, aligned_total = dng2jpg_module._hdrplus_compute_temporal_weights(  # pylint: disable=protected-access
+        np_module=np,
+        downsampled_scalar_frames=downsampled_scalar_frames,
+        alignment_offsets=alignment_offsets,
+        hdrplus_options=hdrplus_options,
+    )
+    zero_weights, zero_total = dng2jpg_module._hdrplus_compute_temporal_weights(  # pylint: disable=protected-access
+        np_module=np,
+        downsampled_scalar_frames=downsampled_scalar_frames,
+        alignment_offsets=zero_offsets,
+        hdrplus_options=hdrplus_options,
+    )
+
+    frames_rgb_float32 = frames_rgb_uint16.astype(np.float32)
+    temporal_aligned = dng2jpg_module._hdrplus_merge_temporal_rgb(  # pylint: disable=protected-access
+        np_module=np,
+        frames_rgb_float32=frames_rgb_float32,
+        alignment_offsets=alignment_offsets,
+        weights=aligned_weights,
+        total_weight=aligned_total,
+        hdrplus_options=hdrplus_options,
+    )
+    temporal_zero = dng2jpg_module._hdrplus_merge_temporal_rgb(  # pylint: disable=protected-access
+        np_module=np,
+        frames_rgb_float32=frames_rgb_float32,
+        alignment_offsets=zero_offsets,
+        weights=zero_weights,
+        total_weight=zero_total,
+        hdrplus_options=hdrplus_options,
+    )
+    reference_tiles = dng2jpg_module._hdrplus_extract_overlapping_tiles(  # pylint: disable=protected-access
+        np_module=np,
+        frames_array=frames_rgb_float32[0:1],
+        tile_size=dng2jpg_module.HDRPLUS_TILE_SIZE,
+        tile_stride=dng2jpg_module.HDRPLUS_TILE_STRIDE,
+        pad_margin=dng2jpg_module.HDRPLUS_TILE_SIZE
+        + dng2jpg_module._hdrplus_compute_alignment_margin(  # pylint: disable=protected-access
+            search_radius=hdrplus_options.search_radius
+        ),
+    )[0]
+    aligned_error = float(np.mean(np.abs(temporal_aligned - reference_tiles)))
+    zero_error = float(np.mean(np.abs(temporal_zero - reference_tiles)))
+    assert aligned_error < zero_error
+
+
+def test_run_hdr_plus_merge_preserves_float_internal_and_uint16_io(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """HDR+ merge must keep float intermediates while preserving uint16 image boundaries."""
+
+    imageio_module = _FakePathImageIoModule()
+    bracket_paths = [
+        tmp_path / "ev_minus.tif",
+        tmp_path / "ev_zero.tif",
+        tmp_path / "ev_plus.tif",
+    ]
+    for offset, path in enumerate(bracket_paths):
+        imageio_module.register_image(
+            path,
+            np.full((32, 32, 3), 1000 + (offset * 500), dtype=np.uint16),
+        )
+
+    call_trace: list[str] = []
+
+    def _fake_align_layers(*, np_module, scalar_frames, hdrplus_options):
+        del hdrplus_options  # Unused by fake stage.
+        assert np_module is np
+        assert scalar_frames.dtype.kind == "f"
+        call_trace.append("align")
+        return np.zeros((3, 5, 5, 2), dtype=np.int32)
+
+    def _fake_compute_temporal_weights(
+        *,
+        np_module,
+        downsampled_scalar_frames,
+        alignment_offsets,
+        hdrplus_options,
+    ):
+        del alignment_offsets, hdrplus_options  # Unused by fake stage.
+        assert np_module is np
+        assert downsampled_scalar_frames.dtype.kind == "f"
+        call_trace.append("weights")
+        return (
+            np.zeros((2, 5, 5), dtype=np.float32),
+            np.ones((5, 5), dtype=np.float32),
+        )
+
+    def _fake_merge_temporal_rgb(
+        *,
+        np_module,
+        frames_rgb_float32,
+        alignment_offsets,
+        weights,
+        total_weight,
+        hdrplus_options,
+    ):
+        del alignment_offsets, weights, total_weight, hdrplus_options  # Unused by fake stage.
+        assert np_module is np
+        assert frames_rgb_float32.dtype.kind == "f"
+        call_trace.append("merge_temporal")
+        return np.zeros((5, 5, 32, 32, 3), dtype=np.float32)
+
+    def _fake_merge_spatial_rgb(*, np_module, temporal_tiles, width, height):
+        assert np_module is np
+        assert temporal_tiles.dtype.kind == "f"
+        call_trace.append("merge_spatial")
+        return np.full((height, width, 3), 1234, dtype=np.uint16)
+
+    monkeypatch.setattr(dng2jpg_module, "_hdrplus_align_layers", _fake_align_layers)
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_hdrplus_compute_temporal_weights",
+        _fake_compute_temporal_weights,
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_hdrplus_merge_temporal_rgb",
+        _fake_merge_temporal_rgb,
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_hdrplus_merge_spatial_rgb",
+        _fake_merge_spatial_rgb,
+    )
+
+    dng2jpg_module._run_hdr_plus_merge(  # pylint: disable=protected-access
+        bracket_paths=bracket_paths,
+        output_hdr_tiff=tmp_path / "merged_hdr.tif",
+        imageio_module=imageio_module,
+        np_module=np,
+        hdrplus_options=dng2jpg_module.HdrPlusOptions(),
+    )
+
+    assert call_trace == ["align", "weights", "merge_temporal", "merge_spatial"]
+    assert imageio_module.writes
+    output_image = imageio_module.writes[-1][1]
+    assert output_image.dtype == np.uint16
+    assert output_image.shape == (32, 32, 3)

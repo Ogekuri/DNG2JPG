@@ -80,12 +80,20 @@ DEFAULT_REINHARD02_CONTRAST = 0.85
 DEFAULT_REINHARD02_SATURATION = 0.55
 DEFAULT_MANTIUK08_CONTRAST = 1.2
 DEFAULT_OPENCV_DEBEVEC_WHITE_POINT_PERCENTILE = 99.5
+DEFAULT_HDRPLUS_PROXY_MODE = "rggb"
+DEFAULT_HDRPLUS_SEARCH_RADIUS = 4
+DEFAULT_HDRPLUS_TEMPORAL_FACTOR = 8.0
+DEFAULT_HDRPLUS_TEMPORAL_MIN_DIST = 10.0
+DEFAULT_HDRPLUS_TEMPORAL_MAX_DIST = 300.0
 HDRPLUS_TILE_SIZE = 32
 HDRPLUS_TILE_STRIDE = HDRPLUS_TILE_SIZE // 2
 HDRPLUS_DOWNSAMPLED_TILE_SIZE = HDRPLUS_TILE_STRIDE
-HDRPLUS_TEMPORAL_FACTOR = 8.0
-HDRPLUS_TEMPORAL_MIN_DIST = 10
-HDRPLUS_TEMPORAL_MAX_DIST = 300
+HDRPLUS_ALIGNMENT_LEVELS = 3
+HDRPLUS_ALIGNMENT_DOWNSAMPLE_RATE = 4
+HDRPLUS_TEMPORAL_FACTOR = DEFAULT_HDRPLUS_TEMPORAL_FACTOR
+HDRPLUS_TEMPORAL_MIN_DIST = DEFAULT_HDRPLUS_TEMPORAL_MIN_DIST
+HDRPLUS_TEMPORAL_MAX_DIST = DEFAULT_HDRPLUS_TEMPORAL_MAX_DIST
+_HDRPLUS_PROXY_MODES = ("rggb", "bt709", "mean")
 EV_STEP = 0.25
 MIN_SUPPORTED_BITS_PER_COLOR = 9
 DEFAULT_DNG_BITS_PER_COLOR = 14
@@ -137,6 +145,13 @@ _AUTO_BRIGHTNESS_KNOB_OPTIONS = (
     "--ab-clahe-tile-grid-size",
     "--ab-enable-luminance-preserving-desat",
     "--ab-eps",
+)
+_HDRPLUS_KNOB_OPTIONS = (
+    "--hdrplus-proxy-mode",
+    "--hdrplus-search-radius",
+    "--hdrplus-temporal-factor",
+    "--hdrplus-temporal-min-dist",
+    "--hdrplus-temporal-max-dist",
 )
 _AUTO_LEVELS_KNOB_OPTIONS = (
     "--al-clip-pct",
@@ -461,6 +476,30 @@ class OpenCvMergeOptions:
 
 
 @dataclass(frozen=True)
+class HdrPlusOptions:
+    """@brief Hold deterministic HDR+ merge option values.
+
+    @details Encapsulates the RGB-to-scalar proxy selection, hierarchical
+    alignment search radius, and temporal weight controls used by the HDR+
+    backend port. Defaults mirror the source C++ merge constants and the RGB
+    adaptation policy introduced for this repository.
+    @param proxy_mode {str} Scalar proxy mode selector in `{"rggb","bt709","mean"}`.
+    @param search_radius {int} Per-layer alignment search radius in pixels; candidate offsets span `[-search_radius, search_radius-1]`.
+    @param temporal_factor {float} Denominator stretch factor applied to per-tile temporal L1 distance.
+    @param temporal_min_dist {float} Distance floor below which alternate-frame weight remains maximal.
+    @param temporal_max_dist {float} Distance ceiling above which alternate-frame weight becomes zero.
+    @return {None} Immutable dataclass container.
+    @satisfies REQ-126, REQ-127, REQ-128, REQ-129, REQ-130
+    """
+
+    proxy_mode: str = DEFAULT_HDRPLUS_PROXY_MODE
+    search_radius: int = DEFAULT_HDRPLUS_SEARCH_RADIUS
+    temporal_factor: float = DEFAULT_HDRPLUS_TEMPORAL_FACTOR
+    temporal_min_dist: float = DEFAULT_HDRPLUS_TEMPORAL_MIN_DIST
+    temporal_max_dist: float = DEFAULT_HDRPLUS_TEMPORAL_MAX_DIST
+
+
+@dataclass(frozen=True)
 class AutoEvInputs:
     """@brief Hold adaptive EV optimization scalar inputs.
 
@@ -553,7 +592,7 @@ def print_help(version):
     luminance-hdr-cli tone-mapping options.
     @param version {str} CLI version label to append in usage output.
     @return {None} Writes help text to stdout.
-    @satisfies DES-008, REQ-056, REQ-063, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-088, REQ-089, REQ-090, REQ-091, REQ-094, REQ-097, REQ-100, REQ-101, REQ-102, REQ-111
+    @satisfies DES-008, REQ-056, REQ-063, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-088, REQ-089, REQ-090, REQ-091, REQ-094, REQ-097, REQ-100, REQ-101, REQ-102, REQ-111, REQ-127, REQ-128
     """
 
     print(
@@ -582,6 +621,11 @@ def print_help(version):
         "[--aa-sigmoid-contrast=<value>] [--aa-sigmoid-midpoint=<0..1>] "
         "[--aa-saturation-gamma=<value>] [--aa-highpass-blur-sigma=<value>] "
         f"(--enable-enfuse | --enable-luminance | --enable-opencv | --enable-hdr-plus) "
+        "[--hdrplus-proxy-mode=<rggb|bt709|mean>] "
+        "[--hdrplus-search-radius=<value>] "
+        "[--hdrplus-temporal-factor=<value>] "
+        "[--hdrplus-temporal-min-dist=<value>] "
+        "[--hdrplus-temporal-max-dist=<value>] "
         f"[--luminance-hdr-model=<name>] [--luminance-hdr-weight=<name>] "
         f"[--luminance-hdr-response-curve=<name>] [--luminance-tmo=<name>] "
         f"[--tmo*=<value>] ({version})"
@@ -751,6 +795,23 @@ def print_help(version):
     print("  --enable-hdr-plus")
     print(
         "                   - Select HDR+ tile merge backend (Google Pixel temporal+spatial merge, ev_zero reference, required, mutually exclusive with --enable-enfuse, --enable-luminance, and --enable-opencv)."
+    )
+    print("  [HDR+ knobs]      - Effective only when --enable-hdr-plus is set.")
+    print(
+        "  --hdrplus-proxy-mode=<name> - Scalar proxy mode for RGB->single-channel adaptation."
+        f" Allowed values: {', '.join(_HDRPLUS_PROXY_MODES)} (default: {DEFAULT_HDRPLUS_PROXY_MODE})."
+    )
+    print(
+        f"  --hdrplus-search-radius=<value> - Per-layer alignment search radius > 0 (default: {DEFAULT_HDRPLUS_SEARCH_RADIUS})."
+    )
+    print(
+        f"  --hdrplus-temporal-factor=<value> - Temporal inverse-distance stretch factor > 0 (default: {DEFAULT_HDRPLUS_TEMPORAL_FACTOR:g})."
+    )
+    print(
+        f"  --hdrplus-temporal-min-dist=<value> - Temporal weight floor >= 0 (default: {DEFAULT_HDRPLUS_TEMPORAL_MIN_DIST:g})."
+    )
+    print(
+        f"  --hdrplus-temporal-max-dist=<value> - Temporal cutoff threshold > --hdrplus-temporal-min-dist (default: {DEFAULT_HDRPLUS_TEMPORAL_MAX_DIST:g})."
     )
     print(
         "  [postprocess defaults]"
@@ -1622,6 +1683,30 @@ def _parse_positive_float_option(option_name, option_raw):
     return option_value
 
 
+def _parse_positive_int_option(option_name, option_raw):
+    """@brief Parse and validate one positive integer option value.
+
+    @details Converts option token to `int`, requires value greater than zero,
+    and emits deterministic parse errors on malformed values.
+    @param option_name {str} Long-option identifier used in error messages.
+    @param option_raw {str} Raw option token value from CLI args.
+    @return {int|None} Parsed positive integer value when valid; `None` otherwise.
+    @satisfies REQ-127, REQ-130
+    """
+
+    try:
+        option_value = int(option_raw)
+    except ValueError:
+        print_error(f"Invalid {option_name} value: {option_raw}")
+        return None
+
+    if option_value <= 0:
+        print_error(f"Invalid {option_name} value: {option_raw}")
+        print_error(f"{option_name} must be greater than zero.")
+        return None
+    return option_value
+
+
 def _parse_tmo_passthrough_value(option_name, option_raw):
     """@brief Parse and validate one luminance `--tmo*` passthrough value.
 
@@ -2114,6 +2199,102 @@ def _parse_auto_adjust_options(auto_adjust_raw_values):
     )
 
 
+def _parse_hdrplus_proxy_mode_option(proxy_mode_raw):
+    """@brief Parse HDR+ scalar proxy mode selector.
+
+    @details Accepts case-insensitive proxy mode names, normalizes to canonical
+    lowercase spelling, and rejects unsupported values with deterministic
+    diagnostics.
+    @param proxy_mode_raw {str} Raw HDR+ proxy mode token from CLI args.
+    @return {str|None} Canonical proxy mode token or `None` on parse failure.
+    @satisfies REQ-126, REQ-127, REQ-130
+    """
+
+    proxy_mode = proxy_mode_raw.strip().lower()
+    if proxy_mode in _HDRPLUS_PROXY_MODES:
+        return proxy_mode
+    print_error(f"Invalid --hdrplus-proxy-mode value: {proxy_mode_raw}")
+    print_error("Allowed values: " + ", ".join(_HDRPLUS_PROXY_MODES))
+    return None
+
+
+def _parse_hdrplus_options(hdrplus_raw_values):
+    """@brief Parse and validate HDR+ merge knob values.
+
+    @details Applies source-matching defaults for omitted knobs, validates the
+    RGB-to-scalar proxy selector, alignment search radius, and temporal weight
+    parameters, and rejects inconsistent temporal threshold combinations.
+    @param hdrplus_raw_values {dict[str, str]} Raw `--hdrplus-*` option values keyed by long option name.
+    @return {HdrPlusOptions|None} Parsed HDR+ options or `None` on validation error.
+    @satisfies REQ-126, REQ-127, REQ-128, REQ-130
+    """
+
+    options = HdrPlusOptions()
+    proxy_mode = options.proxy_mode
+    search_radius = options.search_radius
+    temporal_factor = options.temporal_factor
+    temporal_min_dist = options.temporal_min_dist
+    temporal_max_dist = options.temporal_max_dist
+
+    if "--hdrplus-proxy-mode" in hdrplus_raw_values:
+        parsed = _parse_hdrplus_proxy_mode_option(
+            hdrplus_raw_values["--hdrplus-proxy-mode"]
+        )
+        if parsed is None:
+            return None
+        proxy_mode = parsed
+
+    if "--hdrplus-search-radius" in hdrplus_raw_values:
+        parsed = _parse_positive_int_option(
+            "--hdrplus-search-radius",
+            hdrplus_raw_values["--hdrplus-search-radius"],
+        )
+        if parsed is None:
+            return None
+        search_radius = parsed
+
+    if "--hdrplus-temporal-factor" in hdrplus_raw_values:
+        parsed = _parse_positive_float_option(
+            "--hdrplus-temporal-factor",
+            hdrplus_raw_values["--hdrplus-temporal-factor"],
+        )
+        if parsed is None:
+            return None
+        temporal_factor = parsed
+
+    if "--hdrplus-temporal-min-dist" in hdrplus_raw_values:
+        parsed = _parse_non_negative_float_option(
+            "--hdrplus-temporal-min-dist",
+            hdrplus_raw_values["--hdrplus-temporal-min-dist"],
+        )
+        if parsed is None:
+            return None
+        temporal_min_dist = parsed
+
+    if "--hdrplus-temporal-max-dist" in hdrplus_raw_values:
+        parsed = _parse_positive_float_option(
+            "--hdrplus-temporal-max-dist",
+            hdrplus_raw_values["--hdrplus-temporal-max-dist"],
+        )
+        if parsed is None:
+            return None
+        temporal_max_dist = parsed
+
+    if temporal_max_dist <= temporal_min_dist:
+        print_error(
+            "Invalid HDR+ temporal thresholds: --hdrplus-temporal-max-dist must be greater than --hdrplus-temporal-min-dist"
+        )
+        return None
+
+    return HdrPlusOptions(
+        proxy_mode=proxy_mode,
+        search_radius=search_radius,
+        temporal_factor=temporal_factor,
+        temporal_min_dist=temporal_min_dist,
+        temporal_max_dist=temporal_max_dist,
+    )
+
+
 def _parse_auto_adjust_mode_option(auto_adjust_raw):
     """@brief Parse auto-adjust implementation selector option value.
 
@@ -2203,13 +2384,13 @@ def _parse_run_options(args):
     `--ab-*` knobs, optional auto-levels stage and `--al-*` knobs,
     optional shared auto-adjust knobs, required backend selector
     (`--enable-enfuse`, `--enable-luminance`, `--enable-opencv`, or
-    `--enable-hdr-plus`), and luminance backend controls
+    `--enable-hdr-plus`), HDR+ backend controls, and luminance backend controls
     including explicit `--tmo*` passthrough options and optional
     auto-adjust implementation selector (`--auto-adjust <ImageMagick|OpenCV>`);
     rejects unknown options and invalid arity.
     @param args {list[str]} Raw command argument vector.
-    @return {tuple[Path, Path, float|None, bool, tuple[float, float], PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, bool, float, bool, float, float]|None} Parsed `(input, output, ev, auto_ev, gamma, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, enable_hdr_plus, ev_zero, auto_zero_enabled, auto_zero_pct, auto_ev_pct)` tuple; `None` on parse failure.
-    @satisfies REQ-055, REQ-056, REQ-057, REQ-060, REQ-061, REQ-064, REQ-065, REQ-067, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-079, REQ-080, REQ-081, REQ-082, REQ-083, REQ-084, REQ-085, REQ-087, REQ-088, REQ-089, REQ-090, REQ-091, REQ-094, REQ-097, REQ-107, REQ-108, REQ-111
+    @return {tuple[Path, Path, float|None, bool, tuple[float, float], PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, bool, float, float]|None} Parsed `(input, output, ev, auto_ev, gamma, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, auto_zero_enabled, auto_zero_pct, auto_ev_pct)` tuple; `None` on parse failure.
+    @satisfies REQ-055, REQ-056, REQ-057, REQ-060, REQ-061, REQ-064, REQ-065, REQ-067, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-079, REQ-080, REQ-081, REQ-082, REQ-083, REQ-084, REQ-085, REQ-087, REQ-088, REQ-089, REQ-090, REQ-091, REQ-094, REQ-097, REQ-107, REQ-108, REQ-111, REQ-127, REQ-128, REQ-130
     """
 
     positional = []
@@ -2240,6 +2421,7 @@ def _parse_run_options(args):
     enable_luminance = False
     enable_opencv = False
     enable_hdr_plus = False
+    hdrplus_raw_values = {}
     luminance_hdr_model = DEFAULT_LUMINANCE_HDR_MODEL
     luminance_hdr_weight = DEFAULT_LUMINANCE_HDR_WEIGHT
     luminance_hdr_response_curve = DEFAULT_LUMINANCE_HDR_RESPONSE_CURVE
@@ -2268,6 +2450,28 @@ def _parse_run_options(args):
         if token == "--enable-hdr-plus":
             enable_hdr_plus = True
             idx += 1
+            continue
+
+        if token.startswith("--hdrplus-"):
+            option_name = token
+            option_value = None
+            consume_count = 1
+            if "=" in token:
+                option_name, option_value = token.split("=", 1)
+            else:
+                if idx + 1 >= len(args):
+                    print_error(f"Missing value for {token}")
+                    return None
+                option_value = args[idx + 1]
+                if option_value.startswith("--"):
+                    print_error(f"Missing value for {token}")
+                    return None
+                consume_count = 2
+            if option_name not in _HDRPLUS_KNOB_OPTIONS:
+                print_error(f"Unknown option: {option_name}")
+                return None
+            hdrplus_raw_values[option_name] = option_value
+            idx += consume_count
             continue
 
         if token == "--auto-adjust":
@@ -2863,6 +3067,10 @@ def _parse_run_options(args):
         invalid_knob = next(iter(auto_levels_raw_values))
         print_error(f"Auto-levels knob {invalid_knob} requires --auto-levels")
         return None
+    if not enable_hdr_plus and hdrplus_raw_values:
+        invalid_knob = next(iter(hdrplus_raw_values))
+        print_error(f"HDR+ knob {invalid_knob} requires --enable-hdr-plus")
+        return None
 
     (
         backend_post_gamma,
@@ -2891,6 +3099,9 @@ def _parse_run_options(args):
         return None
     auto_adjust_options = _parse_auto_adjust_options(auto_adjust_raw_values)
     if auto_adjust_options is None:
+        return None
+    hdrplus_options = _parse_hdrplus_options(hdrplus_raw_values)
+    if hdrplus_options is None:
         return None
 
     return (
@@ -2924,6 +3135,7 @@ def _parse_run_options(args):
         OpenCvMergeOptions(
             debevec_white_point_percentile=DEFAULT_OPENCV_DEBEVEC_WHITE_POINT_PERCENTILE
         ),
+        hdrplus_options,
         enable_hdr_plus,
         ev_zero,
         auto_zero_enabled,
@@ -3725,50 +3937,197 @@ def _run_opencv_hdr_merge(
         raise RuntimeError(f"OpenCV failed to write merged HDR TIFF: {output_hdr_tiff}")
 
 
-def _hdrplus_box_down2_uint16(np_module, frames_uint16):
-    """@brief Downsample HDR+ scalar frames with 2x2 box averaging.
+def _hdrplus_box_down2_float32(np_module, frames_float32):
+    """@brief Downsample HDR+ scalar frames with 2x2 box averaging in float domain.
 
-    @details Ports `box_down2` from `util.cpp` by reflect-padding odd image
-    sizes to even extents, summing each 2x2 region in `uint32`, and dividing by
-    `4` once to preserve integer averaging semantics.
+    @details Ports `box_down2` from `util.cpp` for repository HDR+ execution by
+    reflect-padding odd image sizes to even extents, summing each 2x2 region,
+    and multiplying by `0.25` once. Input and output stay in float domain to
+    preserve the repository-wide HDR+ internal arithmetic contract.
     @param np_module {ModuleType} Imported numpy module.
-    @param frames_uint16 {object} Scalar frame tensor with shape `(N,H,W)`.
-    @return {object} Downsampled `uint16` tensor with shape `(N,ceil(H/2),ceil(W/2))`.
-    @satisfies REQ-112, REQ-113
+    @param frames_float32 {object} Scalar float tensor with shape `(N,H,W)`.
+    @return {object} Downsampled float tensor with shape `(N,ceil(H/2),ceil(W/2))`.
+    @satisfies REQ-112, REQ-113, REQ-129
     """
 
-    pad_bottom = int(frames_uint16.shape[1] % 2)
-    pad_right = int(frames_uint16.shape[2] % 2)
+    pad_bottom = int(frames_float32.shape[1] % 2)
+    pad_right = int(frames_float32.shape[2] % 2)
     padded_frames = np_module.pad(
-        frames_uint16,
+        frames_float32,
         ((0, 0), (0, pad_bottom), (0, pad_right)),
         mode="reflect",
     )
     summed = (
-        padded_frames[:, 0::2, 0::2].astype(np_module.uint32)
-        + padded_frames[:, 0::2, 1::2].astype(np_module.uint32)
-        + padded_frames[:, 1::2, 0::2].astype(np_module.uint32)
-        + padded_frames[:, 1::2, 1::2].astype(np_module.uint32)
+        padded_frames[:, 0::2, 0::2]
+        + padded_frames[:, 0::2, 1::2]
+        + padded_frames[:, 1::2, 0::2]
+        + padded_frames[:, 1::2, 1::2]
     )
-    return (summed // 4).astype(np_module.uint16)
+    return (summed * 0.25).astype(np_module.float32)
 
 
-def _hdrplus_luminance_proxy_uint16(np_module, frames_rgb_uint16):
-    """@brief Convert RGB bracket tensor into scalar HDR+ merge proxy.
+def _hdrplus_gauss_down4_float32(np_module, frames_float32):
+    """@brief Downsample HDR+ scalar frames by `4` with the source 5x5 Gaussian kernel.
 
-    @details Adapts single-channel Bayer merge input to aligned RGB bracket TIFF
-    inputs by computing deterministic per-pixel arithmetic RGB mean, rounding to
-    `uint16`, and preserving source 16-bit scale for subsequent `box_down2` and
-    tile L1 distance steps.
+    @details Ports `gauss_down4` from `util.cpp`: applies the integer kernel
+    with coefficients summing to `159`, uses reflect padding to emulate
+    `mirror_interior`, then samples every fourth pixel in both axes. Input and
+    output remain float to keep HDR+ alignment math in floating point.
     @param np_module {ModuleType} Imported numpy module.
-    @param frames_rgb_uint16 {object} RGB frame tensor with shape `(N,H,W,3)`.
-    @return {object} Scalar `uint16` tensor with shape `(N,H,W)`.
+    @param frames_float32 {object} Scalar float tensor with shape `(N,H,W)`.
+    @return {object} Downsampled float tensor with shape `(N,ceil(H/4),ceil(W/4))`.
+    @satisfies REQ-112, REQ-113, REQ-129
+    """
+
+    from numpy.lib.stride_tricks import sliding_window_view  # type: ignore
+
+    kernel = np_module.array(
+        [
+            [2.0, 4.0, 5.0, 4.0, 2.0],
+            [4.0, 9.0, 12.0, 9.0, 4.0],
+            [5.0, 12.0, 15.0, 12.0, 5.0],
+            [4.0, 9.0, 12.0, 9.0, 4.0],
+            [2.0, 4.0, 5.0, 4.0, 2.0],
+        ],
+        dtype=np_module.float32,
+    ) / 159.0
+    padded_frames = np_module.pad(
+        frames_float32,
+        ((0, 0), (2, 2), (2, 2)),
+        mode="reflect",
+    )
+    windows = sliding_window_view(
+        padded_frames,
+        window_shape=(5, 5),
+        axis=(1, 2),
+    )
+    filtered = np_module.tensordot(
+        windows,
+        kernel,
+        axes=((-2, -1), (0, 1)),
+    ).astype(np_module.float32)
+    return filtered[
+        :,
+        ::HDRPLUS_ALIGNMENT_DOWNSAMPLE_RATE,
+        ::HDRPLUS_ALIGNMENT_DOWNSAMPLE_RATE,
+    ]
+
+
+def _hdrplus_build_scalar_proxy_float32(np_module, frames_rgb_uint16, hdrplus_options):
+    """@brief Convert RGB bracket tensors into the scalar HDR+ source-domain proxy.
+
+    @details Adapts RGB TIFF brackets to the original single-channel HDR+ merge
+    domain. Mode `rggb` approximates Bayer energy with weights
+    `(0.25, 0.5, 0.25)`; mode `bt709` uses luminance weights
+    `(0.2126, 0.7152, 0.0722)`; mode `mean` uses arithmetic RGB average.
+    Output remains float to preserve downstream alignment and merge precision.
+    @param np_module {ModuleType} Imported numpy module.
+    @param frames_rgb_uint16 {object} RGB `uint16` frame tensor with shape `(N,H,W,3)`.
+    @param hdrplus_options {HdrPlusOptions} HDR+ proxy/alignment/temporal controls.
+    @return {object} Scalar float tensor with shape `(N,H,W)`.
+    @satisfies REQ-112, REQ-126, REQ-128, REQ-129
+    """
+
+    rgb_float32 = frames_rgb_uint16.astype(np_module.float32)
+    if hdrplus_options.proxy_mode == "rggb":
+        return (
+            (0.25 * rgb_float32[..., 0])
+            + (0.5 * rgb_float32[..., 1])
+            + (0.25 * rgb_float32[..., 2])
+        ).astype(np_module.float32)
+    if hdrplus_options.proxy_mode == "bt709":
+        return (
+            (0.2126 * rgb_float32[..., 0])
+            + (0.7152 * rgb_float32[..., 1])
+            + (0.0722 * rgb_float32[..., 2])
+        ).astype(np_module.float32)
+    return np_module.mean(rgb_float32, axis=-1, dtype=np_module.float32).astype(
+        np_module.float32
+    )
+
+
+def _hdrplus_compute_tile_start_positions(np_module, axis_length, tile_stride, pad_margin):
+    """@brief Compute HDR+ tile start coordinates for one image axis.
+
+    @details Reproduces the source overlap geometry used by the Python HDR+
+    port: tile starts advance by `tile_stride` and include the leading virtual
+    tile at `-tile_stride`, represented by positive indices inside the padded
+    tensor.
+    @param np_module {ModuleType} Imported numpy module.
+    @param axis_length {int} Source image extent for the selected axis.
+    @param tile_stride {int} Tile stride in pixels.
+    @param pad_margin {int} Reflect padding added on both sides of the axis.
+    @return {object} `int32` axis start-position vector with shape `(T,)`.
     @satisfies REQ-112, REQ-115
     """
 
-    rgb_float = frames_rgb_uint16.astype(np_module.float64)
-    luminance_proxy = np_module.round(np_module.mean(rgb_float, axis=-1))
-    return np_module.clip(luminance_proxy, 0.0, 65535.0).astype(np_module.uint16)
+    tile_count = int(math.ceil(axis_length / float(tile_stride)))
+    return pad_margin - tile_stride + (
+        np_module.arange(tile_count + 1, dtype=np_module.int32) * tile_stride
+    )
+
+
+def _hdrplus_trunc_divide_int32(np_module, values_int32, divisor):
+    """@brief Divide signed HDR+ offsets with truncation toward zero.
+
+    @details Emulates C++ integer division semantics used by the source code for
+    negative offsets, which differs from Python floor division. This helper is
+    required for the source-consistent `offset / 2` conversion between full and
+    downsampled tile domains.
+    @param np_module {ModuleType} Imported numpy module.
+    @param values_int32 {object} Signed integer tensor.
+    @param divisor {int} Positive divisor.
+    @return {object} Signed integer tensor truncated toward zero.
+    @satisfies REQ-113, REQ-114
+    """
+
+    return np_module.trunc(
+        values_int32.astype(np_module.float32) / float(divisor)
+    ).astype(np_module.int32)
+
+
+def _hdrplus_compute_alignment_bounds(search_radius):
+    """@brief Derive source-equivalent hierarchical HDR+ alignment bounds.
+
+    @details Reconstructs the source `min_3/min_2/min_1` and
+    `max_3/max_2/max_1` recurrences for the fixed three-level pyramid and
+    search offsets `[-search_radius, search_radius-1]`.
+    @param search_radius {int} Per-layer alignment search radius.
+    @return {tuple[tuple[int, int], ...]} Bound pairs in coarse-to-fine order.
+    @satisfies REQ-113
+    """
+
+    min_bounds = [0]
+    max_bounds = [0]
+    search_min = -search_radius
+    search_max = search_radius - 1
+    for _ in range(HDRPLUS_ALIGNMENT_LEVELS - 1):
+        min_bounds.append(
+            (HDRPLUS_ALIGNMENT_DOWNSAMPLE_RATE * min_bounds[-1]) + search_min
+        )
+        max_bounds.append(
+            (HDRPLUS_ALIGNMENT_DOWNSAMPLE_RATE * max_bounds[-1]) + search_max
+        )
+    return tuple(zip(min_bounds, max_bounds))
+
+
+def _hdrplus_compute_alignment_margin(search_radius, divisor=1):
+    """@brief Compute safe reflect-padding margin for HDR+ alignment offsets.
+
+    @details Converts the fixed three-level search radius into a conservative
+    full-resolution offset bound and optionally scales it down for lower
+    pyramid levels via truncation-toward-zero division.
+    @param search_radius {int} Per-layer alignment search radius.
+    @param divisor {int} Positive scale divisor applied to the full-resolution bound.
+    @return {int} Non-negative padding margin in pixels.
+    @satisfies REQ-113
+    """
+
+    full_margin = 2 * search_radius * sum(
+        HDRPLUS_ALIGNMENT_DOWNSAMPLE_RATE**level
+        for level in range(HDRPLUS_ALIGNMENT_LEVELS)
+    )
+    return int(math.ceil(full_margin / float(divisor)))
 
 
 def _hdrplus_extract_overlapping_tiles(
@@ -3829,74 +4188,400 @@ def _hdrplus_extract_overlapping_tiles(
     return windows[:, start_positions_y[:, None], start_positions_x[None, :], ...]
 
 
-def _hdrplus_compute_temporal_weights(np_module, layer_tiles):
-    """@brief Compute HDR+ temporal tile weights against reference frame.
+def _hdrplus_extract_aligned_tiles(
+    np_module,
+    frames_array,
+    tile_size,
+    tile_stride,
+    pad_margin,
+    alignment_offsets,
+):
+    """@brief Extract HDR+ tiles after applying per-tile alignment offsets.
 
-    @details Ports `merge_temporal` weight equations from `merge.cpp` with
-    alignment offsets fixed to zero: computes integer tile L1 distance over each
-    16x16 downsampled tile, derives `norm_dist = max(1, dist/8 - 10/8)`,
-    applies hard cutoff when `norm_dist > 290`, and returns inverse-distance
-    weights for alternate frames only.
+    @details Builds tile coordinate grids from the padded frame tensor, adds the
+    per-tile `(x,y)` offsets resolved by hierarchical alignment, and gathers the
+    aligned scalar or RGB tiles needed by temporal distance evaluation and
+    temporal accumulation.
     @param np_module {ModuleType} Imported numpy module.
-    @param layer_tiles {object} Downsampled scalar tile tensor with shape `(N,Ty,Tx,16,16)`.
-    @return {tuple[object, object]} `(weights, total_weight)` where `weights`
-      has shape `(N-1,Ty,Tx)` and `total_weight` has shape `(Ty,Tx)`.
-    @satisfies REQ-112, REQ-113
+    @param frames_array {object} Frame tensor with shape `(N,H,W)` or `(N,H,W,C)`.
+    @param tile_size {int} Square tile edge length.
+    @param tile_stride {int} Tile stride between adjacent overlapping tiles.
+    @param pad_margin {int} Reflect padding added on each image edge.
+    @param alignment_offsets {object} Signed integer offset tensor with shape `(N,Ty,Tx,2)`.
+    @return {object} Aligned tile tensor with shape `(N,Ty,Tx,tile_size,tile_size[,C])`.
+    @satisfies REQ-113, REQ-114
     """
 
-    if layer_tiles.shape[0] <= 1:
-        total_weight = np_module.ones(layer_tiles.shape[1:3], dtype=np_module.float32)
+    start_positions_y = _hdrplus_compute_tile_start_positions(
+        np_module=np_module,
+        axis_length=int(frames_array.shape[1]),
+        tile_stride=tile_stride,
+        pad_margin=pad_margin,
+    )
+    start_positions_x = _hdrplus_compute_tile_start_positions(
+        np_module=np_module,
+        axis_length=int(frames_array.shape[2]),
+        tile_stride=tile_stride,
+        pad_margin=pad_margin,
+    )
+    row_offsets = np_module.arange(tile_size, dtype=np_module.int32)
+    col_offsets = np_module.arange(tile_size, dtype=np_module.int32)
+    if frames_array.ndim == 3:
+        padded_frames = np_module.pad(
+            frames_array,
+            ((0, 0), (pad_margin, pad_margin), (pad_margin, pad_margin)),
+            mode="reflect",
+        )
+        frame_indices = np_module.arange(frames_array.shape[0], dtype=np_module.int32)[
+            :, None, None, None, None
+        ]
+        row_indices = (
+            start_positions_y[None, :, None, None, None]
+            + alignment_offsets[..., 1][:, :, :, None, None]
+            + row_offsets[None, None, None, :, None]
+        )
+        col_indices = (
+            start_positions_x[None, None, :, None, None]
+            + alignment_offsets[..., 0][:, :, :, None, None]
+            + col_offsets[None, None, None, None, :]
+        )
+        return padded_frames[frame_indices, row_indices, col_indices]
+    padded_frames = np_module.pad(
+        frames_array,
+        ((0, 0), (pad_margin, pad_margin), (pad_margin, pad_margin), (0, 0)),
+        mode="reflect",
+    )
+    frame_indices = np_module.arange(frames_array.shape[0], dtype=np_module.int32)[
+        :, None, None, None, None
+    ]
+    row_indices = (
+        start_positions_y[None, :, None, None, None]
+        + alignment_offsets[..., 1][:, :, :, None, None]
+        + row_offsets[None, None, None, :, None]
+    )
+    col_indices = (
+        start_positions_x[None, None, :, None, None]
+        + alignment_offsets[..., 0][:, :, :, None, None]
+        + col_offsets[None, None, None, None, :]
+    )
+    return padded_frames[frame_indices, row_indices, col_indices, :]
+
+
+def _hdrplus_align_layer(
+    np_module,
+    reference_layer,
+    alternate_layer,
+    prev_alignment,
+    prev_min,
+    prev_max,
+    search_radius,
+):
+    """@brief Resolve one HDR+ alignment layer for one alternate frame.
+
+    @details Ports `align_layer` from `align.cpp`: propagates the coarser
+    alignment estimate via `prev_tile`, scales it by the fixed downsample rate
+    `4`, evaluates all candidate offsets in `[-search_radius, search_radius-1]`
+    using per-tile L1 distance over `16x16` tiles, and returns the minimizing
+    offset for each tile.
+    @param np_module {ModuleType} Imported numpy module.
+    @param reference_layer {object} Reference scalar layer with shape `(H,W)`.
+    @param alternate_layer {object} Alternate scalar layer with shape `(H,W)`.
+    @param prev_alignment {object} Previous-layer alignment tensor with shape `(Ty,Tx,2)`.
+    @param prev_min {int} Minimum previous-layer offset bound used before upscaling.
+    @param prev_max {int} Maximum previous-layer offset bound used before upscaling.
+    @param search_radius {int} Per-layer alignment search radius.
+    @return {object} Signed integer alignment tensor with shape `(Ty,Tx,2)`.
+    @satisfies REQ-112, REQ-113, REQ-129
+    """
+
+    pad_margin = (
+        HDRPLUS_DOWNSAMPLED_TILE_SIZE
+        + _hdrplus_compute_alignment_margin(search_radius=search_radius, divisor=2)
+    )
+    reference_tiles = _hdrplus_extract_overlapping_tiles(
+        np_module=np_module,
+        frames_array=reference_layer[None, ...],
+        tile_size=HDRPLUS_DOWNSAMPLED_TILE_SIZE,
+        tile_stride=HDRPLUS_DOWNSAMPLED_TILE_SIZE // 2,
+        pad_margin=pad_margin,
+    )[0].astype(np_module.float32)
+    tile_count_y = int(reference_tiles.shape[0])
+    tile_count_x = int(reference_tiles.shape[1])
+    prev_tile_y = _hdrplus_trunc_divide_int32(
+        np_module=np_module,
+        values_int32=np_module.arange(tile_count_y, dtype=np_module.int32) - 1,
+        divisor=HDRPLUS_ALIGNMENT_DOWNSAMPLE_RATE,
+    )
+    prev_tile_x = _hdrplus_trunc_divide_int32(
+        np_module=np_module,
+        values_int32=np_module.arange(tile_count_x, dtype=np_module.int32) - 1,
+        divisor=HDRPLUS_ALIGNMENT_DOWNSAMPLE_RATE,
+    )
+    prev_tile_y = np_module.clip(prev_tile_y, 0, prev_alignment.shape[0] - 1)
+    prev_tile_x = np_module.clip(prev_tile_x, 0, prev_alignment.shape[1] - 1)
+    base_offsets = (
+        HDRPLUS_ALIGNMENT_DOWNSAMPLE_RATE
+        * np_module.clip(
+            prev_alignment[prev_tile_y[:, None], prev_tile_x[None, :]],
+            prev_min,
+            prev_max,
+        ).astype(np_module.int32)
+    )
+    best_scores = None
+    best_offsets = None
+    for offset_y in range(-search_radius, search_radius):
+        for offset_x in range(-search_radius, search_radius):
+            candidate_offsets = base_offsets + np_module.array(
+                [offset_x, offset_y],
+                dtype=np_module.int32,
+            )
+            candidate_tiles = _hdrplus_extract_aligned_tiles(
+                np_module=np_module,
+                frames_array=alternate_layer[None, ...],
+                tile_size=HDRPLUS_DOWNSAMPLED_TILE_SIZE,
+                tile_stride=HDRPLUS_DOWNSAMPLED_TILE_SIZE // 2,
+                pad_margin=pad_margin,
+                alignment_offsets=candidate_offsets[None, ...],
+            )[0].astype(np_module.float32)
+            scores = np_module.sum(
+                np_module.abs(candidate_tiles - reference_tiles),
+                axis=(-2, -1),
+                dtype=np_module.float64,
+            )
+            if best_scores is None:
+                best_scores = scores
+                best_offsets = candidate_offsets
+                continue
+            update_mask = scores < best_scores
+            best_scores = np_module.where(update_mask, scores, best_scores)
+            best_offsets = np_module.where(
+                update_mask[..., None],
+                candidate_offsets,
+                best_offsets,
+            )
+    if best_offsets is None:
+        raise RuntimeError("HDR+ alignment search failed to initialize any candidate offset")
+    return best_offsets.astype(np_module.int32)
+
+
+def _hdrplus_align_layers(np_module, scalar_frames, hdrplus_options):
+    """@brief Resolve hierarchical HDR+ tile alignment for all alternate frames.
+
+    @details Ports `align.cpp` at the algorithm level: builds the source
+    alignment pyramid `box_down2 -> gauss_down4 -> gauss_down4`, computes
+    coarse-to-fine tile alignments for each alternate frame against reference
+    frame `n=0`, and lifts the finest layer offsets back to full-resolution
+    coordinates by factor `2`.
+    @param np_module {ModuleType} Imported numpy module.
+    @param scalar_frames {object} Scalar float tensor with shape `(N,H,W)`.
+    @param hdrplus_options {HdrPlusOptions} HDR+ proxy/alignment/temporal controls.
+    @return {object} Full-resolution signed alignment tensor with shape `(N,Ty,Tx,2)`.
+    @satisfies REQ-112, REQ-113, REQ-128, REQ-129
+    """
+
+    layer_0 = _hdrplus_box_down2_float32(np_module=np_module, frames_float32=scalar_frames)
+    layer_1 = _hdrplus_gauss_down4_float32(np_module=np_module, frames_float32=layer_0)
+    layer_2 = _hdrplus_gauss_down4_float32(np_module=np_module, frames_float32=layer_1)
+    bounds = _hdrplus_compute_alignment_bounds(hdrplus_options.search_radius)
+    layer0_starts_y = _hdrplus_compute_tile_start_positions(
+        np_module=np_module,
+        axis_length=int(layer_0.shape[1]),
+        tile_stride=HDRPLUS_DOWNSAMPLED_TILE_SIZE // 2,
+        pad_margin=HDRPLUS_DOWNSAMPLED_TILE_SIZE,
+    )
+    layer0_starts_x = _hdrplus_compute_tile_start_positions(
+        np_module=np_module,
+        axis_length=int(layer_0.shape[2]),
+        tile_stride=HDRPLUS_DOWNSAMPLED_TILE_SIZE // 2,
+        pad_margin=HDRPLUS_DOWNSAMPLED_TILE_SIZE,
+    )
+    layer2_starts_y = _hdrplus_compute_tile_start_positions(
+        np_module=np_module,
+        axis_length=int(layer_2.shape[1]),
+        tile_stride=HDRPLUS_DOWNSAMPLED_TILE_SIZE // 2,
+        pad_margin=HDRPLUS_DOWNSAMPLED_TILE_SIZE,
+    )
+    layer2_starts_x = _hdrplus_compute_tile_start_positions(
+        np_module=np_module,
+        axis_length=int(layer_2.shape[2]),
+        tile_stride=HDRPLUS_DOWNSAMPLED_TILE_SIZE // 2,
+        pad_margin=HDRPLUS_DOWNSAMPLED_TILE_SIZE,
+    )
+    alignments = np_module.zeros(
+        (
+            scalar_frames.shape[0],
+            len(layer0_starts_y),
+            len(layer0_starts_x),
+            2,
+        ),
+        dtype=np_module.int32,
+    )
+    zero_alignment = np_module.zeros(
+        (len(layer2_starts_y), len(layer2_starts_x), 2),
+        dtype=np_module.int32,
+    )
+    for frame_index in range(1, scalar_frames.shape[0]):
+        alignment_2 = _hdrplus_align_layer(
+            np_module=np_module,
+            reference_layer=layer_2[0],
+            alternate_layer=layer_2[frame_index],
+            prev_alignment=zero_alignment,
+            prev_min=bounds[0][0],
+            prev_max=bounds[0][1],
+            search_radius=hdrplus_options.search_radius,
+        )
+        alignment_1 = _hdrplus_align_layer(
+            np_module=np_module,
+            reference_layer=layer_1[0],
+            alternate_layer=layer_1[frame_index],
+            prev_alignment=alignment_2,
+            prev_min=bounds[1][0],
+            prev_max=bounds[1][1],
+            search_radius=hdrplus_options.search_radius,
+        )
+        alignment_0 = _hdrplus_align_layer(
+            np_module=np_module,
+            reference_layer=layer_0[0],
+            alternate_layer=layer_0[frame_index],
+            prev_alignment=alignment_1,
+            prev_min=bounds[2][0],
+            prev_max=bounds[2][1],
+            search_radius=hdrplus_options.search_radius,
+        )
+        alignments[frame_index] = (2 * alignment_0).astype(np_module.int32)
+    return alignments
+
+
+def _hdrplus_compute_temporal_weights(
+    np_module,
+    downsampled_scalar_frames,
+    alignment_offsets,
+    hdrplus_options,
+):
+    """@brief Compute HDR+ temporal tile weights against the aligned reference frame.
+
+    @details Ports `merge_temporal` from `merge.cpp`: extracts reference tiles
+    from the downsampled scalar layer, applies resolved per-tile alignment
+    offsets to alternate frames in the same layer domain, computes average tile
+    L1 distance, derives inverse-distance weights using the configurable source
+    thresholds, and adds the implicit reference weight `1.0`.
+    @param np_module {ModuleType} Imported numpy module.
+    @param downsampled_scalar_frames {object} Downsampled scalar float tensor with shape `(N,H,W)`.
+    @param alignment_offsets {object} Full-resolution signed alignment tensor with shape `(N,Ty,Tx,2)`.
+    @param hdrplus_options {HdrPlusOptions} HDR+ proxy/alignment/temporal controls.
+    @return {tuple[object, object]} `(weights, total_weight)` where `weights` has shape `(N-1,Ty,Tx)` and `total_weight` has shape `(Ty,Tx)`.
+    @satisfies REQ-112, REQ-114, REQ-128, REQ-129
+    """
+
+    reference_tiles = _hdrplus_extract_overlapping_tiles(
+        np_module=np_module,
+        frames_array=downsampled_scalar_frames[0:1],
+        tile_size=HDRPLUS_DOWNSAMPLED_TILE_SIZE,
+        tile_stride=HDRPLUS_DOWNSAMPLED_TILE_SIZE // 2,
+        pad_margin=HDRPLUS_DOWNSAMPLED_TILE_SIZE
+        + _hdrplus_compute_alignment_margin(
+            search_radius=hdrplus_options.search_radius,
+            divisor=2,
+        ),
+    )[0].astype(np_module.float32)
+    if downsampled_scalar_frames.shape[0] <= 1:
+        total_weight = np_module.ones(reference_tiles.shape[:2], dtype=np_module.float32)
         return (
-            np_module.zeros((0,) + layer_tiles.shape[1:3], dtype=np_module.float32),
+            np_module.zeros((0,) + reference_tiles.shape[:2], dtype=np_module.float32),
             total_weight,
         )
-    reference_tiles = layer_tiles[0].astype(np_module.int32)
-    alternate_tiles = layer_tiles[1:].astype(np_module.int32)
+    layer_alignment_offsets = _hdrplus_trunc_divide_int32(
+        np_module=np_module,
+        values_int32=alignment_offsets[1:],
+        divisor=2,
+    )
+    alternate_tiles = _hdrplus_extract_aligned_tiles(
+        np_module=np_module,
+        frames_array=downsampled_scalar_frames[1:],
+        tile_size=HDRPLUS_DOWNSAMPLED_TILE_SIZE,
+        tile_stride=HDRPLUS_DOWNSAMPLED_TILE_SIZE // 2,
+        pad_margin=HDRPLUS_DOWNSAMPLED_TILE_SIZE
+        + _hdrplus_compute_alignment_margin(
+            search_radius=hdrplus_options.search_radius,
+            divisor=2,
+        ),
+        alignment_offsets=layer_alignment_offsets,
+    ).astype(np_module.float32)
     distances = np_module.sum(
         np_module.abs(alternate_tiles - reference_tiles[None, ...]),
         axis=(-2, -1),
-        dtype=np_module.int64,
-    )
-    distances = (distances // 256).astype(np_module.float32)
+        dtype=np_module.float64,
+    ) / float(HDRPLUS_DOWNSAMPLED_TILE_SIZE * HDRPLUS_DOWNSAMPLED_TILE_SIZE)
     norm_dist = np_module.maximum(
         1.0,
-        (distances / HDRPLUS_TEMPORAL_FACTOR)
-        - (HDRPLUS_TEMPORAL_MIN_DIST / HDRPLUS_TEMPORAL_FACTOR),
+        (distances / hdrplus_options.temporal_factor)
+        - (hdrplus_options.temporal_min_dist / hdrplus_options.temporal_factor),
     )
-    max_norm_dist = HDRPLUS_TEMPORAL_MAX_DIST - HDRPLUS_TEMPORAL_MIN_DIST
-    weights = np_module.where(norm_dist > max_norm_dist, 0.0, 1.0 / norm_dist)
-    weights = weights.astype(np_module.float32)
+    max_norm_dist = (
+        hdrplus_options.temporal_max_dist - hdrplus_options.temporal_min_dist
+    )
+    weights = np_module.where(norm_dist > max_norm_dist, 0.0, 1.0 / norm_dist).astype(
+        np_module.float32
+    )
     total_weight = (
         np_module.sum(weights, axis=0, dtype=np_module.float32) + 1.0
     ).astype(np_module.float32)
     return (weights, total_weight)
 
 
-def _hdrplus_merge_temporal_rgb(np_module, full_tiles_rgb, weights, total_weight):
-    """@brief Merge HDR+ full-resolution tiles across temporal dimension.
+def _hdrplus_merge_temporal_rgb(
+    np_module,
+    frames_rgb_float32,
+    alignment_offsets,
+    weights,
+    total_weight,
+    hdrplus_options,
+):
+    """@brief Merge HDR+ full-resolution RGB tiles across the temporal dimension.
 
-    @details Ports the temporal accumulation step from `merge.cpp` with zero
-    alignment offsets by normalizing the reference tile and all alternate tiles
-    with shared per-tile `total_weight`, while preserving RGB `uint16` content
-    in float64 accumulation until the spatial merge stage.
+    @details Ports the temporal accumulation phase of `merge.cpp`: extracts the
+    reference `32x32` tile stack, applies resolved full-resolution alignment
+    offsets to alternate RGB frames, normalizes all contributions with the
+    shared per-tile `total_weight`, and preserves float arithmetic until the
+    spatial merge stage.
     @param np_module {ModuleType} Imported numpy module.
-    @param full_tiles_rgb {object} RGB tile tensor with shape `(N,Ty,Tx,32,32,3)`.
+    @param frames_rgb_float32 {object} RGB float tensor with shape `(N,H,W,3)`.
+    @param alignment_offsets {object} Full-resolution signed alignment tensor with shape `(N,Ty,Tx,2)`.
     @param weights {object} Alternate-frame weight tensor with shape `(N-1,Ty,Tx)`.
     @param total_weight {object} Reference-inclusive tile total weights with shape `(Ty,Tx)`.
+    @param hdrplus_options {HdrPlusOptions} HDR+ proxy/alignment/temporal controls.
     @return {object} Temporally merged RGB tile tensor with shape `(Ty,Tx,32,32,3)`.
-    @satisfies REQ-112, REQ-113
+    @satisfies REQ-112, REQ-114, REQ-129
     """
 
-    total_weight_expanded = total_weight[..., None, None, None].astype(np_module.float64)
-    merged_tiles = full_tiles_rgb[0].astype(np_module.float64) / total_weight_expanded
-    if weights.shape[0] > 0:
-        merged_tiles += np_module.sum(
-            full_tiles_rgb[1:].astype(np_module.float64)
-            * weights[..., None, None, None].astype(np_module.float64),
-            axis=0,
-            dtype=np_module.float64,
-        ) / total_weight_expanded
-    return merged_tiles
+    pad_margin = HDRPLUS_TILE_SIZE + _hdrplus_compute_alignment_margin(
+        search_radius=hdrplus_options.search_radius,
+    )
+    reference_tiles = _hdrplus_extract_overlapping_tiles(
+        np_module=np_module,
+        frames_array=frames_rgb_float32[0:1],
+        tile_size=HDRPLUS_TILE_SIZE,
+        tile_stride=HDRPLUS_TILE_STRIDE,
+        pad_margin=pad_margin,
+    )[0].astype(np_module.float32)
+    total_weight_expanded = total_weight[..., None, None, None].astype(np_module.float32)
+    merged_tiles = reference_tiles / total_weight_expanded
+    if frames_rgb_float32.shape[0] <= 1:
+        return merged_tiles.astype(np_module.float32)
+    alternate_tiles = _hdrplus_extract_aligned_tiles(
+        np_module=np_module,
+        frames_array=frames_rgb_float32[1:],
+        tile_size=HDRPLUS_TILE_SIZE,
+        tile_stride=HDRPLUS_TILE_STRIDE,
+        pad_margin=pad_margin,
+        alignment_offsets=alignment_offsets[1:],
+    ).astype(np_module.float32)
+    merged_tiles += np_module.sum(
+        alternate_tiles * weights[..., None, None, None],
+        axis=0,
+        dtype=np_module.float32,
+    ) / total_weight_expanded
+    return merged_tiles.astype(np_module.float32)
 
 
 def _hdrplus_merge_spatial_rgb(np_module, temporal_tiles, width, height):
@@ -3970,23 +4655,30 @@ def _hdrplus_merge_spatial_rgb(np_module, temporal_tiles, width, height):
     ).astype(np_module.uint16)
 
 
-def _run_hdr_plus_merge(bracket_paths, output_hdr_tiff, imageio_module, np_module):
+def _run_hdr_plus_merge(
+    bracket_paths,
+    output_hdr_tiff,
+    imageio_module,
+    np_module,
+    hdrplus_options,
+):
     """@brief Merge bracket TIFF files into one RGB uint16 TIFF via HDR+.
 
-    @details Ports the source HDR+ merge pipeline from `merge.cpp` and
-    `util.cpp` while intentionally omitting alignment stages per integration
-    requirements: reorders bracket inputs into reference-first frame order
-    `(ev_zero, ev_minus, ev_plus)`, computes scalar merge proxy from aligned RGB
-    TIFFs, executes source `box_down2`, source temporal tile weighting with zero
-    offsets, source temporal full-resolution tile accumulation, and source
-    raised-cosine spatial blending, then writes one merged RGB `uint16` TIFF.
+    @details Ports the source HDR+ merge pipeline from `align.cpp`, `merge.cpp`,
+    and `util.cpp` onto repository RGB TIFF brackets: reorders inputs into
+    reference-first frame order `(ev_zero, ev_minus, ev_plus)`, derives the
+    configured scalar proxy, executes hierarchical alignment, executes source
+    `box_down2`, computes aligned temporal weights, accumulates aligned RGB
+    tiles in float domain, performs source raised-cosine spatial blending, and
+    writes one merged RGB `uint16` TIFF.
     @param bracket_paths {list[Path]} Temporary bracket TIFF paths generated from RAW.
     @param output_hdr_tiff {Path} Output HDR TIFF target path.
     @param imageio_module {ModuleType} Imported imageio module with `imread` and `imwrite`.
     @param np_module {ModuleType} Imported numpy module.
+    @param hdrplus_options {HdrPlusOptions} HDR+ proxy/alignment/temporal controls.
     @return {None} Side effects only.
     @exception RuntimeError Raised when bracket payloads are invalid.
-    @satisfies REQ-077, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115
+    @satisfies REQ-077, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-129
     """
 
     ordered_paths = _order_hdr_plus_reference_paths(bracket_paths)
@@ -4001,28 +4693,34 @@ def _run_hdr_plus_merge(bracket_paths, output_hdr_tiff, imageio_module, np_modul
     frames_rgb_uint16 = np_module.stack(frames_rgb_uint16, axis=0)
     if frames_rgb_uint16.shape[0] < 2:
         raise RuntimeError("HDR+ merge requires at least two aligned frames")
-    scalar_frames = _hdrplus_luminance_proxy_uint16(np_module, frames_rgb_uint16)
-    downsampled_scalar_frames = _hdrplus_box_down2_uint16(np_module, scalar_frames)
-    scalar_tiles = _hdrplus_extract_overlapping_tiles(
+    frames_rgb_float32 = frames_rgb_uint16.astype(np_module.float32)
+    scalar_frames = _hdrplus_build_scalar_proxy_float32(
         np_module=np_module,
-        frames_array=downsampled_scalar_frames,
-        tile_size=HDRPLUS_DOWNSAMPLED_TILE_SIZE,
-        tile_stride=HDRPLUS_DOWNSAMPLED_TILE_SIZE // 2,
-        pad_margin=HDRPLUS_DOWNSAMPLED_TILE_SIZE,
+        frames_rgb_uint16=frames_rgb_uint16,
+        hdrplus_options=hdrplus_options,
     )
-    full_tiles = _hdrplus_extract_overlapping_tiles(
+    alignment_offsets = _hdrplus_align_layers(
         np_module=np_module,
-        frames_array=frames_rgb_uint16,
-        tile_size=HDRPLUS_TILE_SIZE,
-        tile_stride=HDRPLUS_TILE_STRIDE,
-        pad_margin=HDRPLUS_TILE_SIZE,
+        scalar_frames=scalar_frames,
+        hdrplus_options=hdrplus_options,
     )
-    weights, total_weight = _hdrplus_compute_temporal_weights(np_module, scalar_tiles)
+    downsampled_scalar_frames = _hdrplus_box_down2_float32(
+        np_module=np_module,
+        frames_float32=scalar_frames,
+    )
+    weights, total_weight = _hdrplus_compute_temporal_weights(
+        np_module=np_module,
+        downsampled_scalar_frames=downsampled_scalar_frames,
+        alignment_offsets=alignment_offsets,
+        hdrplus_options=hdrplus_options,
+    )
     temporal_tiles = _hdrplus_merge_temporal_rgb(
         np_module=np_module,
-        full_tiles_rgb=full_tiles,
+        frames_rgb_float32=frames_rgb_float32,
+        alignment_offsets=alignment_offsets,
         weights=weights,
         total_weight=total_weight,
+        hdrplus_options=hdrplus_options,
     )
     merged_rgb_uint16 = _hdrplus_merge_spatial_rgb(
         np_module=np_module,
@@ -6296,7 +6994,7 @@ def run(args):
     artifact cleanup through isolated temporary directory lifecycle.
     @param args {list[str]} Command argument vector excluding command token.
     @return {int} `0` on success; `1` on parse/validation/dependency/processing failure.
-    @satisfies REQ-055, REQ-056, REQ-057, REQ-058, REQ-059, REQ-060, REQ-061, REQ-062, REQ-064, REQ-065, REQ-066, REQ-067, REQ-068, REQ-069, REQ-071, REQ-072, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-079, REQ-080, REQ-081, REQ-088, REQ-089, REQ-090, REQ-091, REQ-092, REQ-093, REQ-094, REQ-095, REQ-096, REQ-097, REQ-098, REQ-100, REQ-101, REQ-102, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115
+    @satisfies REQ-055, REQ-056, REQ-057, REQ-058, REQ-059, REQ-060, REQ-061, REQ-062, REQ-064, REQ-065, REQ-066, REQ-067, REQ-068, REQ-069, REQ-071, REQ-072, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-079, REQ-080, REQ-081, REQ-088, REQ-089, REQ-090, REQ-091, REQ-092, REQ-093, REQ-094, REQ-095, REQ-096, REQ-097, REQ-098, REQ-100, REQ-101, REQ-102, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-127, REQ-128, REQ-131
     """
 
     if not _is_supported_runtime_os():
@@ -6317,6 +7015,7 @@ def run(args):
         enable_opencv,
         luminance_options,
         opencv_merge_options,
+        hdrplus_options,
         enable_hdr_plus,
         ev_zero,
         auto_zero_enabled,
@@ -6452,7 +7151,12 @@ def run(args):
     elif enable_hdr_plus:
         print_info(
             "HDR backend: HDR+ "
-            "(reference=ev_zero, temporal=tile L1 inverse-distance, spatial=raised-cosine)"
+            f"(proxy={hdrplus_options.proxy_mode}, "
+            f"searchRadius={hdrplus_options.search_radius}, "
+            f"temporalFactor={hdrplus_options.temporal_factor:g}, "
+            f"temporalMinDist={hdrplus_options.temporal_min_dist:g}, "
+            f"temporalMaxDist={hdrplus_options.temporal_max_dist:g}, "
+            "reference=ev_zero, temporal=tile L1 inverse-distance, spatial=raised-cosine)"
         )
     else:
         print_info("HDR backend: enfuse")
@@ -6554,6 +7258,7 @@ def run(args):
                     output_hdr_tiff=merged_tiff,
                     imageio_module=imageio_module,
                     np_module=numpy_module,
+                    hdrplus_options=hdrplus_options,
                 )
             else:
                 _run_enfuse(bracket_paths=bracket_paths, merged_tiff=merged_tiff)

@@ -174,10 +174,16 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-109**: MUST normalize Debevec HDR radiance in float domain using robust luminance white-point percentile and blend it with Mertens fusion before writing merged TIFF.
 - **REQ-110**: MUST preserve 16-bit-per-channel processing in OpenCV backend by executing merge/blend in float domain and converting to `uint16` once when writing merged TIFF.
 - **REQ-111**: MUST accept `--enable-hdr-plus` as HDR backend selector and enforce backend exclusivity across `--enable-enfuse`, `--enable-luminance`, `--enable-opencv`, and `--enable-hdr-plus`.
-- **REQ-112**: MUST execute HDR+ backend in source step order `box_down2 -> temporal merge -> spatial merge`, using `ev_zero` as reference frame and zero alignment offsets for all tiles.
-- **REQ-113**: MUST compute HDR+ temporal alternate-frame weights from per-tile L1 distance over 16x16 downsampled tiles with `factor=8`, `min_dist=10`, `max_dist=300`, and reference-inclusive normalization.
-- **REQ-114**: MUST execute HDR+ spatial blending over half-overlapped 32x32 tiles using raised-cosine weights and write one RGB `uint16` merged TIFF without intermediate `uint8` quantization.
-- **REQ-115**: MUST adapt single-channel HDR+ merge input to aligned RGB bracket TIFFs by deriving one deterministic scalar merge proxy from each RGB pixel before `box_down2` and temporal weighting.
+- **REQ-112**: MUST execute HDR+ backend in source step order `scalar proxy -> hierarchical alignment -> box_down2 -> temporal merge -> spatial merge`, using `ev_zero` as reference frame.
+- **REQ-113**: MUST compute three-level HDR+ alignment on the scalar proxy with `box_down2`, two `gauss_down4` levels, per-tile L1 minimization over offsets `[-4,+3]`, and final full-resolution offset lift by `2`.
+- **REQ-114**: MUST compute HDR+ temporal alternate-frame weights from aligned 16x16 downsampled tiles with `factor=8`, `min_dist=10`, `max_dist=300`, hard cutoff, and reference-inclusive normalization.
+- **REQ-115**: MUST execute HDR+ spatial blending over aligned half-overlapped 32x32 tiles using raised-cosine weights and write one RGB `uint16` merged TIFF without intermediate `uint8` quantization.
+- **REQ-126**: MUST adapt RGB bracket TIFFs to the single-channel HDR+ source domain by deriving one deterministic scalar proxy with default mode `rggb`.
+- **REQ-127**: MUST expose HDR+ CLI knobs `--hdrplus-proxy-mode`, `--hdrplus-search-radius`, `--hdrplus-temporal-factor`, `--hdrplus-temporal-min-dist`, and `--hdrplus-temporal-max-dist`.
+- **REQ-128**: MUST default HDR+ CLI knobs to `proxy_mode=rggb`, `search_radius=4`, `temporal_factor=8`, `temporal_min_dist=10`, and `temporal_max_dist=300`.
+- **REQ-129**: MUST execute HDR+ alignment and merge arithmetic in float domain while preserving `uint16` bracket loads and `uint16` merged TIFF output.
+- **REQ-130**: MUST reject HDR+ knob values when `search_radius<1`, `temporal_factor<=0`, `temporal_min_dist<0`, or `temporal_max_dist<=temporal_min_dist`.
+- **REQ-131**: MUST print resolved HDR+ proxy, alignment, and temporal knob values in deterministic runtime diagnostics.
 
 ## 4. Test Requirements
 
@@ -201,6 +207,11 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-018**: MUST verify `Color Propagation` and `Inpaint Opposed` selectors produce deterministic RGB `uint16` outputs and preserve float-only internal math within the auto-levels stage.
 - **TST-019**: MUST verify auto-brightness CLI parsing exposes every control from the original `TonemapParams` with deterministic defaults and validation.
 - **TST-020**: MUST verify auto-brightness clipping proxies use normalized thresholds `1/255` and `254/255` and key auto-selection uses the original base values and boost rules.
+- **TST-021**: MUST verify `_parse_run_options` accepts HDR+ knob overrides and rejects invalid HDR+ knob combinations with deterministic parse errors.
+- **TST-022**: MUST verify HDR+ scalar proxy mode `rggb` produces deterministic green-weighted scalar conversion from RGB `uint16` input.
+- **TST-023**: MUST verify HDR+ hierarchical alignment resolves non-zero alternate-frame tile offsets for translated inputs and keeps reference offsets at zero.
+- **TST-024**: MUST verify HDR+ temporal weighting and RGB accumulation apply resolved alignment offsets before distance evaluation and tile merge.
+- **TST-025**: MUST verify HDR+ merge preserves float internal arithmetic and `uint16` input/output boundaries.
 
 ## 5. Evidence Matrix
 
@@ -297,10 +308,16 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-109 | `src/dng2jpg/dng2jpg.py::_normalize_debevec_hdr_to_unit_range`, `_run_opencv_hdr_merge`; excerpt: applies robust luminance white-point percentile normalization and blends Debevec with Mertens in float domain. |
 | REQ-110 | `src/dng2jpg/dng2jpg.py::_run_opencv_hdr_merge`; excerpt: maintains float-domain processing and performs one float-to-uint16 conversion for merged TIFF write. |
 | REQ-111 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `print_help`, `run`; excerpt: accepts `--enable-hdr-plus`, documents backend, and routes execution to HDR+ merge path. |
-| REQ-112 | `src/dng2jpg/dng2jpg.py::_order_hdr_plus_reference_paths`, `_hdrplus_box_down2_uint16`, `_hdrplus_merge_temporal_rgb`, `_hdrplus_merge_spatial_rgb`, `_run_hdr_plus_merge`; excerpt: executes source order `box_down2 -> temporal merge -> spatial merge` with `ev_zero` reference and no alignment offsets. |
-| REQ-113 | `src/dng2jpg/dng2jpg.py::_hdrplus_compute_temporal_weights`; excerpt: applies 16x16 tile L1 distance with `factor=8`, `min_dist=10`, `max_dist=300`, and reference-inclusive normalization. |
-| REQ-114 | `src/dng2jpg/dng2jpg.py::_hdrplus_merge_spatial_rgb`, `_run_hdr_plus_merge`; excerpt: blends half-overlapped 32x32 tiles with raised-cosine weights and writes RGB `uint16` merged TIFF. |
-| REQ-115 | `src/dng2jpg/dng2jpg.py::_hdrplus_luminance_proxy_uint16`, `_run_hdr_plus_merge`; excerpt: derives deterministic scalar merge proxy from aligned RGB bracket TIFFs before downsampling and weighting. |
+| REQ-112 | `src/dng2jpg/dng2jpg.py::_order_hdr_plus_reference_paths`, `_hdrplus_build_scalar_proxy_float32`, `_hdrplus_align_layers`, `_hdrplus_box_down2_float32`, `_hdrplus_compute_temporal_weights`, `_hdrplus_merge_temporal_rgb`, `_hdrplus_merge_spatial_rgb`, `_run_hdr_plus_merge`; excerpt: executes source order `scalar proxy -> hierarchical alignment -> box_down2 -> temporal merge -> spatial merge` with `ev_zero` reference. |
+| REQ-113 | `src/dng2jpg/dng2jpg.py::_hdrplus_align_layer`, `_hdrplus_align_layers`; excerpt: applies three-level hierarchical tile alignment with `box_down2`, two `gauss_down4` levels, search offsets `[-4,+3]`, and final full-resolution offset lift. |
+| REQ-114 | `src/dng2jpg/dng2jpg.py::_hdrplus_compute_temporal_weights`, `_hdrplus_merge_temporal_rgb`; excerpt: applies aligned 16x16 tile L1 weights with `factor=8`, `min_dist=10`, `max_dist=300`, cutoff, and reference-inclusive normalization. |
+| REQ-115 | `src/dng2jpg/dng2jpg.py::_hdrplus_merge_spatial_rgb`, `_run_hdr_plus_merge`; excerpt: blends aligned half-overlapped 32x32 tiles with raised-cosine weights and writes RGB `uint16` merged TIFF. |
+| REQ-126 | `src/dng2jpg/dng2jpg.py::HdrPlusOptions`, `_parse_hdrplus_options`, `_hdrplus_build_scalar_proxy_float32`; excerpt: adapts RGB bracket TIFFs into deterministic scalar proxy with default `rggb` mode. |
+| REQ-127 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `print_help`, `HdrPlusOptions`; excerpt: exposes HDR+ CLI knobs for proxy, search radius, and temporal weighting. |
+| REQ-128 | `src/dng2jpg/dng2jpg.py::HdrPlusOptions`; excerpt: stores source-matching default values for HDR+ proxy, alignment, and temporal weights. |
+| REQ-129 | `src/dng2jpg/dng2jpg.py::_run_hdr_plus_merge`, `_hdrplus_align_layers`, `_hdrplus_compute_temporal_weights`, `_hdrplus_merge_temporal_rgb`; excerpt: preserves float internals with `uint16` input/output boundaries. |
+| REQ-130 | `src/dng2jpg/dng2jpg.py::_parse_hdrplus_options`, `_parse_run_options`; excerpt: rejects invalid HDR+ knob ranges and inconsistent temporal thresholds. |
+| REQ-131 | `src/dng2jpg/dng2jpg.py::run`; excerpt: prints resolved HDR+ proxy, alignment, and temporal knob diagnostics. |
 | TST-001 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; branches for selector exclusivity and deterministic parse failures. |
 | TST-002 | `src/dng2jpg/dng2jpg.py::run`; branches for unsupported OS and dependency failures returning `1`. |
 | TST-003 | `src/dng2jpg/dng2jpg.py::run`; success branch prints `HDR JPG created: ...` and returns `0`. |
@@ -320,3 +337,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | TST-018 | `tests/test_uint16_postprocess_pipeline.py::test_apply_auto_levels_color_methods_preserve_uint16_pipeline`; verifies deterministic `Color Propagation` and `Inpaint Opposed` RGB uint16 execution. |
 | TST-019 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_accepts_all_original_auto_brightness_controls`; verifies auto-brightness parser coverage for every original control. |
 | TST-020 | `tests/test_uint16_postprocess_pipeline.py::test_analyze_luminance_key_uses_original_thresholds_and_auto_boost_rules`; verifies normalized clipping proxies and key auto-selection rules. |
+| TST-021 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_accepts_hdrplus_controls`, `test_parse_run_options_rejects_invalid_hdrplus_controls`; verifies HDR+ CLI control parsing and validation. |
+| TST-022 | `tests/test_uint16_postprocess_pipeline.py::test_hdrplus_proxy_rggb_matches_green_weighted_scalar`; verifies deterministic `rggb` scalar proxy conversion. |
+| TST-023 | `tests/test_uint16_postprocess_pipeline.py::test_hdrplus_align_layers_detects_translated_alternate_frame`; verifies non-zero alternate-frame alignment and zero reference offsets. |
+| TST-024 | `tests/test_uint16_postprocess_pipeline.py::test_hdrplus_temporal_merge_uses_alignment_offsets`; verifies resolved alignment offsets affect temporal weighting and RGB accumulation. |
+| TST-025 | `tests/test_uint16_postprocess_pipeline.py::test_run_hdr_plus_merge_preserves_float_internal_and_uint16_io`; verifies HDR+ float internals with `uint16` image boundaries. |
