@@ -111,7 +111,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-009**: MUST compute adaptive EV from preview luminance statistics when `--auto-ev` resolves to `enable` and `--ev` is not specified, then clamp it to supported selectors.
 - **REQ-010**: MUST extract brackets `ev_minus`, `ev_zero`, and `ev_plus` with `rawpy.postprocess output_bps=16`, convert each bracket to normalized OpenCV-compatible RGB float `[0,1]`, and expose only that float triplet to downstream merge stages.
 - **REQ-011**: MUST run `enfuse` with LZW compression for enfuse backend and `luminance-hdr-cli` with deterministic HDR/TMO arguments for luminance backend, confining any required 16-bit TIFF intermediates to the backend step and returning normalized RGB float output.
-- **REQ-012**: MUST exchange normalized OpenCV-compatible RGB float tensors `[0,1]` between merge, auto-brightness, auto-levels, static postprocess, auto-adjust, and final-save preparation stages, and MUST perform exactly one float-to-uint8 quantization immediately before final JPEG save.
+- **REQ-012**: MUST exchange normalized OpenCV-compatible RGB float tensors `[0,1]` between merge, auto-brightness, auto-levels, static postprocess, auto-adjust, and final-save preparation stages.
 - **REQ-013**: MUST execute optional auto-brightness, optional auto-levels, post-gamma, brightness, contrast, and saturation in this exact order on RGB float stage interfaces before any optional auto-adjust stage.
 - **REQ-106**: MUST execute optional auto-adjust stage after static postprocess and before final JPEG quantization/write, preserve RGB float input/output interfaces, and confine any required float-to-uint16 or TIFF16 conversions to the auto-adjust step itself.
 - **REQ-014**: MUST synchronize output file timestamps from EXIF datetime when EXIF datetime metadata is available.
@@ -184,6 +184,9 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-129**: MUST execute HDR+ alignment and merge arithmetic in float domain and confine any required uint16 adaptation to the HDR+ step while preserving RGB float input/output interfaces.
 - **REQ-130**: MUST reject HDR+ knob values when `search_radius<1`, `temporal_factor<=0`, `temporal_min_dist<0`, or `temporal_max_dist<=temporal_min_dist`.
 - **REQ-131**: MUST print resolved HDR+ proxy, alignment, and temporal knob values in deterministic runtime diagnostics.
+- **REQ-132**: MUST execute static postprocess gamma, brightness, contrast, and saturation directly on RGB float tensors without uint16 or other quantized intermediates.
+- **REQ-133**: MUST perform exactly one float-to-uint8 quantization immediately before final JPEG save.
+- **REQ-134**: MUST preserve legacy post-gamma, brightness, contrast, and saturation equations and parameter semantics in the float-domain port; output differences MUST derive only from removed quantization.
 
 ## 4. Test Requirements
 
@@ -212,6 +215,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-023**: MUST verify HDR+ hierarchical alignment resolves non-zero alternate-frame tile offsets for translated inputs and keeps reference offsets at zero.
 - **TST-024**: MUST verify HDR+ temporal weighting and RGB accumulation apply resolved alignment offsets before distance evaluation and tile merge.
 - **TST-025**: MUST verify HDR+ merge preserves float internal arithmetic and float input/output boundaries.
+- **TST-026**: MUST verify `_apply_static_postprocess_float` preserves float I/O and does not call uint16 adaptation helpers or legacy uint16 static-stage helpers.
+- **TST-027**: MUST verify float-domain static postprocess matches legacy gamma, brightness, contrast, and saturation outputs within quantization-only tolerance on deterministic fixtures.
 
 ## 5. Evidence Matrix
 
@@ -246,7 +251,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-009 | `src/dng2jpg/dng2jpg.py::_resolve_ev_value`, `_compute_auto_ev_value_from_stats`; excerpt: adaptive EV from preview stats with clamp. |
 | REQ-010 | `src/dng2jpg/dng2jpg.py::_extract_bracket_images_float`; excerpt: calls `rawpy.postprocess(..., output_bps=16)`, normalizes to RGB float `[0,1]`, and returns ordered `ev_minus`, `ev_zero`, `ev_plus` bracket tensors. |
 | REQ-011 | `src/dng2jpg/dng2jpg.py::_run_enfuse`, `_run_luminance_hdr_cli`; excerpt: `--compression=lzw`, deterministic luminance args, and `--ldrTiff 16b`. |
-| REQ-012 | `src/dng2jpg/dng2jpg.py::_encode_jpg`; excerpt: gamma LUT + brightness/contrast/saturation + quality mapping save flow. |
+| REQ-012 | `src/dng2jpg/dng2jpg.py::_encode_jpg`, `_apply_static_postprocess_float`; excerpt: keeps merge/postprocess/auto-adjust/final-save buffers on normalized RGB float interfaces. |
 | REQ-013 | `src/dng2jpg/dng2jpg.py::_encode_jpg`; excerpt: auto-brightness executes before auto-levels and postprocess factors; optional auto-adjust executes before final JPEG save. |
 | REQ-014 | `src/dng2jpg/dng2jpg.py::_sync_output_file_timestamps_from_exif`; excerpt: applies `os.utime` when EXIF timestamp exists. |
 | REQ-015 | `src/dng2jpg/dng2jpg.py::run`; excerpt: parse/dependency/processing failures return `1`, success returns `0`. |
@@ -318,6 +323,9 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-129 | `src/dng2jpg/dng2jpg.py::_run_hdr_plus_merge`, `_hdrplus_align_layers`, `_hdrplus_compute_temporal_weights`, `_hdrplus_merge_temporal_rgb`; excerpt: preserves float internals with `uint16` input/output boundaries. |
 | REQ-130 | `src/dng2jpg/dng2jpg.py::_parse_hdrplus_options`, `_parse_run_options`; excerpt: rejects invalid HDR+ knob ranges and inconsistent temporal thresholds. |
 | REQ-131 | `src/dng2jpg/dng2jpg.py::run`; excerpt: prints resolved HDR+ proxy, alignment, and temporal knob diagnostics. |
+| REQ-132 | `src/dng2jpg/dng2jpg.py::_apply_static_postprocess_float`, `_apply_post_gamma_float`, `_apply_brightness_float`, `_apply_contrast_float`, `_apply_saturation_float`; excerpt: executes static postprocess directly on RGB float tensors without quantized intermediates. |
+| REQ-133 | `src/dng2jpg/dng2jpg.py::_encode_jpg`; excerpt: performs the only float-to-uint8 quantization immediately before Pillow JPEG save. |
+| REQ-134 | `src/dng2jpg/dng2jpg.py::_apply_post_gamma_float`, `_apply_brightness_float`, `_apply_contrast_float`, `_apply_saturation_float`; excerpt: preserves the legacy transfer equations and parameter semantics in float domain. |
 | TST-001 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; branches for exposure precedence, hdr-merge parsing, and deterministic parse failures. |
 | TST-002 | `src/dng2jpg/dng2jpg.py::run`; branches for unsupported OS and dependency failures returning `1`. |
 | TST-003 | `src/dng2jpg/dng2jpg.py::run`; success branch prints `HDR JPG created: ...` and returns `0`. |
@@ -329,6 +337,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | TST-009 | `.github/workflows/release-uvx.yml`; release job condition depends on `is_master` gate output. |
 | TST-010 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; branch checks for `--auto-levels <enable|disable>` coupling and `--al-*` knob validations. |
 | TST-011 | `tests/test_uint16_postprocess_pipeline.py::test_apply_auto_brightness_rgb_float_executes_original_stage_order`; verifies float-interface auto-brightness stage order, optional desaturation, and optional CLAHE local contrast. |
+| TST-012 | `tests/test_uint16_postprocess_pipeline.py::test_encode_jpg_quantizes_once_at_final_boundary`; verifies one final float-to-uint8 conversion at the JPEG boundary. |
 | TST-013 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_accepts_hdr_merge_opencv_backend`, `test_parse_run_options_rejects_unknown_hdr_merge_backend`, `test_parse_run_options_defaults_hdr_merge_to_opencv`; validates hdr-merge selection, default, and invalid-value rejection. |
 | TST-014 | `tests/test_uint16_postprocess_pipeline.py::test_build_ev_times_from_ev_zero_and_delta_matches_bracket_sequence`; verifies deterministic stop-space EV-time sequence generation. |
 | TST-015 | `tests/test_uint16_postprocess_pipeline.py::test_normalize_debevec_hdr_to_unit_range_clamps_to_valid_interval`; verifies Debevec normalization clamps float output to `[0,1]`. |
@@ -342,3 +351,5 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | TST-023 | `tests/test_uint16_postprocess_pipeline.py::test_hdrplus_align_layers_detects_translated_alternate_frame`; verifies non-zero alternate-frame alignment and zero reference offsets. |
 | TST-024 | `tests/test_uint16_postprocess_pipeline.py::test_hdrplus_temporal_merge_uses_alignment_offsets`; verifies resolved alignment offsets affect temporal weighting and RGB accumulation. |
 | TST-025 | `tests/test_uint16_postprocess_pipeline.py::test_run_hdr_plus_merge_preserves_float_internal_and_uint16_io`; verifies HDR+ float internals with `uint16` image boundaries. |
+| TST-026 | `tests/test_uint16_postprocess_pipeline.py::test_apply_static_postprocess_float_does_not_call_uint16_conversion`; verifies static postprocess avoids uint16 adaptation helpers. |
+| TST-027 | `tests/test_uint16_postprocess_pipeline.py::test_apply_static_postprocess_float_matches_legacy_within_quantization_tolerance`; verifies float-domain static postprocess remains within quantization-only deviation from legacy output. |

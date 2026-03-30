@@ -7,6 +7,7 @@ import importlib.util
 from dataclasses import dataclass
 from pathlib import Path
 import sys
+from typing import Protocol
 
 import numpy as np
 
@@ -152,6 +153,15 @@ class _FakeOpenCvModule:
         return True
 
 
+class _StaticPostprocessOptionsLike(Protocol):
+    """Structural type for static postprocess option access in test helpers."""
+
+    post_gamma: float
+    brightness: float
+    contrast: float
+    saturation: float
+
+
 def _build_postprocess_options():
     return dng2jpg_module.PostprocessOptions(
         post_gamma=1.07,
@@ -163,6 +173,60 @@ def _build_postprocess_options():
         auto_levels_enabled=False,
         auto_adjust_mode=None,
     )
+
+
+def _legacy_static_postprocess_quantized_reference(
+    image_rgb_float: np.ndarray,
+    postprocess_options: _StaticPostprocessOptionsLike,
+) -> np.ndarray:
+    """Run the pre-refactor quantized static postprocess for comparison tests."""
+
+    image_u16 = np.clip(np.round(np.clip(image_rgb_float, 0.0, 1.0) * 65535.0), 0.0, 65535.0)
+    image_u16 = image_u16.astype(np.uint16)
+    if postprocess_options.post_gamma != 1.0:
+        value_u16 = np.arange(65536, dtype=np.float64)
+        lut_u16 = np.clip(
+            np.round(
+                np.power(value_u16 / 65535.0, 1.0 / float(postprocess_options.post_gamma))
+                * 65535.0
+            ),
+            0.0,
+            65535.0,
+        ).astype(np.uint16)
+        image_u16 = lut_u16[image_u16.astype(np.int32)]
+    if postprocess_options.brightness != 1.0:
+        image_u16 = np.clip(
+            np.round(image_u16.astype(np.float64) * float(postprocess_options.brightness)),
+            0.0,
+            65535.0,
+        ).astype(np.uint16)
+    if postprocess_options.contrast != 1.0:
+        image_float = image_u16.astype(np.float64)
+        channel_mean = np.mean(image_float, axis=(0, 1), keepdims=True)
+        image_u16 = np.clip(
+            np.round(
+                channel_mean
+                + float(postprocess_options.contrast) * (image_float - channel_mean)
+            ),
+            0.0,
+            65535.0,
+        ).astype(np.uint16)
+    if postprocess_options.saturation != 1.0:
+        image_float = image_u16.astype(np.float64)
+        grayscale = (
+            (0.2126 * image_float[:, :, 0])
+            + (0.7152 * image_float[:, :, 1])
+            + (0.0722 * image_float[:, :, 2])
+        )[:, :, None]
+        image_u16 = np.clip(
+            np.round(
+                grayscale
+                + float(postprocess_options.saturation) * (image_float - grayscale)
+            ),
+            0.0,
+            65535.0,
+        ).astype(np.uint16)
+    return image_u16.astype(np.float32) / 65535.0
 
 
 def _reflect_shift_2d(image: np.ndarray, shift_y: int, shift_x: int) -> np.ndarray:
@@ -189,35 +253,47 @@ def _reflect_shift_rgb(image: np.ndarray, shift_y: int, shift_x: int) -> np.ndar
     return np.stack(shifted_channels, axis=-1).astype(image.dtype, copy=False)
 
 
-def test_apply_brightness_uint16_keeps_16bit_gradation_without_u8_lift() -> None:
-    """Reproducer: static brightness must not quantize to `uint8*257` bins."""
+def test_apply_brightness_float_preserves_sub_u16_precision() -> None:
+    """Float brightness stage must avoid snapping outputs onto uint16 code values."""
 
-    image_rgb_uint16 = np.array(
-        [[[1000, 2001, 3002], [12345, 23456, 34567]]],
-        dtype=np.uint16,
+    image_rgb_float = np.array(
+        [[[0.1234567, 0.2345678, 0.3456789], [0.4567891, 0.5678912, 0.6789123]]],
+        dtype=np.float32,
     )
-    output = dng2jpg_module._apply_brightness_uint16(  # pylint: disable=protected-access
+    output = dng2jpg_module._apply_brightness_float(  # pylint: disable=protected-access
         np_module=np,
-        image_rgb_uint16=image_rgb_uint16,
+        image_rgb_float=image_rgb_float,
         brightness_factor=1.11,
     )
-    assert output.dtype == np.uint16
-    assert output.shape == image_rgb_uint16.shape
-    assert np.any(output % 257 != 0), "Detected unexpected uint8->uint16 lift quantization"
+    assert output.dtype == np.float32
+    assert output.shape == image_rgb_float.shape
+    np.testing.assert_allclose(
+        output,
+        np.clip(image_rgb_float.astype(np.float64) * 1.11, 0.0, 1.0).astype(np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    distance_to_u16_grid = np.abs(
+        (output.astype(np.float64) * 65535.0)
+        - np.round(output.astype(np.float64) * 65535.0)
+    )
+    assert np.any(distance_to_u16_grid > 1e-3)
 
 
-def test_apply_static_postprocess_float_does_not_call_uint8_conversion(monkeypatch) -> None:
-    """Static postprocess stage must keep float interfaces and avoid uint8 conversion."""
+def test_apply_static_postprocess_float_does_not_call_uint16_conversion(
+    monkeypatch,
+) -> None:
+    """Static postprocess stage must keep float interfaces and avoid uint16 conversion."""
 
     image_rgb_float = np.array(
         [[[4096, 8192, 16384], [11111, 22222, 33333]]],
         dtype=np.float32,
     ) / 65535.0
 
-    def _fail_uint8_conversion(**_kwargs):
-        raise AssertionError("Static postprocess called _to_uint8_image_array unexpectedly")
+    def _fail_uint16_conversion(**_kwargs):
+        raise AssertionError("Static postprocess called _to_uint16_image_array unexpectedly")
 
-    monkeypatch.setattr(dng2jpg_module, "_to_uint8_image_array", _fail_uint8_conversion)
+    monkeypatch.setattr(dng2jpg_module, "_to_uint16_image_array", _fail_uint16_conversion)
     output = dng2jpg_module._apply_static_postprocess_float(  # pylint: disable=protected-access
         np_module=np,
         image_rgb_float=image_rgb_float,
@@ -225,6 +301,60 @@ def test_apply_static_postprocess_float_does_not_call_uint8_conversion(monkeypat
     )
     assert output.dtype == np.float32
     assert output.shape == image_rgb_float.shape
+
+
+def test_apply_static_postprocess_float_matches_legacy_within_quantization_tolerance() -> None:
+    """Float static postprocess must preserve legacy transfer semantics."""
+
+    image_rgb_float = np.array(
+        [
+            [[0.03125, 0.125, 0.21875], [0.34375, 0.4375, 0.53125]],
+            [[0.65625, 0.75, 0.84375], [0.96875, 0.59375, 0.40625]],
+        ],
+        dtype=np.float32,
+    )
+    postprocess_options = dng2jpg_module.PostprocessOptions(
+        post_gamma=1.07,
+        brightness=1.13,
+        contrast=1.11,
+        saturation=1.09,
+        jpg_compression=25,
+        auto_brightness_enabled=False,
+        auto_levels_enabled=False,
+    )
+
+    output = dng2jpg_module._apply_static_postprocess_float(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_float=image_rgb_float,
+        postprocess_options=postprocess_options,
+    )
+
+    expected_float = np.power(image_rgb_float.astype(np.float64), 1.0 / 1.07)
+    expected_float = np.clip(expected_float * 1.13, 0.0, 1.0)
+    channel_mean = np.mean(expected_float, axis=(0, 1), keepdims=True)
+    expected_float = np.clip(
+        channel_mean + 1.11 * (expected_float - channel_mean),
+        0.0,
+        1.0,
+    )
+    grayscale = (
+        (0.2126 * expected_float[:, :, 0])
+        + (0.7152 * expected_float[:, :, 1])
+        + (0.0722 * expected_float[:, :, 2])
+    )[:, :, None]
+    expected_float = np.clip(
+        grayscale + 1.09 * (expected_float - grayscale),
+        0.0,
+        1.0,
+    ).astype(np.float32)
+    legacy_quantized = _legacy_static_postprocess_quantized_reference(
+        image_rgb_float=image_rgb_float,
+        postprocess_options=postprocess_options,
+    )
+
+    np.testing.assert_allclose(output, expected_float, rtol=1e-6, atol=1e-6)
+    max_delta = float(np.max(np.abs(output.astype(np.float64) - legacy_quantized)))
+    assert max_delta <= (6.0 / 65535.0), max_delta
 
 
 def test_encode_jpg_quantizes_once_at_final_boundary(monkeypatch, tmp_path) -> None:
