@@ -48,12 +48,14 @@ DEFAULT_AA_SATURATION_GAMMA = 0.8
 DEFAULT_AA_HIGHPASS_BLUR_SIGMA = 2.0
 DEFAULT_AB_KEY_VALUE = None
 DEFAULT_AB_WHITE_POINT_PERCENTILE = 99.8
-DEFAULT_AB_KEY_MIN = 0.045
-DEFAULT_AB_KEY_MAX = 0.72
+DEFAULT_AB_A_MIN = 0.045
+DEFAULT_AB_A_MAX = 0.72
 DEFAULT_AB_MAX_AUTO_BOOST_FACTOR = 1.25
+DEFAULT_AB_ENABLE_MILD_LOCAL_CONTRAST = True
 DEFAULT_AB_LOCAL_CONTRAST_STRENGTH = 0.20
 DEFAULT_AB_CLAHE_CLIP_LIMIT = 1.6
 DEFAULT_AB_CLAHE_TILE_GRID_SIZE = (8, 8)
+DEFAULT_AB_ENABLE_LUMINANCE_PRESERVING_DESAT = True
 DEFAULT_AB_EPS = 1e-6
 DEFAULT_AB_LOW_KEY_VALUE = 0.09
 DEFAULT_AB_NORMAL_KEY_VALUE = 0.18
@@ -129,8 +131,12 @@ _AUTO_BRIGHTNESS_KNOB_OPTIONS = (
     "--ab-key-min",
     "--ab-key-max",
     "--ab-max-auto-boost",
+    "--ab-enable-local-contrast",
     "--ab-local-contrast-strength",
     "--ab-clahe-clip-limit",
+    "--ab-clahe-tile-grid-size",
+    "--ab-enable-luminance-preserving-desat",
+    "--ab-eps",
 )
 _AUTO_LEVELS_KNOB_OPTIONS = (
     "--al-clip-pct",
@@ -322,29 +328,36 @@ class AutoBrightnessOptions:
 
     @details Encapsulates parameters for the 16-bit BT.709 photographic
     tonemap pipeline: key-classification, key-value selection, robust white
-    point, luminance-preserving anti-clipping desaturation, and optional mild
-    CLAHE micro-contrast blending in the Y channel.
+    point, optional luminance-preserving anti-clipping desaturation, and
+    optional mild CLAHE micro-contrast blending in the Y channel after sRGB
+    re-encoding.
     @param key_value {float|None} Manual Reinhard key value override in `(0, +inf)`; `None` enables automatic key selection.
     @param white_point_percentile {float} Percentile in `(0, 100)` used to derive robust `Lwhite`.
-    @param key_min {float} Minimum allowed key value clamp in `(0, +inf)`.
-    @param key_max {float} Maximum allowed key value clamp in `(0, +inf)`.
+    @param a_min {float} Minimum allowed automatic key value clamp in `(0, +inf)`.
+    @param a_max {float} Maximum allowed automatic key value clamp in `(0, +inf)`.
     @param max_auto_boost_factor {float} Multiplicative adjustment factor for automatic key adaptation in `(0, +inf)`.
+    @param enable_mild_local_contrast {bool} `True` enables post-tonemap CLAHE blending in YCrCb luminance space.
     @param local_contrast_strength {float} CLAHE blend factor in `[0, 1]`.
     @param clahe_clip_limit {float} OpenCV CLAHE clip limit in `(0, +inf)`.
     @param clahe_tile_grid_size {tuple[int, int]} OpenCV CLAHE tile grid size `(rows, cols)`, each `>=1`.
+    @param enable_luminance_preserving_desat {bool} `True` enables minimal grayscale blending for out-of-gamut linear RGB triplets.
     @param eps {float} Positive numerical stability guard used in divisions and logarithms.
     @return {None} Immutable dataclass container.
-    @satisfies REQ-050, REQ-065, REQ-088, REQ-089, REQ-090, REQ-103, REQ-104, REQ-105
+    @satisfies REQ-050, REQ-065, REQ-088, REQ-089, REQ-090, REQ-103, REQ-104, REQ-105, REQ-123, REQ-124, REQ-125
     """
 
     key_value: float | None = DEFAULT_AB_KEY_VALUE
     white_point_percentile: float = DEFAULT_AB_WHITE_POINT_PERCENTILE
-    key_min: float = DEFAULT_AB_KEY_MIN
-    key_max: float = DEFAULT_AB_KEY_MAX
+    a_min: float = DEFAULT_AB_A_MIN
+    a_max: float = DEFAULT_AB_A_MAX
     max_auto_boost_factor: float = DEFAULT_AB_MAX_AUTO_BOOST_FACTOR
+    enable_mild_local_contrast: bool = DEFAULT_AB_ENABLE_MILD_LOCAL_CONTRAST
     local_contrast_strength: float = DEFAULT_AB_LOCAL_CONTRAST_STRENGTH
     clahe_clip_limit: float = DEFAULT_AB_CLAHE_CLIP_LIMIT
     clahe_tile_grid_size: tuple[int, int] = DEFAULT_AB_CLAHE_TILE_GRID_SIZE
+    enable_luminance_preserving_desat: bool = (
+        DEFAULT_AB_ENABLE_LUMINANCE_PRESERVING_DESAT
+    )
     eps: float = DEFAULT_AB_EPS
 
 
@@ -552,8 +565,12 @@ def print_help(version):
         "[--ab-key-value=<value>] [--ab-white-point-pct=<(0,100)>] "
         "[--ab-key-min=<value>] [--ab-key-max=<value>] "
         "[--ab-max-auto-boost=<value>] "
+        "[--ab-enable-local-contrast[=<0|1|false|true|no|yes|off|on>]] "
         "[--ab-local-contrast-strength=<0..1>] "
         "[--ab-clahe-clip-limit=<value>] "
+        "[--ab-clahe-tile-grid-size=<rows>x<cols>] "
+        "[--ab-enable-luminance-preserving-desat[=<0|1|false|true|no|yes|off|on>]] "
+        "[--ab-eps=<value>] "
         "[--auto-levels[=<1|true|yes|on>]] "
         "[--al-clip-pct=<value>] "
         "[--al-clip-out-of-gamut[=<0|1|false|true|no|yes|off|on>]] "
@@ -630,19 +647,32 @@ def print_help(version):
         f"  --ab-white-point-pct=<(0,100)> - Percentile for robust white point in burn-out compression (default: {DEFAULT_AB_WHITE_POINT_PERCENTILE:g})."
     )
     print(
-        f"  --ab-key-min=<value> - Minimum key-value clamp (>0, default: {DEFAULT_AB_KEY_MIN:g})."
+        f"  --ab-key-min=<value> - Minimum automatic key-value clamp (>0, default: {DEFAULT_AB_A_MIN:g})."
     )
     print(
-        f"  --ab-key-max=<value> - Maximum key-value clamp (>0, default: {DEFAULT_AB_KEY_MAX:g})."
+        f"  --ab-key-max=<value> - Maximum automatic key-value clamp (>0, default: {DEFAULT_AB_A_MAX:g})."
     )
     print(
         f"  --ab-max-auto-boost=<value> - Auto key adaptation factor (>0, default: {DEFAULT_AB_MAX_AUTO_BOOST_FACTOR:g})."
+    )
+    print(
+        f"  --ab-enable-local-contrast[=<bool>] - Enable post-tonemap CLAHE Y-channel blending (default: {'true' if DEFAULT_AB_ENABLE_MILD_LOCAL_CONTRAST else 'false'})."
     )
     print(
         f"  --ab-local-contrast-strength=<0..1> - CLAHE Y-channel blend factor for mild local contrast (default: {DEFAULT_AB_LOCAL_CONTRAST_STRENGTH:g})."
     )
     print(
         f"  --ab-clahe-clip-limit=<value> - CLAHE clip limit for local contrast (>0, default: {DEFAULT_AB_CLAHE_CLIP_LIMIT:g})."
+    )
+    print(
+        "  --ab-clahe-tile-grid-size=<rows>x<cols> - CLAHE tile grid size for local contrast"
+        f" (default: {DEFAULT_AB_CLAHE_TILE_GRID_SIZE[0]}x{DEFAULT_AB_CLAHE_TILE_GRID_SIZE[1]})."
+    )
+    print(
+        f"  --ab-enable-luminance-preserving-desat[=<bool>] - Enable anti-clipping grayscale blending (default: {'true' if DEFAULT_AB_ENABLE_LUMINANCE_PRESERVING_DESAT else 'false'})."
+    )
+    print(
+        f"  --ab-eps=<value> - Positive numerical guard for logarithms and divisions (default: {DEFAULT_AB_EPS:g})."
     )
     print(
         "  --auto-levels      - Enable auto-levels stage after auto-brightness and before post-gamma/brightness/contrast/saturation."
@@ -1706,25 +1736,61 @@ def _parse_float_in_range_option(option_name, option_raw, min_value, max_value):
     return option_value
 
 
+def _parse_positive_int_pair_option(option_name, option_raw):
+    """@brief Parse and validate one positive integer pair option value.
+
+    @details Accepts `rowsxcols`, `rowsXcols`, or `rows,cols`, converts both
+    tokens to `int`, requires each value to be greater than zero, and emits
+    deterministic parse errors on malformed values.
+    @param option_name {str} Long-option identifier used in error messages.
+    @param option_raw {str} Raw option token value from CLI args.
+    @return {tuple[int, int]|None} Parsed positive integer pair when valid; `None` otherwise.
+    @satisfies REQ-065, REQ-123, REQ-125
+    """
+
+    normalized_value = option_raw.lower().replace("x", ",")
+    parts = [part.strip() for part in normalized_value.split(",")]
+    if len(parts) != 2 or parts[0] == "" or parts[1] == "":
+        print_error(f"Invalid {option_name} value: {option_raw}")
+        print_error(f"Expected format: {option_name}=<rows>x<cols>")
+        return None
+    try:
+        rows = int(parts[0])
+        cols = int(parts[1])
+    except ValueError:
+        print_error(f"Invalid {option_name} value: {option_raw}")
+        print_error("Tile grid size values must be integers.")
+        return None
+    if rows <= 0 or cols <= 0:
+        print_error(f"Invalid {option_name} value: {option_raw}")
+        print_error("Tile grid size values must be greater than zero.")
+        return None
+    return (rows, cols)
+
+
 def _parse_auto_brightness_options(auto_brightness_raw_values):
     """@brief Parse and validate auto-brightness parameters.
 
-    @details Parses optional key-value and compression controls for the
-    photographic BT.709 16-bit tonemap pipeline and applies deterministic
-    defaults for omitted auto-brightness options.
+    @details Parses optional controls for the original photographic BT.709
+    16-bit tonemap pipeline and applies deterministic defaults for omitted
+    auto-brightness options.
     @param auto_brightness_raw_values {dict[str, str]} Raw `--ab-*` option values keyed by long option name.
     @return {AutoBrightnessOptions|None} Parsed auto-brightness options or `None` on validation error.
-    @satisfies REQ-088, REQ-089, REQ-103, REQ-104, REQ-105
+    @satisfies REQ-088, REQ-089, REQ-103, REQ-104, REQ-105, REQ-123, REQ-124, REQ-125
     """
 
     defaults = AutoBrightnessOptions()
     key_value = defaults.key_value
     white_point_percentile = defaults.white_point_percentile
-    key_min = defaults.key_min
-    key_max = defaults.key_max
+    a_min = defaults.a_min
+    a_max = defaults.a_max
     max_auto_boost_factor = defaults.max_auto_boost_factor
+    enable_mild_local_contrast = defaults.enable_mild_local_contrast
     local_contrast_strength = defaults.local_contrast_strength
     clahe_clip_limit = defaults.clahe_clip_limit
+    clahe_tile_grid_size = defaults.clahe_tile_grid_size
+    enable_luminance_preserving_desat = defaults.enable_luminance_preserving_desat
+    eps = defaults.eps
 
     if "--ab-key-value" in auto_brightness_raw_values:
         parsed = _parse_positive_float_option(
@@ -1751,7 +1817,7 @@ def _parse_auto_brightness_options(auto_brightness_raw_values):
         )
         if parsed is None:
             return None
-        key_min = parsed
+        a_min = parsed
 
     if "--ab-key-max" in auto_brightness_raw_values:
         parsed = _parse_positive_float_option(
@@ -1759,9 +1825,9 @@ def _parse_auto_brightness_options(auto_brightness_raw_values):
         )
         if parsed is None:
             return None
-        key_max = parsed
+        a_max = parsed
 
-    if key_min > key_max:
+    if a_min > a_max:
         print_error("Invalid --ab-key-min/--ab-key-max values")
         print_error("--ab-key-min must be less than or equal to --ab-key-max")
         return None
@@ -1774,6 +1840,15 @@ def _parse_auto_brightness_options(auto_brightness_raw_values):
         if parsed is None:
             return None
         max_auto_boost_factor = parsed
+
+    if "--ab-enable-local-contrast" in auto_brightness_raw_values:
+        parsed = _parse_explicit_boolean_option(
+            "--ab-enable-local-contrast",
+            auto_brightness_raw_values["--ab-enable-local-contrast"],
+        )
+        if parsed is None:
+            return None
+        enable_mild_local_contrast = parsed
 
     if "--ab-local-contrast-strength" in auto_brightness_raw_values:
         parsed = _parse_float_in_range_option(
@@ -1795,16 +1870,44 @@ def _parse_auto_brightness_options(auto_brightness_raw_values):
             return None
         clahe_clip_limit = parsed
 
+    if "--ab-clahe-tile-grid-size" in auto_brightness_raw_values:
+        parsed = _parse_positive_int_pair_option(
+            "--ab-clahe-tile-grid-size",
+            auto_brightness_raw_values["--ab-clahe-tile-grid-size"],
+        )
+        if parsed is None:
+            return None
+        clahe_tile_grid_size = parsed
+
+    if "--ab-enable-luminance-preserving-desat" in auto_brightness_raw_values:
+        parsed = _parse_explicit_boolean_option(
+            "--ab-enable-luminance-preserving-desat",
+            auto_brightness_raw_values["--ab-enable-luminance-preserving-desat"],
+        )
+        if parsed is None:
+            return None
+        enable_luminance_preserving_desat = parsed
+
+    if "--ab-eps" in auto_brightness_raw_values:
+        parsed = _parse_positive_float_option(
+            "--ab-eps", auto_brightness_raw_values["--ab-eps"]
+        )
+        if parsed is None:
+            return None
+        eps = parsed
+
     return AutoBrightnessOptions(
         key_value=key_value,
         white_point_percentile=white_point_percentile,
-        key_min=key_min,
-        key_max=key_max,
+        a_min=a_min,
+        a_max=a_max,
         max_auto_boost_factor=max_auto_boost_factor,
+        enable_mild_local_contrast=enable_mild_local_contrast,
         local_contrast_strength=local_contrast_strength,
         clahe_clip_limit=clahe_clip_limit,
-        clahe_tile_grid_size=defaults.clahe_tile_grid_size,
-        eps=defaults.eps,
+        clahe_tile_grid_size=clahe_tile_grid_size,
+        enable_luminance_preserving_desat=enable_luminance_preserving_desat,
+        eps=eps,
     )
 
 
@@ -2214,6 +2317,22 @@ def _parse_run_options(args):
             continue
 
         if token.startswith("--ab-"):
+            if token == "--ab-enable-local-contrast":
+                if idx + 1 < len(args) and not args[idx + 1].startswith("--"):
+                    auto_brightness_raw_values[token] = args[idx + 1]
+                    idx += 2
+                    continue
+                auto_brightness_raw_values[token] = "true"
+                idx += 1
+                continue
+            if token == "--ab-enable-luminance-preserving-desat":
+                if idx + 1 < len(args) and not args[idx + 1].startswith("--"):
+                    auto_brightness_raw_values[token] = args[idx + 1]
+                    idx += 2
+                    continue
+                auto_brightness_raw_values[token] = "true"
+                idx += 1
+                continue
             option_name = token
             option_value = None
             consume_count = 1
@@ -4383,12 +4502,13 @@ def _analyze_luminance_key(np_module, luminance, eps):
 
     @details Computes log-average luminance, median, percentile tails, and
     clip proxies on normalized BT.709 luminance and classifies scene as
-    `low-key`, `normal-key`, or `high-key` using conservative thresholds.
+    `low-key`, `normal-key`, or `high-key` using the thresholds from
+    `/tmp/auto-brightness.py`.
     @param np_module {ModuleType} Imported numpy module.
     @param luminance {object} BT.709 luminance float tensor in `[0, 1]`.
     @param eps {float} Positive numerical stability guard.
     @return {dict[str, float|str]} Key analysis dictionary with key type, central statistics, tails, and clipping proxies.
-    @satisfies REQ-050, REQ-103
+    @satisfies REQ-050, REQ-103, REQ-121
     """
 
     luminance_clamped = np_module.clip(luminance, 0.0, 1.0)
@@ -4398,8 +4518,8 @@ def _analyze_luminance_key(np_module, luminance, eps):
     median_luminance = float(np_module.median(luminance_clamped))
     p05 = float(np_module.percentile(luminance_clamped, 5.0))
     p95 = float(np_module.percentile(luminance_clamped, 95.0))
-    shadow_clip = float(np_module.mean(luminance_clamped <= (1.0 / 65535.0)))
-    highlight_clip = float(np_module.mean(luminance_clamped >= (65534.0 / 65535.0)))
+    shadow_clip = float(np_module.mean(luminance_clamped <= (1.0 / 255.0)))
+    highlight_clip = float(np_module.mean(luminance_clamped >= (254.0 / 255.0)))
     if median_luminance < 0.35 and p95 < 0.85:
         key_type = "low-key"
     elif median_luminance > 0.65 and p05 > 0.15:
@@ -4421,12 +4541,12 @@ def _choose_auto_key_value(key_analysis, auto_brightness_options):
     """@brief Select Reinhard key value from key-analysis metrics.
 
     @details Chooses base key by scene class (`0.09/0.18/0.36`) and applies
-    conservative under/over-exposure adaptation bounded by configured min/max
+    conservative under/over-exposure adaptation bounded by configured automatic
     key limits and automatic boost factor.
     @param key_analysis {dict[str, float|str]} Luminance key-analysis dictionary.
     @param auto_brightness_options {AutoBrightnessOptions} Parsed auto-brightness parameters.
     @return {float} Clamped key value `a`.
-    @satisfies REQ-050, REQ-103
+    @satisfies REQ-050, REQ-103, REQ-122
     """
 
     key_type = str(key_analysis["key_type"])
@@ -4447,18 +4567,18 @@ def _choose_auto_key_value(key_analysis, auto_brightness_options):
     if under_hint:
         key_value = min(
             key_value * auto_brightness_options.max_auto_boost_factor,
-            auto_brightness_options.key_max,
+            auto_brightness_options.a_max,
         )
     if over_hint:
         key_value = max(
             key_value / auto_brightness_options.max_auto_boost_factor,
-            auto_brightness_options.key_min,
+            auto_brightness_options.a_min,
         )
 
     return float(
         min(
-            max(key_value, auto_brightness_options.key_min),
-            auto_brightness_options.key_max,
+            max(key_value, auto_brightness_options.a_min),
+            auto_brightness_options.a_max,
         )
     )
 
@@ -4535,15 +4655,17 @@ def _apply_mild_local_contrast_bgr_uint16(cv2_module, np_module, image_bgr_uint1
 
     @details Converts BGR16 to YCrCb, runs CLAHE on 16-bit Y with configured
     clip/tile controls, then blends original and CLAHE outputs using configured
-    local-contrast strength.
+    local-contrast strength when local contrast is enabled.
     @param cv2_module {ModuleType} Imported cv2 module.
     @param np_module {ModuleType} Imported numpy module.
     @param image_bgr_uint16 {object} BGR uint16 image tensor.
     @param options {AutoBrightnessOptions} Parsed auto-brightness options.
     @return {object} BGR uint16 image tensor after optional local contrast.
-    @satisfies REQ-050, REQ-105
+    @satisfies REQ-050, REQ-123
     """
 
+    if not options.enable_mild_local_contrast:
+        return image_bgr_uint16
     strength = float(min(max(options.local_contrast_strength, 0.0), 1.0))
     if strength <= 0.0:
         return image_bgr_uint16
@@ -5367,29 +5489,34 @@ def _hlrecovery_inpaint_opposed_uint16(
     return output
 
 
-def _apply_auto_brightness_rgb_uint8(np_module, image_rgb_uint8, auto_brightness_options):
-    """@brief Apply photographic BT.709 auto-brightness on uint16 RGB tensor.
+def _apply_auto_brightness_rgb_uint16(
+    np_module, image_rgb_uint16, auto_brightness_options, cv2_module=None
+):
+    """@brief Apply original photographic auto-brightness flow on uint16 RGB tensor.
 
-    @details Executes 16-bit pipeline: normalize to float `[0,1]`, linearize
-    sRGB, derive BT.709 luminance, classify key using log-average and
-    percentiles, choose/override key value `a`, apply Reinhard global tonemap
-    with robust percentile white-point, preserve chromaticity by luminance
-    scaling, perform luminance-preserving anti-clipping desaturation, then
-    de-linearize and restore uint16 output.
+    @details Executes `/tmp/auto-brightness.py` step order in a 16-bit-adapted
+    form: normalize RGB uint16 to float `[0,1]`, linearize sRGB, derive BT.709
+    luminance, classify key using normalized distribution thresholds, choose or
+    override key value `a`, apply Reinhard global tonemap with robust
+    percentile white-point, preserve chromaticity by luminance scaling,
+    optionally desaturate only overflowing linear RGB pixels, re-encode to
+    sRGB uint16, then optionally apply CLAHE-based YCrCb local contrast.
     @param np_module {ModuleType} Imported numpy module.
-    @param image_rgb_uint8 {object} RGB uint16 image tensor.
+    @param image_rgb_uint16 {object} RGB uint16 image tensor.
     @param auto_brightness_options {AutoBrightnessOptions} Parsed auto-brightness parameters.
+    @param cv2_module {ModuleType|None} Optional imported cv2 module used only when local contrast is enabled.
     @return {object} RGB uint16 image tensor after BT.709 auto-brightness.
     @exception ValueError Raised when input tensor is not uint16 RGB.
-    @satisfies REQ-050, REQ-066, REQ-090, REQ-099, REQ-103, REQ-104, REQ-105
+    @exception RuntimeError Raised when local contrast is enabled and `cv2` dependency cannot be imported.
+    @satisfies REQ-050, REQ-066, REQ-090, REQ-099, REQ-103, REQ-104, REQ-105, REQ-121, REQ-122, REQ-123
     """
 
-    if str(getattr(image_rgb_uint8, "dtype", "")) != "uint16":
+    if str(getattr(image_rgb_uint16, "dtype", "")) != "uint16":
         raise ValueError("Auto-brightness input image must be uint16")
-    if len(image_rgb_uint8.shape) != 3 or image_rgb_uint8.shape[2] != 3:
+    if len(image_rgb_uint16.shape) != 3 or image_rgb_uint16.shape[2] != 3:
         raise ValueError("Auto-brightness input image must be RGB uint16")
 
-    image_srgb = image_rgb_uint8.astype(np_module.float64) / 65535.0
+    image_srgb = image_rgb_uint16.astype(np_module.float64) / 65535.0
     image_linear = _to_linear_srgb(np_module=np_module, image_srgb=image_srgb)
     luminance = _compute_bt709_luminance(np_module=np_module, linear_rgb=image_linear)
     key_analysis = _analyze_luminance_key(
@@ -5404,12 +5531,7 @@ def _apply_auto_brightness_rgb_uint8(np_module, image_rgb_uint8, auto_brightness
             auto_brightness_options=auto_brightness_options,
         )
     else:
-        key_value = float(
-            min(
-                max(float(key_value), auto_brightness_options.key_min),
-                auto_brightness_options.key_max,
-            )
-        )
+        key_value = float(key_value)
     luminance_mapped, _debug = _reinhard_global_tonemap_luminance(
         np_module=np_module,
         luminance=luminance,
@@ -5419,16 +5541,34 @@ def _apply_auto_brightness_rgb_uint8(np_module, image_rgb_uint8, auto_brightness
     )
     luminance_scale = luminance_mapped / (luminance + auto_brightness_options.eps)
     bright_linear = image_linear * luminance_scale[..., None]
-    bright_linear = _luminance_preserving_desaturate_to_fit(
-        np_module=np_module,
-        rgb_linear=bright_linear,
-        luminance=luminance_mapped,
-        eps=auto_brightness_options.eps,
-    )
+    if auto_brightness_options.enable_luminance_preserving_desat:
+        bright_linear = _luminance_preserving_desaturate_to_fit(
+            np_module=np_module,
+            rgb_linear=bright_linear,
+            luminance=luminance_mapped,
+            eps=auto_brightness_options.eps,
+        )
     bright_srgb = _from_linear_srgb(np_module=np_module, image_linear=bright_linear)
-    return np_module.clip(
+    bright_rgb_uint16 = np_module.clip(
         np_module.round(bright_srgb * 65535.0), 0.0, 65535.0
     ).astype(np_module.uint16)
+    if not auto_brightness_options.enable_mild_local_contrast:
+        return bright_rgb_uint16
+    if auto_brightness_options.local_contrast_strength <= 0.0:
+        return bright_rgb_uint16
+    if cv2_module is None:
+        try:
+            import cv2 as cv2_module  # type: ignore
+        except ModuleNotFoundError as exc:
+            raise RuntimeError("Missing required dependency: opencv-python") from exc
+    bright_bgr_uint16 = cv2_module.cvtColor(bright_rgb_uint16, cv2_module.COLOR_RGB2BGR)
+    bright_bgr_uint16 = _apply_mild_local_contrast_bgr_uint16(
+        cv2_module=cv2_module,
+        np_module=np_module,
+        image_bgr_uint16=bright_bgr_uint16,
+        options=auto_brightness_options,
+    )
+    return cv2_module.cvtColor(bright_bgr_uint16, cv2_module.COLOR_BGR2RGB)
 
 
 
@@ -5958,10 +6098,11 @@ def _encode_jpg(
     """@brief Encode merged HDR TIFF payload into final JPG output.
 
     @details Loads merged image payload, normalizes to RGB uint16 tensor, executes
-    optional auto-brightness stage, optional auto-levels stage, static
-    post-gamma/brightness/contrast/saturation chain in uint16 precision, optional
-    auto-adjust stage over temporary 16-bit TIFF intermediates, then performs one
-    final uint16-to-uint8 conversion immediately before JPEG save.
+    optional original-order auto-brightness stage, optional auto-levels stage,
+    static post-gamma/brightness/contrast/saturation chain in uint16
+    precision, optional auto-adjust stage over temporary 16-bit TIFF
+    intermediates, then performs one final uint16-to-uint8 conversion
+    immediately before JPEG save.
     @param imageio_module {ModuleType} Imported imageio module with `imread` and `imwrite`.
     @param pil_image_module {ModuleType} Imported Pillow image module.
     @param merged_tiff {Path} Merged TIFF source path produced by selected backend.
@@ -5976,7 +6117,7 @@ def _encode_jpg(
     @param ev_zero {float} Selected EV center used for extraction and merge reference.
     @return {None} Side effects only.
     @exception RuntimeError Raised when numpy or auto-adjust mode dependencies are missing or auto-adjust mode value is unsupported.
-    @satisfies REQ-012, REQ-013, REQ-050, REQ-058, REQ-066, REQ-069, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-086, REQ-087, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-106
+    @satisfies REQ-012, REQ-013, REQ-050, REQ-058, REQ-066, REQ-069, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-086, REQ-087, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-106, REQ-123
     """
 
     del ev_zero
@@ -5997,12 +6138,8 @@ def _encode_jpg(
         image_data=merged_data,
     )
     if postprocess_options.auto_brightness_enabled:
-        image_rgb_uint16 = _apply_auto_brightness_rgb_uint8(
-            np_module=np_module,
-            image_rgb_uint8=image_rgb_uint16,
-            auto_brightness_options=postprocess_options.auto_brightness_options,
-        )
-        if postprocess_options.auto_brightness_options.local_contrast_strength > 0.0:
+        cv2_module = None
+        if postprocess_options.auto_brightness_options.enable_mild_local_contrast:
             if auto_adjust_opencv_dependencies is not None:
                 cv2_module, _opencv_np_module = auto_adjust_opencv_dependencies
                 del _opencv_np_module
@@ -6011,14 +6148,12 @@ def _encode_jpg(
                     import cv2 as cv2_module  # type: ignore
                 except ModuleNotFoundError as exc:
                     raise RuntimeError("Missing required dependency: opencv-python") from exc
-            image_bgr_uint16 = cv2_module.cvtColor(image_rgb_uint16, cv2_module.COLOR_RGB2BGR)
-            image_bgr_uint16 = _apply_mild_local_contrast_bgr_uint16(
-                cv2_module=cv2_module,
-                np_module=np_module,
-                image_bgr_uint16=image_bgr_uint16,
-                options=postprocess_options.auto_brightness_options,
-            )
-            image_rgb_uint16 = cv2_module.cvtColor(image_bgr_uint16, cv2_module.COLOR_BGR2RGB)
+        image_rgb_uint16 = _apply_auto_brightness_rgb_uint16(
+            np_module=np_module,
+            image_rgb_uint16=image_rgb_uint16,
+            auto_brightness_options=postprocess_options.auto_brightness_options,
+            cv2_module=cv2_module,
+        )
     if postprocess_options.auto_levels_enabled:
         image_rgb_uint16 = _apply_auto_levels_uint16(
             np_module=np_module,
@@ -6270,11 +6405,19 @@ def run(args):
             "Auto-brightness knobs: "
             f"key-value={resolved_ab_key}, "
             f"white-point-pct={postprocess_options.auto_brightness_options.white_point_percentile:g}, "
-            f"key-min={postprocess_options.auto_brightness_options.key_min:g}, "
-            f"key-max={postprocess_options.auto_brightness_options.key_max:g}, "
+            f"key-min={postprocess_options.auto_brightness_options.a_min:g}, "
+            f"key-max={postprocess_options.auto_brightness_options.a_max:g}, "
             f"max-auto-boost={postprocess_options.auto_brightness_options.max_auto_boost_factor:g}, "
+            "local-contrast="
+            f"{'enabled' if postprocess_options.auto_brightness_options.enable_mild_local_contrast else 'disabled'}, "
             f"local-contrast-strength={postprocess_options.auto_brightness_options.local_contrast_strength:g}, "
-            f"clahe-clip-limit={postprocess_options.auto_brightness_options.clahe_clip_limit:g}"
+            f"clahe-clip-limit={postprocess_options.auto_brightness_options.clahe_clip_limit:g}, "
+            "clahe-tile-grid-size="
+            f"{postprocess_options.auto_brightness_options.clahe_tile_grid_size[0]}x"
+            f"{postprocess_options.auto_brightness_options.clahe_tile_grid_size[1]}, "
+            "luminance-preserving-desat="
+            f"{'enabled' if postprocess_options.auto_brightness_options.enable_luminance_preserving_desat else 'disabled'}, "
+            f"eps={postprocess_options.auto_brightness_options.eps:g}"
         )
     if postprocess_options.auto_levels_enabled:
         print_info(

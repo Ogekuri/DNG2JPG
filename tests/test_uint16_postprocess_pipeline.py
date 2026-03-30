@@ -231,6 +231,193 @@ def test_encode_jpg_quantizes_once_at_final_boundary(monkeypatch, tmp_path) -> N
     assert call_trace.index("to_uint8") > call_trace.index("static")
 
 
+def test_parse_run_options_accepts_all_original_auto_brightness_controls() -> None:
+    """Parser must expose every control carried by the original TonemapParams."""
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        [
+            "input.dng",
+            "output.jpg",
+            "--ev=1",
+            "--auto-brightness",
+            "--ab-key-value=0.22",
+            "--ab-white-point-pct=99.5",
+            "--ab-key-min=0.05",
+            "--ab-key-max=0.7",
+            "--ab-max-auto-boost=1.1",
+            "--ab-enable-local-contrast=false",
+            "--ab-local-contrast-strength=0.3",
+            "--ab-clahe-clip-limit=1.7",
+            "--ab-clahe-tile-grid-size=6x10",
+            "--ab-enable-luminance-preserving-desat=false",
+            "--ab-eps=1e-5",
+            "--enable-opencv",
+        ]
+    )
+
+    assert parsed is not None
+    postprocess = parsed[5]
+    assert postprocess.auto_brightness_enabled is True
+    assert postprocess.auto_brightness_options == dng2jpg_module.AutoBrightnessOptions(
+        key_value=0.22,
+        white_point_percentile=99.5,
+        a_min=0.05,
+        a_max=0.7,
+        max_auto_boost_factor=1.1,
+        enable_mild_local_contrast=False,
+        local_contrast_strength=0.3,
+        clahe_clip_limit=1.7,
+        clahe_tile_grid_size=(6, 10),
+        enable_luminance_preserving_desat=False,
+        eps=1e-5,
+    )
+
+
+def test_analyze_luminance_key_uses_original_thresholds_and_auto_boost_rules() -> None:
+    """Key analysis must keep the original clipping proxies and boost heuristics."""
+
+    luminance = np.array(
+        [
+            [0.0, 1.0 / 255.0, 1.0 / 254.0],
+            [253.0 / 255.0, 254.0 / 255.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    analysis = dng2jpg_module._analyze_luminance_key(  # pylint: disable=protected-access
+        np_module=np,
+        luminance=luminance,
+        eps=1e-6,
+    )
+
+    np.testing.assert_allclose(analysis["shadow_clip_in"], 2.0 / 6.0, rtol=1e-12)
+    np.testing.assert_allclose(analysis["highlight_clip_in"], 2.0 / 6.0, rtol=1e-12)
+
+    options = dng2jpg_module.AutoBrightnessOptions(
+        a_min=0.045,
+        a_max=0.72,
+        max_auto_boost_factor=1.25,
+    )
+    boosted = dng2jpg_module._choose_auto_key_value(  # pylint: disable=protected-access
+        key_analysis={
+            "key_type": "low-key",
+            "median_lum": 0.20,
+            "p05": 0.01,
+            "p95": 0.50,
+        },
+        auto_brightness_options=options,
+    )
+    attenuated = dng2jpg_module._choose_auto_key_value(  # pylint: disable=protected-access
+        key_analysis={
+            "key_type": "high-key",
+            "median_lum": 0.70,
+            "p05": 0.50,
+            "p95": 0.98,
+        },
+        auto_brightness_options=options,
+    )
+
+    np.testing.assert_allclose(boosted, 0.1125, rtol=1e-12)
+    np.testing.assert_allclose(attenuated, 0.288, rtol=1e-12)
+
+
+def test_apply_auto_brightness_rgb_uint16_executes_original_stage_order(
+    monkeypatch,
+) -> None:
+    """Auto-brightness must keep the original stage order inside the uint16 port."""
+
+    call_trace: list[str] = []
+    image_rgb_uint16 = np.array([[[1024, 2048, 4096]]], dtype=np.uint16)
+    fake_cv2 = _FakeOpenCvModule()
+
+    def _fake_to_linear(*, np_module, image_srgb):
+        del np_module, image_srgb  # Unused by fake stage.
+        call_trace.append("to_linear")
+        return np.full((1, 1, 3), 0.25, dtype=np.float64)
+
+    def _fake_luminance(*, np_module, linear_rgb):
+        del np_module, linear_rgb  # Unused by fake stage.
+        call_trace.append("compute_luminance")
+        return np.full((1, 1), 0.2, dtype=np.float64)
+
+    def _fake_analyze(*, np_module, luminance, eps):
+        del np_module, luminance, eps  # Unused by fake stage.
+        call_trace.append("analyze")
+        return {"key_type": "normal-key", "median_lum": 0.4, "p05": 0.1, "p95": 0.8}
+
+    def _fake_choose(*, key_analysis, auto_brightness_options):
+        del key_analysis, auto_brightness_options  # Unused by fake stage.
+        call_trace.append("choose")
+        return 0.18
+
+    def _fake_reinhard(*, np_module, luminance, key_value, white_point_percentile, eps):
+        del np_module, luminance, key_value, white_point_percentile, eps  # Unused by fake stage.
+        call_trace.append("reinhard")
+        return np.full((1, 1), 0.4, dtype=np.float64), {}
+
+    def _fake_desaturate(*, np_module, rgb_linear, luminance, eps):
+        del np_module, rgb_linear, luminance, eps  # Unused by fake stage.
+        call_trace.append("desaturate")
+        return np.full((1, 1, 3), 0.35, dtype=np.float64)
+
+    def _fake_from_linear(*, np_module, image_linear):
+        del np_module, image_linear  # Unused by fake stage.
+        call_trace.append("from_linear")
+        return np.full((1, 1, 3), 0.5, dtype=np.float64)
+
+    def _fake_local_contrast(*, cv2_module, np_module, image_bgr_uint16, options):
+        del cv2_module, np_module, options  # Unused by fake stage.
+        call_trace.append("local_contrast")
+        return image_bgr_uint16
+
+    monkeypatch.setattr(dng2jpg_module, "_to_linear_srgb", _fake_to_linear)
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_compute_bt709_luminance",
+        _fake_luminance,
+    )
+    monkeypatch.setattr(dng2jpg_module, "_analyze_luminance_key", _fake_analyze)
+    monkeypatch.setattr(dng2jpg_module, "_choose_auto_key_value", _fake_choose)
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_reinhard_global_tonemap_luminance",
+        _fake_reinhard,
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_luminance_preserving_desaturate_to_fit",
+        _fake_desaturate,
+    )
+    monkeypatch.setattr(dng2jpg_module, "_from_linear_srgb", _fake_from_linear)
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_apply_mild_local_contrast_bgr_uint16",
+        _fake_local_contrast,
+    )
+
+    output = dng2jpg_module._apply_auto_brightness_rgb_uint16(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_uint16=image_rgb_uint16,
+        auto_brightness_options=dng2jpg_module.AutoBrightnessOptions(
+            enable_mild_local_contrast=True,
+            local_contrast_strength=0.2,
+            enable_luminance_preserving_desat=True,
+        ),
+        cv2_module=fake_cv2,
+    )
+
+    assert output.dtype == np.uint16
+    assert call_trace == [
+        "to_linear",
+        "compute_luminance",
+        "analyze",
+        "choose",
+        "reinhard",
+        "desaturate",
+        "from_linear",
+        "local_contrast",
+    ]
+
+
 def test_parse_run_options_accepts_enable_opencv_backend() -> None:
     """Parser must accept `--enable-opencv` as exclusive backend selector."""
 

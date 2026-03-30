@@ -150,12 +150,12 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-047**: MUST publish release assets from `dist/**/*` using `softprops/action-gh-release@v2` with `fail_on_unmatched_files: true`.
 - **REQ-048**: MUST include project script entrypoints `dng2jpg` and `d2j` mapped to `dng2jpg.core:main`.
 - **REQ-049**: SHOULD provide both `dng2jpg` and `d2j` as equivalent user-invokable CLI aliases.
-- **REQ-050**: MUST implement auto-brightness on RGB uint16 input/output with internal float processing using sRGB linearization, BT.709 luminance computation, and key-adaptive photographic Reinhard mapping.
+- **REQ-050**: MUST implement `/tmp/auto-brightness.py` auto-brightness step order on RGB uint16 input/output with float internals: normalize sRGB, linearize, compute BT.709 luminance, tonemap luminance, rescale RGB, re-encode sRGB, then optional local contrast.
 - **REQ-051**: MUST support both ImageMagick and OpenCV auto-adjust pipelines with shared validated knob parameters.
 - **REQ-052**: MUST print deterministic runtime diagnostics for input path, gamma, postprocess factors, backend, EV selections, and EV triplet.
-- **REQ-103**: MUST classify scene key from log-average luminance, median, and 5th/95th percentiles, then auto-select key value from `0.09`, `0.18`, `0.36` with configurable clamp and auto-boost limits.
+- **REQ-103**: MUST classify normalized BT.709 luminance as `low-key` when `median<0.35 && p95<0.85`, `high-key` when `median>0.65 && p05>0.15`, else `normal-key`.
 - **REQ-104**: MUST map luminance with `L=(a/Lw_bar)*Y`, percentile-derived robust `Lwhite`, and burn-out compression `Ld=(L*(1+L/Lwhite^2))/(1+L)` before linear-domain chromaticity-preserving RGB scaling.
-- **REQ-105**: MUST prevent out-of-gamut clipping by luminance-preserving desaturation only for overflowing pixels and MAY apply mild CLAHE local contrast on luminance with configurable strength and clip limit.
+- **REQ-105**: MUST desaturate only overflowing linear RGB pixels by blending toward `(Ld,Ld,Ld)` with the minimal factor that restores `max(R,G,B)<=1` while preserving luminance.
 - **REQ-100**: MUST execute `--auto-levels` after optional `--auto-brightness` and before static postprocess while preserving RGB `uint16` input/output buffers and float internal calculations.
 - **REQ-101**: MUST parse `--auto-levels`, `--al-clip-pct`, `--al-clip-out-of-gamut`, `--al-highlight-reconstruction-method`, and `--al-gain-threshold`, requiring `--auto-levels` before any `--al-*` option.
 - **REQ-102**: MUST accept highlight reconstruction methods `Luminance Recovery`, `CIELab Blending`, `Blend`, `Color Propagation`, and `Inpaint Opposed`.
@@ -164,6 +164,11 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-118**: MUST derive `expcomp`, `black`, `brightness`, `contrast`, `hlcompr`, and `hlcomprthresh` using RawTherapee `ImProcFunctions::getAutoExp` formula families, including gamma-domain whiteclip correction.
 - **REQ-119**: MUST map `Color Propagation` to RawTherapee `Color` and `Inpaint Opposed` to RawTherapee `Coloropp`, and SHOULD approximate these raw-domain methods deterministically in RGB post-merge processing.
 - **REQ-120**: MUST apply `Clip out-of-gamut colors` after auto-levels gain using per-pixel normalization that bounds each overflowing RGB triplet to the uint16 ceiling while preserving channel ratios.
+- **REQ-121**: MUST compute `log_avg_lum`, `median_lum`, `p05`, `p95`, `shadow_clip_in<=1/255`, and `highlight_clip_in>=254/255` from normalized luminance before key-value selection.
+- **REQ-122**: MUST auto-select base Reinhard `a` as `0.09`, `0.18`, or `0.36`, boost when `p95<0.60 && median<0.35`, attenuate when `p05>0.40 && median>0.65`, then clamp to `[a_min,a_max]`.
+- **REQ-123**: MUST apply optional mild local contrast after sRGB re-encoding using YCrCb/Y-channel CLAHE with configurable enable flag, blend strength, clip limit, and tile grid size.
+- **REQ-124**: MUST expose auto-brightness CLI knobs for `key_value`, `white_point_percentile`, `a_min`, `a_max`, `max_auto_boost_factor`, and `eps`.
+- **REQ-125**: MUST expose auto-brightness CLI knobs for local-contrast enable, local-contrast strength, CLAHE clip limit, CLAHE tile grid size, and luminance-preserving desaturation enable.
 - **REQ-107**: MUST accept `--enable-opencv` as HDR backend selector and enforce backend exclusivity across `--enable-enfuse`, `--enable-luminance`, `--enable-opencv`, and `--enable-hdr-plus`.
 - **REQ-108**: MUST execute OpenCV backend merge using `MergeMertens` and `MergeDebevec` over bracket TIFFs ordered as `ev_minus`, `ev_zero`, `ev_plus` with EV-derived exposure times.
 - **REQ-109**: MUST normalize Debevec HDR radiance in float domain using robust luminance white-point percentile and blend it with Mertens fusion before writing merged TIFF.
@@ -186,7 +191,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-008**: MUST verify `_refresh_output_jpg_exif_thumbnail_after_save` preserves source orientation in `0th` IFD and sets `1st` IFD orientation to `1`.
 - **TST-009**: MUST verify release workflow gates `build-release` execution on `needs.check-branch.outputs.is_master == "true"`.
 - **TST-010**: MUST verify `_parse_run_options` enforces `--auto-levels`/`--al-*` coupling and validates `Clip out-of-gamut colors`, `Clip %`, method, and gain-threshold knobs.
-- **TST-011**: MUST verify `_apply_auto_brightness_rgb_uint8` preserves uint16 I/O and executes key-adaptive Reinhard luminance mapping with luminance-preserving anti-clipping desaturation and optional CLAHE local-contrast blending.
+- **TST-011**: MUST verify `_apply_auto_brightness_rgb_uint16` preserves uint16 I/O and executes the original step order, key-analysis thresholds, Reinhard mapping, optional desaturation, and optional CLAHE local-contrast blending.
 - **TST-012**: MUST verify `_encode_jpg` keeps uint16 static postprocess buffers and applies a single uint16-to-uint8 conversion immediately before JPEG save.
 - **TST-013**: MUST verify `_parse_run_options` accepts `--enable-opencv` and rejects simultaneous backend selectors.
 - **TST-014**: MUST verify OpenCV EV-time derivation returns deterministic three-element stop-space sequence mapped to bracket order.
@@ -194,6 +199,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-016**: MUST verify auto-levels parser defaults `clip_pct=0.02`, `clip_out_of_gamut=true`, `highlight_reconstruction_method=Inpaint Opposed`, and `gain_threshold=1.0`.
 - **TST-017**: MUST verify auto-levels histogram calibration reproduces RawTherapee-compatible `expcomp`, `black`, `brightness`, `contrast`, `hlcompr`, and `hlcomprthresh` for deterministic synthetic histograms.
 - **TST-018**: MUST verify `Color Propagation` and `Inpaint Opposed` selectors produce deterministic RGB `uint16` outputs and preserve float-only internal math within the auto-levels stage.
+- **TST-019**: MUST verify auto-brightness CLI parsing exposes every control from the original `TonemapParams` with deterministic defaults and validation.
+- **TST-020**: MUST verify auto-brightness clipping proxies use normalized thresholds `1/255` and `254/255` and key auto-selection uses the original base values and boost rules.
 
 ## 5. Evidence Matrix
 
@@ -266,12 +273,12 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-047 | `.github/workflows/release-uvx.yml`; excerpt: `softprops/action-gh-release@v2` uploads `dist/**/*` with unmatched-file failure enabled. |
 | REQ-048 | `pyproject.toml`; excerpt: `[project.scripts] dng2jpg = "dng2jpg.core:main"` and `d2j = "dng2jpg.core:main"`. |
 | REQ-049 | `pyproject.toml`; excerpt: both `dng2jpg` and `d2j` map to identical entrypoint. |
-| REQ-050 | `src/dng2jpg/dng2jpg.py::_apply_auto_brightness_rgb_uint8`; excerpt: uint16 I/O, float linearization, BT.709 luminance, and Reinhard photographic tonemap pipeline. |
+| REQ-050 | `src/dng2jpg/dng2jpg.py::_apply_auto_brightness_rgb_uint16`; excerpt: executes the original auto-brightness step order in uint16 I/O with float internals and optional post-tonemap local contrast. |
 | REQ-051 | `src/dng2jpg/dng2jpg.py::_apply_validated_auto_adjust_pipeline`, `_apply_validated_auto_adjust_pipeline_opencv`; excerpt: two implementations using shared knob dataclass. |
 | REQ-052 | `src/dng2jpg/dng2jpg.py::run`; excerpt: deterministic `print_info` diagnostic lines for runtime selections and computed EV values. |
-| REQ-103 | `src/dng2jpg/dng2jpg.py::_analyze_luminance_key`, `_choose_auto_key_value`; excerpt: log-average/percentile scene classification and key auto-selection from low/normal/high presets. |
-| REQ-104 | `src/dng2jpg/dng2jpg.py::_reinhard_global_tonemap_luminance`, `_apply_auto_brightness_rgb_uint8`; excerpt: percentile robust `Lwhite` and burn-out compression before RGB scaling. |
-| REQ-105 | `src/dng2jpg/dng2jpg.py::_luminance_preserving_desaturate_to_fit`, `_apply_mild_local_contrast_bgr_uint16`; excerpt: overflow-only luminance-preserving desaturation and optional CLAHE luminance blend. |
+| REQ-103 | `src/dng2jpg/dng2jpg.py::_analyze_luminance_key`; excerpt: classifies `low-key`/`normal-key`/`high-key` with the original median and percentile thresholds. |
+| REQ-104 | `src/dng2jpg/dng2jpg.py::_reinhard_global_tonemap_luminance`, `_apply_auto_brightness_rgb_uint16`; excerpt: percentile robust `Lwhite` and burn-out compression before RGB scaling. |
+| REQ-105 | `src/dng2jpg/dng2jpg.py::_luminance_preserving_desaturate_to_fit`; excerpt: overflow-only luminance-preserving grayscale blending with minimal factor selection. |
 | REQ-100 | `src/dng2jpg/dng2jpg.py::_apply_static_postprocess_uint16`, `_apply_auto_levels_uint16`; excerpt: executes auto-levels in the static postprocess chain without leaving uint16/float domains. |
 | REQ-101 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `_parse_auto_levels_options`; excerpt: parses `--auto-levels` plus all `--al-*` knobs with explicit coupling and validation. |
 | REQ-102 | `src/dng2jpg/dng2jpg.py::_parse_auto_levels_hr_method_option`, `_apply_auto_levels_uint16`; excerpt: validates the full RawTherapee-aligned highlight reconstruction method set. |
@@ -280,6 +287,11 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-118 | `src/dng2jpg/dng2jpg.py::_compute_auto_levels_from_histogram`; excerpt: implements RawTherapee-compatible formulas for `expcomp`, `black`, `brightness`, `contrast`, and highlight-compression outputs. |
 | REQ-119 | `src/dng2jpg/dng2jpg.py::_apply_auto_levels_uint16`; excerpt: maps CLI method names to RawTherapee `Color`/`Coloropp` semantics and applies deterministic RGB-space approximations. |
 | REQ-120 | `src/dng2jpg/dng2jpg.py::_clip_auto_levels_out_of_gamut_uint16`, `_apply_auto_levels_uint16`; excerpt: normalizes overflowing RGB triplets to the uint16 ceiling while preserving channel ratios. |
+| REQ-121 | `src/dng2jpg/dng2jpg.py::_analyze_luminance_key`; excerpt: computes `log_avg_lum`, `median_lum`, `p05`, `p95`, `shadow_clip_in`, and `highlight_clip_in` using normalized `1/255` and `254/255` thresholds. |
+| REQ-122 | `src/dng2jpg/dng2jpg.py::_choose_auto_key_value`; excerpt: selects `0.09/0.18/0.36`, applies under/over hints, and clamps to `[a_min,a_max]`. |
+| REQ-123 | `src/dng2jpg/dng2jpg.py::_apply_auto_brightness_rgb_uint16`, `_apply_mild_local_contrast_bgr_uint16`; excerpt: applies optional CLAHE Y-channel local contrast after sRGB re-encoding. |
+| REQ-124 | `src/dng2jpg/dng2jpg.py::AutoBrightnessOptions`, `_parse_auto_brightness_options`, `print_help`; excerpt: exposes `key_value`, `white_point_percentile`, `a_min`, `a_max`, `max_auto_boost_factor`, and `eps` as CLI-configurable controls. |
+| REQ-125 | `src/dng2jpg/dng2jpg.py::AutoBrightnessOptions`, `_parse_auto_brightness_options`, `print_help`; excerpt: exposes local-contrast enable, local-contrast strength, CLAHE clip limit, CLAHE tile grid size, and desaturation enable as CLI-configurable controls. |
 | REQ-107 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `print_help`; excerpt: parses `--enable-opencv`, enforces single backend selector, and documents exclusivity across four backend flags. |
 | REQ-108 | `src/dng2jpg/dng2jpg.py::_run_opencv_hdr_merge`, `_build_ev_times_from_ev_zero_and_delta`; excerpt: executes OpenCV Mertens+Debevec using ordered bracket inputs and EV-derived exposure times. |
 | REQ-109 | `src/dng2jpg/dng2jpg.py::_normalize_debevec_hdr_to_unit_range`, `_run_opencv_hdr_merge`; excerpt: applies robust luminance white-point percentile normalization and blends Debevec with Mertens in float domain. |
@@ -299,10 +311,12 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | TST-008 | `src/dng2jpg/dng2jpg.py::_refresh_output_jpg_exif_thumbnail_after_save`; orientation handling in `0th` and `1st` IFDs. |
 | TST-009 | `.github/workflows/release-uvx.yml`; release job condition depends on `is_master` gate output. |
 | TST-010 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; branch checks for `--auto-levels` coupling and all `--al-*` knob validations. |
-| TST-011 | `src/dng2jpg/dng2jpg.py::_apply_auto_brightness_rgb_uint8`, `_apply_mild_local_contrast_bgr_uint16`; stage preserves uint16 domain with key-adaptive tonemap, anti-clipping desaturation, and optional CLAHE blend. |
+| TST-011 | `tests/test_uint16_postprocess_pipeline.py::test_apply_auto_brightness_rgb_uint16_executes_original_stage_order`; verifies uint16 auto-brightness stage order, optional desaturation, and optional CLAHE local contrast. |
 | TST-013 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_accepts_enable_opencv_backend`, `test_parse_run_options_rejects_multiple_backends_with_opencv`; validates acceptance and exclusivity for `--enable-opencv`. |
 | TST-014 | `tests/test_uint16_postprocess_pipeline.py::test_build_ev_times_from_ev_zero_and_delta_matches_bracket_sequence`; verifies deterministic stop-space EV-time sequence generation. |
 | TST-015 | `tests/test_uint16_postprocess_pipeline.py::test_normalize_debevec_hdr_to_unit_range_clamps_to_valid_interval`; verifies Debevec normalization clamps float output to `[0,1]`. |
 | TST-016 | `tests/test_uint16_postprocess_pipeline.py::test_parse_auto_levels_options_defaults_match_rawtherapee`; verifies parser default values for clip percentage, gamut clipping, method, and gain threshold. |
 | TST-017 | `tests/test_uint16_postprocess_pipeline.py::test_compute_auto_levels_from_histogram_matches_rawtherapee_reference`; verifies RawTherapee-compatible auto-levels numeric outputs for deterministic histograms. |
 | TST-018 | `tests/test_uint16_postprocess_pipeline.py::test_apply_auto_levels_color_methods_preserve_uint16_pipeline`; verifies deterministic `Color Propagation` and `Inpaint Opposed` RGB uint16 execution. |
+| TST-019 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_accepts_all_original_auto_brightness_controls`; verifies auto-brightness parser coverage for every original control. |
+| TST-020 | `tests/test_uint16_postprocess_pipeline.py::test_analyze_luminance_key_uses_original_thresholds_and_auto_boost_rules`; verifies normalized clipping proxies and key auto-selection rules. |
