@@ -757,7 +757,7 @@ def test_resolve_default_postprocess_opencv_uses_updated_static_defaults() -> No
         dng2jpg_module.DEFAULT_LUMINANCE_TMO,
     )
 
-    assert defaults == (1.25, 1.0, 1.1, 1.05)
+    assert defaults == (1.1, 1.05, 1.3, 1.1)
 
 
 def test_parse_run_options_rejects_unknown_hdr_merge_backend() -> None:

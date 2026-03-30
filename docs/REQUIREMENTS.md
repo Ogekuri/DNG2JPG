@@ -97,7 +97,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **DES-004**: MUST isolate intermediate processing artifacts in temporary directories and cleanup automatically after command completion.
 - **DES-005**: MUST preserve source EXIF payload into output JPEG and refresh EXIF thumbnail/orientation metadata when EXIF payload exists.
 - **DES-006**: MUST resolve backend-specific default postprocess factors from selected `--hdr-merge` mode and, for `Luminace-HDR`, from resolved tone-mapping operator.
-- **DES-008**: MUST default OpenCV backend static postprocess factors to `post_gamma=1.25`, `brightness=1.00`, `contrast=1.1`, and `saturation=1.05`.
+- **DES-008**: MUST default OpenCV backend static postprocess factors to `post_gamma=1.1`, `brightness=1.05`, `contrast=1.3`, and `saturation=1.10`.
 - **DES-007**: MUST process conversion as a one-shot process model without spawning explicit application-managed threads.
 
 ### 3.2 Functions
@@ -228,7 +228,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-028**: MUST verify auto-adjust CLI parsing accepts `enable|disable`, defaults to `enable`, and exposes CLAHE-luma enable, strength, clip-limit, and tile-grid controls with deterministic defaults and validation.
 - **TST-029**: MUST verify `_apply_validated_auto_adjust_pipeline` preserves float I/O and executes `blur -> level -> CLAHE-luma -> sigmoid -> vibrance -> high-pass`.
 - **TST-030**: MUST verify float-domain auto-adjust CLAHE-luma preserves blend semantics and remains within quantization-only deviation from the former uint16 implementation on deterministic fixtures.
-- **TST-031**: MUST verify `_resolve_default_postprocess` returns `post_gamma=1.25`, `brightness=1.00`, `contrast=1.1`, and `saturation=1.05` when `--hdr-merge` resolves to `OpenCV`.
+- **TST-031**: MUST verify `_resolve_default_postprocess` returns `post_gamma=1.1`, `brightness=1.05`, `contrast=1.3`, and `saturation=1.10` when `--hdr-merge` resolves to `OpenCV`.
 
 ## 5. Evidence Matrix
 
@@ -251,7 +251,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | DES-004 | `src/dng2jpg/dng2jpg.py::run`, `_run_luminance_hdr_cli`; excerpt: isolates intermediate artifacts under the command temporary workspace and backend-local subdirectories. |
 | DES-005 | `src/dng2jpg/dng2jpg.py::_extract_dng_exif_payload_and_timestamp`, `_refresh_output_jpg_exif_thumbnail_after_save`, `_encode_jpg`. |
 | DES-006 | `src/dng2jpg/dng2jpg.py::_resolve_default_postprocess`; excerpt: backend and TMO-specific defaults. |
-| DES-008 | `src/dng2jpg/dng2jpg.py::_resolve_default_postprocess`; excerpt: OpenCV backend defaults `post_gamma=1.25`, `brightness=1.00`, `contrast=1.1`, `saturation=1.05`. |
+| DES-008 | `src/dng2jpg/dng2jpg.py::_resolve_default_postprocess`; excerpt: OpenCV backend defaults `post_gamma=1.1`, `brightness=1.05`, `contrast=1.3`, `saturation=1.10`. |
 | DES-007 | `docs/WORKFLOW.md`; excerpt: execution-unit model shows process-based flows and "no explicit threads detected". |
 | REQ-001 | `src/dng2jpg/core.py::main`; excerpt: no args -> `ported.print_help(__version__)` and `return 0`. |
 | REQ-002 | `src/dng2jpg/core.py::main`; excerpt: `--help` prints management help and conversion help. |
@@ -376,4 +376,4 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | TST-028 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_accepts_auto_adjust_clahe_controls`; verifies auto-adjust parser defaults, enable/disable handling, and CLAHE-luma controls. |
 | TST-029 | `tests/test_uint16_postprocess_pipeline.py::test_apply_validated_auto_adjust_pipeline_executes_clahe_stage_order`; verifies float-interface auto-adjust stage order with inserted CLAHE-luma stage. |
 | TST-030 | `tests/test_uint16_postprocess_pipeline.py::test_apply_clahe_luma_rgb_float_matches_uint16_reference_within_quantization_tolerance`; verifies float-domain CLAHE-luma stays within quantization-only deviation from the former uint16 implementation. |
-| TST-031 | `tests/test_uint16_postprocess_pipeline.py::test_resolve_default_postprocess_opencv_uses_updated_static_defaults`; verifies OpenCV default static postprocess factors resolve to `1.25`, `1.00`, `1.1`, and `1.05`. |
+| TST-031 | `tests/test_uint16_postprocess_pipeline.py::test_resolve_default_postprocess_opencv_uses_updated_static_defaults`; verifies OpenCV default static postprocess factors resolve to `1.1`, `1.05`, `1.3`, and `1.10`. |

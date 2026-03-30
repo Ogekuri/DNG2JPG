@@ -99,7 +99,7 @@
           - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
         - `_parse_hdr_merge_option(...)`: parse `--hdr-merge` backend selector [`src/dng2jpg/dng2jpg.py`]
           - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
-        - `_resolve_default_postprocess(...)`: derive backend-specific default postprocess factors, including OpenCV-tuned static factors and luminance-TMO-specific overrides [`src/dng2jpg/dng2jpg.py`]
+        - `_resolve_default_postprocess(...)`: derive backend-specific default postprocess factors in `(post_gamma, brightness, contrast, saturation)` order, including OpenCV static defaults and luminance-TMO-specific overrides [`src/dng2jpg/dng2jpg.py`]
         - `_parse_auto_brightness_options(...)`: build auto-brightness options dataclass with original photographic tonemap and desaturation controls [`src/dng2jpg/dng2jpg.py`]
           - `_parse_float_exclusive_range_option(...)`: parse `(min,max)` float range [`src/dng2jpg/dng2jpg.py`]
             - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
