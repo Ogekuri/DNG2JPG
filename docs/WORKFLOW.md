@@ -54,9 +54,9 @@
   - threads: `no explicit threads detected`
 - Internal Call-Trace Tree:
   - `main(...)`: parse top-level argv and dispatch management/conversion branches [`src/dng2jpg/core.py`]
-    - `_check_online_version(...)`: evaluate cached latest-release check and optionally query GitHub API [`src/dng2jpg/core.py`]
+    - `_check_online_version(...)`: evaluate cached latest-release check, assign outcome-specific idle-delay, and optionally query GitHub API [`src/dng2jpg/core.py`]
       - `_should_skip_version_check(...)`: evaluate idle-time cache policy [`src/dng2jpg/core.py`]
-      - `_write_version_cache(...)`: persist idle-time cache metadata [`src/dng2jpg/core.py`]
+      - `_write_version_cache(...)`: rewrite idle-time cache JSON after each attempted API check [`src/dng2jpg/core.py`]
     - `_management_help(...)`: build management help text [`src/dng2jpg/core.py`]
     - `_run_management(...)`: execute uv management command on Linux or print manual command [`src/dng2jpg/core.py`]
     - `print_help(...)`: render conversion help text with canonical `dng2jpg` command label [`src/dng2jpg/dng2jpg.py`]

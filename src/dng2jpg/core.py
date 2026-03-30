@@ -18,6 +18,10 @@ REPOSITORY = "DNG2JPG"
 _VERSION_CACHE_FILE = (
     Path.home() / ".cache" / PROGRAM / "check_version_idle-time.json"
 )
+## @brief Idle-delay applied after successful latest-release checks.
+_VERSION_CHECK_SUCCESS_IDLE_DELAY_SECONDS = 3600
+## @brief Idle-delay applied after any latest-release check error.
+_VERSION_CHECK_ERROR_IDLE_DELAY_SECONDS = 86400
 
 
 def _management_help() -> str:
@@ -35,6 +39,20 @@ def _management_help() -> str:
 
 
 def _write_version_cache(idle_delay_seconds: int) -> None:
+    """
+    @brief Persist latest-release cache metadata as JSON.
+    @details Computes `last_check_*` and `idle_time_*` fields from the current
+    epoch, creates the cache parent directory when missing, and rewrites the
+    cache JSON atomically via `Path.write_text`. Complexity: O(1). Side
+    effects: directory creation and cache file overwrite.
+    @param idle_delay_seconds {int} Idle-delay in seconds added to the current
+    epoch to derive the next `idle_time_epoch`.
+    @return {None} No return value.
+    @throws {OSError} Directory creation or cache-file write failure.
+    @satisfies REQ-016, REQ-107, REQ-108
+    @post `_VERSION_CACHE_FILE` stores the latest check epoch and derived
+    idle-time metadata.
+    """
     import json
     import time
 
@@ -53,6 +71,18 @@ def _write_version_cache(idle_delay_seconds: int) -> None:
 
 
 def _should_skip_version_check(force: bool) -> bool:
+    """
+    @brief Evaluate whether cached idle-time suppresses a network version check.
+    @details Returns `False` when forced, when the cache file is absent, when
+    cache JSON decoding fails, or when `idle_time_epoch` is missing/invalid.
+    Returns `True` only when the current epoch is strictly earlier than the
+    cached idle-time. Complexity: O(1). Side effect: cache-file read.
+    @param force {bool} Bypass flag that disables cache suppression when true.
+    @return {bool} True if the current invocation must skip the network check;
+    False otherwise.
+    @throws {None} Cache read and decode failures are converted to `False`.
+    @satisfies REQ-016
+    """
     import json
     import time
 
@@ -69,6 +99,23 @@ def _should_skip_version_check(force: bool) -> bool:
 
 
 def _check_online_version(force: bool) -> None:
+    """
+    @brief Execute the latest-release check and refresh cache idle-time policy.
+    @details Skips the network request when `_should_skip_version_check(...)`
+    returns true. Otherwise performs one GitHub latest-release API request,
+    normalizes the returned tag name, assigns idle-delay `3600` seconds after a
+    successful attempt, assigns idle-delay `86400` seconds after any handled
+    request/parsing error, rewrites the cache JSON after every attempted API
+    call, and then emits the status or error message. Complexity: O(1). Side
+    effects: network I/O, cache-file rewrite, stdout/stderr output.
+    @param force {bool} Bypass flag that forces a network request even when the
+    cache idle-time is still active.
+    @return {None} No return value.
+    @throws {OSError} Cache-file rewrite failure after a completed API attempt.
+    @satisfies REQ-016, REQ-107, REQ-108
+    @see _should_skip_version_check
+    @see _write_version_cache
+    """
     import json
     from urllib import error, request
 
@@ -83,40 +130,45 @@ def _check_online_version(force: bool) -> None:
             "User-Agent": f"{PROGRAM}/version-check",
         },
     )
+    idle_delay_seconds = _VERSION_CHECK_SUCCESS_IDLE_DELAY_SECONDS
+    status_message = ""
+    status_stream = sys.stderr
     try:
         with request.urlopen(req, timeout=2) as response:
             payload = json.loads(response.read().decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("Unexpected latest-release payload shape.")
+        latest_raw = payload.get("tag_name")
+        latest = str(latest_raw or "").strip()
+        if latest.startswith("v"):
+            latest = latest[1:]
+        if latest and latest != __version__:
+            status_message = (
+                f"\033[92mVersione Disponibile: {latest} | "
+                f"Versione Installata: {__version__}\033[0m"
+            )
+            status_stream = sys.stdout
+        else:
+            status_message = (
+                f"\033[91mVersione Disponibile: {latest or 'unknown'} | "
+                f"Versione Installata: {__version__}\033[0m"
+            )
     except error.HTTPError as http_error:
-        if http_error.code == 429:
-            _write_version_cache(3600)
-        print(
-            f"\033[91mVersion check failed (HTTP {http_error.code}).\033[0m",
-            file=sys.stderr,
+        idle_delay_seconds = _VERSION_CHECK_ERROR_IDLE_DELAY_SECONDS
+        status_message = (
+            f"\033[91mVersion check failed (HTTP {http_error.code}).\033[0m"
         )
-        return
     except error.URLError as url_error:
-        print(f"\033[91mVersion check failed: {url_error.reason}.\033[0m", file=sys.stderr)
-        return
+        idle_delay_seconds = _VERSION_CHECK_ERROR_IDLE_DELAY_SECONDS
+        status_message = (
+            f"\033[91mVersion check failed: {url_error.reason}.\033[0m"
+        )
     except (OSError, ValueError, json.JSONDecodeError) as generic_error:
-        print(f"\033[91mVersion check failed: {generic_error}.\033[0m", file=sys.stderr)
-        return
+        idle_delay_seconds = _VERSION_CHECK_ERROR_IDLE_DELAY_SECONDS
+        status_message = f"\033[91mVersion check failed: {generic_error}.\033[0m"
 
-    latest_raw = payload.get("tag_name")
-    latest = str(latest_raw or "").strip()
-    if latest.startswith("v"):
-        latest = latest[1:]
-
-    _write_version_cache(300)
-
-    if latest and latest != __version__:
-        print(
-            f"\033[92mVersione Disponibile: {latest} | Versione Installata: {__version__}\033[0m"
-        )
-    else:
-        print(
-            f"\033[91mVersione Disponibile: {latest or 'unknown'} | Versione Installata: {__version__}\033[0m",
-            file=sys.stderr,
-        )
+    _write_version_cache(idle_delay_seconds)
+    print(status_message, file=status_stream)
 
 
 def _run_management(command: list[str]) -> int:

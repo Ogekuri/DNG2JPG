@@ -61,7 +61,7 @@ import sys
 
 ---
 
-# core.py | Python | 173L | 9 symbols | 14 imports | 3 comments
+# core.py | Python | 225L | 9 symbols | 14 imports | 8 comments
 > Path: `src/dng2jpg/core.py`
 
 ## Imports
@@ -87,17 +87,39 @@ import subprocess
 - var `PROGRAM = "dng2jpg"` (L14)
 - var `OWNER = "Ogekuri"` (L15)
 - var `REPOSITORY = "DNG2JPG"` (L16)
-### fn `def _management_help() -> str` `priv` (L23-36)
+### fn `def _management_help() -> str` `priv` (L27-40)
+- @brief Idle-delay applied after any latest-release check error.
 
-### fn `def _write_version_cache(idle_delay_seconds: int) -> None` `priv` (L37-54)
+### fn `def _write_version_cache(idle_delay_seconds: int) -> None` `priv` (L41-72)
+- @brief Persist latest-release cache metadata as JSON.
+- @details Computes `last_check_*` and `idle_time_*` fields from the current epoch, creates the cache parent directory when missing, and rewrites the cache JSON atomically via `Path.write_text`. Complexity: O(1). Side effects: directory creation and cache file overwrite.
+- @param idle_delay_seconds {int} Idle-delay in seconds added to the current epoch to derive the next `idle_time_epoch`.
+- @return {None} No return value.
+- @throws {OSError} Directory creation or cache-file write failure.
+- @satisfies REQ-016, REQ-107, REQ-108
+- @post `_VERSION_CACHE_FILE` stores the latest check epoch and derived idle-time metadata.
 
-### fn `def _should_skip_version_check(force: bool) -> bool` `priv` (L55-70)
+### fn `def _should_skip_version_check(force: bool) -> bool` `priv` (L73-100)
+- @brief Evaluate whether cached idle-time suppresses a network version check.
+- @details Returns `False` when forced, when the cache file is absent, when cache JSON decoding fails, or when `idle_time_epoch` is missing/invalid. Returns `True` only when the current epoch is strictly earlier than the cached idle-time. Complexity: O(1). Side effect: cache-file read.
+- @param force {bool} Bypass flag that disables cache suppression when true.
+- @return {bool} True if the current invocation must skip the network check; False otherwise.
+- @throws {None} Cache read and decode failures are converted to `False`.
+- @satisfies REQ-016
 
-### fn `def _check_online_version(force: bool) -> None` `priv` (L71-121)
+### fn `def _check_online_version(force: bool) -> None` `priv` (L101-173)
+- @brief Execute the latest-release check and refresh cache idle-time policy.
+- @details Skips the network request when `_should_skip_version_check(...)` returns true. Otherwise performs one GitHub latest-release API request, normalizes the returned tag name, assigns idle-delay `3600` seconds after a successful attempt, assigns idle-delay `86400` seconds after any handled request/parsing error, rewrites the cache JSON after every attempted API call, and then emits the status or error message. Complexity: O(1). Side effects: network I/O, cache-file rewrite, stdout/stderr output.
+- @param force {bool} Bypass flag that forces a network request even when the cache idle-time is still active.
+- @return {None} No return value.
+- @throws {OSError} Cache-file rewrite failure after a completed API attempt.
+- @see _should_skip_version_check
+- @see _write_version_cache
+- @satisfies REQ-016, REQ-107, REQ-108
 
-### fn `def _run_management(command: list[str]) -> int` `priv` (L122-135)
+### fn `def _run_management(command: list[str]) -> int` `priv` (L174-187)
 
-### fn `def main(argv: Sequence[str] | None = None) -> int` (L136-173)
+### fn `def main(argv: Sequence[str] | None = None) -> int` (L188-225)
 
 ## Symbol Index
 |Symbol|Kind|Vis|Lines|Sig|
@@ -105,12 +127,12 @@ import subprocess
 |`PROGRAM`|var|pub|14||
 |`OWNER`|var|pub|15||
 |`REPOSITORY`|var|pub|16||
-|`_management_help`|fn|priv|23-36|def _management_help() -> str|
-|`_write_version_cache`|fn|priv|37-54|def _write_version_cache(idle_delay_seconds: int) -> None|
-|`_should_skip_version_check`|fn|priv|55-70|def _should_skip_version_check(force: bool) -> bool|
-|`_check_online_version`|fn|priv|71-121|def _check_online_version(force: bool) -> None|
-|`_run_management`|fn|priv|122-135|def _run_management(command: list[str]) -> int|
-|`main`|fn|pub|136-173|def main(argv: Sequence[str] | None = None) -> int|
+|`_management_help`|fn|priv|27-40|def _management_help() -> str|
+|`_write_version_cache`|fn|priv|41-72|def _write_version_cache(idle_delay_seconds: int) -> None|
+|`_should_skip_version_check`|fn|priv|73-100|def _should_skip_version_check(force: bool) -> bool|
+|`_check_online_version`|fn|priv|101-173|def _check_online_version(force: bool) -> None|
+|`_run_management`|fn|priv|174-187|def _run_management(command: list[str]) -> int|
+|`main`|fn|pub|188-225|def main(argv: Sequence[str] | None = None) -> int|
 
 
 ---
