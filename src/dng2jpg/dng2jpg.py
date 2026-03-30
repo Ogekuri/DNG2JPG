@@ -84,6 +84,10 @@ DEFAULT_REINHARD02_BRIGHTNESS = 1.25
 DEFAULT_REINHARD02_CONTRAST = 0.85
 DEFAULT_REINHARD02_SATURATION = 0.55
 DEFAULT_MANTIUK08_CONTRAST = 1.2
+DEFAULT_OPENCV_POST_GAMMA = 1.25
+DEFAULT_OPENCV_BRIGHTNESS = 1.0
+DEFAULT_OPENCV_CONTRAST = 1.1
+DEFAULT_OPENCV_SATURATION = 1.05
 DEFAULT_OPENCV_DEBEVEC_WHITE_POINT_PERCENTILE = 99.5
 DEFAULT_HDRPLUS_PROXY_MODE = "rggb"
 DEFAULT_HDRPLUS_SEARCH_RADIUS = 4
@@ -826,8 +830,8 @@ def print_help(version):
     )
     print(
         f"                   - --hdr-merge {HDR_MERGE_MODE_OPENCV}: "
-        f"post-gamma={DEFAULT_POST_GAMMA}, brightness={DEFAULT_BRIGHTNESS}, "
-        f"contrast={DEFAULT_CONTRAST}, saturation={DEFAULT_SATURATION}."
+        f"post-gamma={DEFAULT_OPENCV_POST_GAMMA}, brightness={DEFAULT_OPENCV_BRIGHTNESS}, "
+        f"contrast={DEFAULT_OPENCV_CONTRAST}, saturation={DEFAULT_OPENCV_SATURATION}."
     )
     print(
         f"                   - --hdr-merge {HDR_MERGE_MODE_HDR_PLUS}: "
@@ -2352,14 +2356,23 @@ def _resolve_default_postprocess(
 ):
     """@brief Resolve backend-specific postprocess defaults.
 
-    @details Selects neutral defaults for enfuse/OpenCV/HDR+ and non-tuned luminance
-    operators, and selects tuned defaults for luminance `reinhard02` and
-    `mantiuk08`.
+    @details Selects backend-specific defaults. Uses tuned static postprocess
+    factors for `OpenCV`, luminance-operator-specific defaults for
+    `Luminace-HDR`, and neutral defaults for `enfuse`, `HDR-Plus`, and
+    untuned luminance operators.
     @param hdr_merge_mode {str} Canonical HDR merge mode selector.
     @param luminance_tmo {str} Selected luminance tone-mapping operator.
     @return {tuple[float, float, float, float]} Defaults in `(post_gamma, brightness, contrast, saturation)` order.
-    @satisfies REQ-069, REQ-071, REQ-072, REQ-091, REQ-107, REQ-111
+    @satisfies DES-006, DES-008
     """
+
+    if hdr_merge_mode == HDR_MERGE_MODE_OPENCV:
+        return (
+            DEFAULT_OPENCV_POST_GAMMA,
+            DEFAULT_OPENCV_BRIGHTNESS,
+            DEFAULT_OPENCV_CONTRAST,
+            DEFAULT_OPENCV_SATURATION,
+        )
 
     if hdr_merge_mode != HDR_MERGE_MODE_LUMINANCE:
         return (

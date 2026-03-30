@@ -828,6 +828,17 @@ def test_parse_run_options_defaults_hdr_merge_to_opencv() -> None:
     assert parsed[11] is False
 
 
+def test_resolve_default_postprocess_opencv_uses_updated_static_defaults() -> None:
+    """OpenCV backend defaults must resolve to the updated static factors."""
+
+    defaults = dng2jpg_module._resolve_default_postprocess(  # pylint: disable=protected-access
+        dng2jpg_module.HDR_MERGE_MODE_OPENCV,
+        dng2jpg_module.DEFAULT_LUMINANCE_TMO,
+    )
+
+    assert defaults == (1.25, 1.0, 1.1, 1.05)
+
+
 def test_parse_run_options_rejects_unknown_hdr_merge_backend() -> None:
     """Parser must reject unknown `--hdr-merge` selector values."""
 
