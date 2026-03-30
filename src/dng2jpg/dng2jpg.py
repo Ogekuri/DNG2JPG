@@ -60,14 +60,10 @@ DEFAULT_AB_NORMAL_KEY_VALUE = 0.18
 DEFAULT_AB_HIGH_KEY_VALUE = 0.36
 DEFAULT_AL_CLIP_PERCENT = 0.02
 DEFAULT_AL_HISTCOMPR = 3
-DEFAULT_AL_CLIP_OUT_OF_GAMUT_COLORS = True
-DEFAULT_AL_HIGHLIGHT_RECONSTRUCTION_METHOD = "Inpaint Opposed"
-DEFAULT_AL_INPAINT_OPPOSED_GAIN_THRESHOLD = 1.0
 _AUTO_LEVELS_HIGHLIGHT_METHODS = (
     "Luminance",
     "CIELab blending",
     "Blend",
-    "Inpaint Opposed",
 )
 DEFAULT_LUMINANCE_HDR_MODEL = "debevec"
 DEFAULT_LUMINANCE_HDR_WEIGHT = "flat"
@@ -134,8 +130,6 @@ _AUTO_BRIGHTNESS_KNOB_OPTIONS = (
 )
 _AUTO_LEVELS_KNOB_OPTIONS = (
     "--al-clip-pct",
-    "--al-clip-out-of-gamut-colors",
-    "--al-highlight-reconstruction",
     "--al-highlight-reconstruction-method",
 )
 _LUMINANCE_OPERATOR_TABLE_HEADERS = (
@@ -352,26 +346,21 @@ class AutoBrightnessOptions:
 class AutoLevelsOptions:
     """@brief Hold `--auto-levels` knob values.
 
-    @details Encapsulates validated RawTherapee-derived auto-levels controls:
-    histogram clip percentage, optional hue-stable out-of-gamut clipping,
-    optional highlight reconstruction, and method-specific defaults for the
-    current RGB uint16 post-merge stage.
+    @details Encapsulates validated histogram-based auto-levels controls ported
+    from the attached RawTherapee-oriented source and adapted for RGB uint16
+    stage execution in the current post-merge pipeline.
     @param clip_percent {float} Histogram clipping percentage in `[0, +inf)`.
     @param histcompr {int} Histogram compression shift in `[0, 15]`.
-    @param clip_out_of_gamut_colors {bool} `True` when hue-stable film-like clipping is enabled for out-of-range pixels.
     @param highlight_reconstruction_enabled {bool} `True` when highlight reconstruction is enabled.
-    @param highlight_reconstruction_method {str|None} Highlight reconstruction method (`Luminance`, `CIELab blending`, `Blend`, `Inpaint Opposed`) when enabled.
-    @param inpaint_opposed_gain_threshold {float} Gain threshold used by `Inpaint Opposed` reconstruction.
+    @param highlight_reconstruction_method {str|None} Highlight reconstruction method (`Luminance`, `CIELab blending`, `Blend`) when enabled.
     @return {None} Immutable dataclass container.
-    @satisfies REQ-101, REQ-102, REQ-117, REQ-118, REQ-119
+    @satisfies REQ-100, REQ-101, REQ-102
     """
 
     clip_percent: float = DEFAULT_AL_CLIP_PERCENT
     histcompr: int = DEFAULT_AL_HISTCOMPR
-    clip_out_of_gamut_colors: bool = DEFAULT_AL_CLIP_OUT_OF_GAMUT_COLORS
     highlight_reconstruction_enabled: bool = False
     highlight_reconstruction_method: str | None = None
-    inpaint_opposed_gain_threshold: float = DEFAULT_AL_INPAINT_OPPOSED_GAIN_THRESHOLD
 
 
 @dataclass(frozen=True)
@@ -557,9 +546,7 @@ def print_help(version):
         "[--ab-clahe-clip-limit=<value>] "
         "[--auto-levels[=<1|true|yes|on>]] "
         "[--al-clip-pct=<value>] "
-        "[--al-clip-out-of-gamut-colors=<1|0>] "
-        "[--al-highlight-reconstruction[=<1|0>]] "
-        "[--al-highlight-reconstruction-method <Luminance|CIELab blending|Blend|Inpaint Opposed>] "
+        "[--al-highlight-reconstruction-method <Luminance|CIELab blending|Blend>] "
         f"[--jpg-compression=<0..100>] [--auto-adjust <ImageMagick|OpenCV>] "
         "[--aa-blur-sigma=<value>] [--aa-blur-threshold-pct=<0..100>] "
         "[--aa-level-low-pct=<0..100>] [--aa-level-high-pct=<0..100>] "
@@ -658,16 +645,7 @@ def print_help(version):
         f"  --al-clip-pct=<value> - Histogram clipping percentage >= 0 (default: {DEFAULT_AL_CLIP_PERCENT:g})."
     )
     print(
-        "  --al-clip-out-of-gamut-colors=<1|0> - Enable hue-stable film-like clipping for out-of-range pixels (default: enabled)."
-    )
-    print(
-        "  --al-highlight-reconstruction - Enable highlight reconstruction with RawTherapee-compatible defaults."
-    )
-    print(
-        "                     Optional value forms: --al-highlight-reconstruction=1 and --al-highlight-reconstruction=0."
-    )
-    print(
-        "  --al-highlight-reconstruction-method <name> - Override highlight reconstruction method (default when enabled: Inpaint Opposed)."
+        "  --al-highlight-reconstruction-method <name> - Enable highlight reconstruction and require one method."
     )
     print(
         "                     Allowed values: "
@@ -1082,28 +1060,6 @@ def _parse_auto_levels_option(auto_levels_raw):
         return True
     print_error(f"Invalid --auto-levels value: {auto_levels_raw}")
     print_error("Allowed values: 1, true, yes, on")
-    return None
-
-
-def _parse_optional_bool_option(option_name, option_value):
-    """@brief Parse a deterministic boolean option token.
-
-    @details Accepts explicit enable/disable tokens for CLI knobs that mirror
-    RawTherapee checkbox states. Supported true tokens are `1`, `true`, `yes`,
-    `on`; supported false tokens are `0`, `false`, `no`, `off`.
-    @param option_name {str} Long option name used for diagnostics.
-    @param option_value {str} Raw option token to parse.
-    @return {bool|None} Parsed boolean value or `None` on validation error.
-    @satisfies REQ-101
-    """
-
-    option_text = option_value.strip().lower()
-    if option_text in ("1", "true", "yes", "on"):
-        return True
-    if option_text in ("0", "false", "no", "off"):
-        return False
-    print_error(f"Invalid {option_name} value: {option_value}")
-    print_error("Allowed values: 1, true, yes, on, 0, false, no, off")
     return None
 
 
@@ -1845,22 +1801,18 @@ def _parse_auto_levels_hr_method_option(auto_levels_method_raw):
 def _parse_auto_levels_options(auto_levels_raw_values):
     """@brief Parse and validate auto-levels parameters.
 
-    @details Parses optional histogram clip percentage, optional out-of-gamut
-    clipping toggle, optional highlight reconstruction enable flag, and
-    optional highlight reconstruction method with RawTherapee-compatible
-    defaults.
+    @details Parses optional histogram clip percentage and optional mandatory
+    highlight reconstruction method when reconstruction is enabled.
     @param auto_levels_raw_values {dict[str, str]} Raw `--al-*` option values keyed by long option name.
     @return {AutoLevelsOptions|None} Parsed auto-levels options or `None` on validation error.
-    @satisfies REQ-101, REQ-102, REQ-117, REQ-118, REQ-119
+    @satisfies REQ-100, REQ-101, REQ-102
     """
 
     options = AutoLevelsOptions()
     clip_percent = options.clip_percent
     histcompr = options.histcompr
-    clip_out_of_gamut_colors = options.clip_out_of_gamut_colors
     highlight_reconstruction_enabled = options.highlight_reconstruction_enabled
     highlight_reconstruction_method = options.highlight_reconstruction_method
-    inpaint_opposed_gain_threshold = options.inpaint_opposed_gain_threshold
 
     if "--al-clip-pct" in auto_levels_raw_values:
         parsed = _parse_non_negative_float_option(
@@ -1869,22 +1821,6 @@ def _parse_auto_levels_options(auto_levels_raw_values):
         if parsed is None:
             return None
         clip_percent = parsed
-    if "--al-clip-out-of-gamut-colors" in auto_levels_raw_values:
-        parsed = _parse_optional_bool_option(
-            "--al-clip-out-of-gamut-colors",
-            auto_levels_raw_values["--al-clip-out-of-gamut-colors"],
-        )
-        if parsed is None:
-            return None
-        clip_out_of_gamut_colors = parsed
-    if "--al-highlight-reconstruction" in auto_levels_raw_values:
-        parsed = _parse_optional_bool_option(
-            "--al-highlight-reconstruction",
-            auto_levels_raw_values["--al-highlight-reconstruction"],
-        )
-        if parsed is None:
-            return None
-        highlight_reconstruction_enabled = parsed
     if "--al-highlight-reconstruction-method" in auto_levels_raw_values:
         parsed = _parse_auto_levels_hr_method_option(
             auto_levels_raw_values["--al-highlight-reconstruction-method"]
@@ -1893,19 +1829,12 @@ def _parse_auto_levels_options(auto_levels_raw_values):
             return None
         highlight_reconstruction_enabled = True
         highlight_reconstruction_method = parsed
-    if (
-        highlight_reconstruction_enabled
-        and highlight_reconstruction_method is None
-    ):
-        highlight_reconstruction_method = DEFAULT_AL_HIGHLIGHT_RECONSTRUCTION_METHOD
 
     return AutoLevelsOptions(
         clip_percent=clip_percent,
         histcompr=histcompr,
-        clip_out_of_gamut_colors=clip_out_of_gamut_colors,
         highlight_reconstruction_enabled=highlight_reconstruction_enabled,
         highlight_reconstruction_method=highlight_reconstruction_method,
-        inpaint_opposed_gain_threshold=inpaint_opposed_gain_threshold,
     )
 
 
@@ -2257,34 +2186,6 @@ def _parse_run_options(args):
             if parsed_auto_levels is None:
                 return None
             auto_levels_enabled = parsed_auto_levels
-            idx += 1
-            continue
-
-        if token == "--al-highlight-reconstruction":
-            if idx + 1 < len(args) and not args[idx + 1].startswith("--"):
-                parsed_highlight_reconstruction = _parse_optional_bool_option(
-                    "--al-highlight-reconstruction",
-                    args[idx + 1],
-                )
-                if parsed_highlight_reconstruction is None:
-                    return None
-                auto_levels_raw_values[token] = args[idx + 1]
-                idx += 2
-                continue
-            auto_levels_raw_values[token] = "1"
-            idx += 1
-            continue
-
-        if token.startswith("--al-highlight-reconstruction="):
-            parsed_highlight_reconstruction = _parse_optional_bool_option(
-                "--al-highlight-reconstruction",
-                token.split("=", 1)[1],
-            )
-            if parsed_highlight_reconstruction is None:
-                return None
-            auto_levels_raw_values["--al-highlight-reconstruction"] = token.split(
-                "=", 1
-            )[1]
             idx += 1
             continue
 
@@ -4912,551 +4813,18 @@ def _compute_auto_levels_from_histogram(np_module, histogram, histcompr, clip_pe
     }
 
 
-def _rt_basel(np_module, x_values, slope_start, slope_end):
-    """@brief Evaluate RawTherapee convex base curve on normalized values.
-
-    @details Implements the `basel` helper from RawTherapee `curves.h` over
-    float arrays in `[0,1]`. The function preserves exact zero handling to
-    avoid logarithm-domain singularities.
-    @param np_module {ModuleType} Imported numpy module.
-    @param x_values {object} Normalized input tensor in `[0,1]`.
-    @param slope_start {float} Start-point slope parameter.
-    @param slope_end {float} End-point slope parameter.
-    @return {object} Float tensor after convex base-curve evaluation.
-    @satisfies REQ-116
-    """
-
-    x_values = np_module.asarray(x_values, dtype=np_module.float64)
-    output = np_module.zeros_like(x_values)
-    nonzero_mask = x_values != 0.0
-    if not np_module.any(nonzero_mask):
-        return output
-    k_value = math.sqrt((slope_start - 1.0) * (slope_start - slope_end) * 0.5) / (
-        1.0 - slope_end
-    )
-    l_value = (slope_start - slope_end) / (1.0 - slope_end) + k_value
-    x_nonzero = x_values[nonzero_mask]
-    log_x = np_module.log(np_module.maximum(x_nonzero, 1e-300))
-    output[nonzero_mask] = (
-        slope_end * x_nonzero
-        + (1.0 - slope_end)
-        * (2.0 - np_module.exp(k_value * log_x))
-        * np_module.exp(l_value * log_x)
-    )
-    return output
-
-
-def _rt_baseu(np_module, x_values, slope_start, slope_end):
-    """@brief Evaluate RawTherapee concave base curve on normalized values.
-
-    @details Implements the `baseu` helper from RawTherapee `curves.h` as the
-    complement of `_rt_basel`.
-    @param np_module {ModuleType} Imported numpy module.
-    @param x_values {object} Normalized input tensor in `[0,1]`.
-    @param slope_start {float} Start-point slope parameter.
-    @param slope_end {float} End-point slope parameter.
-    @return {object} Float tensor after concave base-curve evaluation.
-    @satisfies REQ-116
-    """
-
-    return 1.0 - _rt_basel(
-        np_module=np_module,
-        x_values=1.0 - x_values,
-        slope_start=slope_start,
-        slope_end=slope_end,
-    )
-
-
-def _rt_cupper(np_module, x_values, slope_value, highlight_recovery):
-    """@brief Evaluate RawTherapee upper highlight curve on normalized values.
-
-    @details Ports the `cupper` helper from RawTherapee `curves.h` for array
-    inputs. The curve is piecewise linear and base-curve blended according to
-    highlight recovery strength.
-    @param np_module {ModuleType} Imported numpy module.
-    @param x_values {object} Normalized input tensor in `[0,1]`.
-    @param slope_value {float} Start-point slope parameter.
-    @param highlight_recovery {float} Highlight recovery parameter.
-    @return {object} Float tensor after upper highlight-curve evaluation.
-    @satisfies REQ-116
-    """
-
-    x_values = np_module.asarray(x_values, dtype=np_module.float64)
-    if highlight_recovery > 1.0:
-        return _rt_baseu(
-            np_module=np_module,
-            x_values=x_values,
-            slope_start=slope_value,
-            slope_end=2.0 * (highlight_recovery - 1.0) / slope_value,
-        )
-    x1_value = (1.0 - highlight_recovery) / slope_value
-    x2_value = x1_value + highlight_recovery
-    blended = 1.0 - highlight_recovery + highlight_recovery * _rt_baseu(
-        np_module=np_module,
-        x_values=(x_values - x1_value) / max(highlight_recovery, 1e-12),
-        slope_start=slope_value,
-        slope_end=0.3 * highlight_recovery,
-    )
-    return np_module.where(
-        x_values >= x2_value,
-        1.0,
-        np_module.where(x_values < x1_value, x_values * slope_value, blended),
-    )
-
-
-def _rt_clower(np_module, x_values, slope_value, shadow_recovery):
-    """@brief Evaluate RawTherapee lower shadow curve on normalized values.
-
-    @details Implements the `clower` helper from RawTherapee `curves.h` as the
-    complement of `_rt_cupper`.
-    @param np_module {ModuleType} Imported numpy module.
-    @param x_values {object} Normalized input tensor in `[0,1]`.
-    @param slope_value {float} End-point slope parameter.
-    @param shadow_recovery {float} Shadow recovery parameter.
-    @return {object} Float tensor after lower shadow-curve evaluation.
-    @satisfies REQ-116
-    """
-
-    return 1.0 - _rt_cupper(
-        np_module=np_module,
-        x_values=1.0 - x_values,
-        slope_value=slope_value,
-        highlight_recovery=shadow_recovery,
-    )
-
-
-def _rt_clower2(np_module, x_values, slope_value, shadow_recovery):
-    """@brief Evaluate RawTherapee negative-black lower curve on normalized values.
-
-    @details Ports the `clower2` helper from RawTherapee `curves.h`. This path
-    is used only when the black-point parameter is negative.
-    @param np_module {ModuleType} Imported numpy module.
-    @param x_values {object} Normalized input tensor in `[0,1]`.
-    @param slope_value {float} End-point slope parameter.
-    @param shadow_recovery {float} Shadow recovery parameter.
-    @return {object} Float tensor after negative-black lower-curve evaluation.
-    @satisfies REQ-116
-    """
-
-    x_values = np_module.asarray(x_values, dtype=np_module.float64)
-    x1_value = shadow_recovery / 1.5 + 0.00001
-    rollover = 1.0 - (1.0 - x_values) * slope_value
-    curved = rollover - (1.0 - slope_value) * np_module.square(
-        np_module.square(1.0 - x_values / max(x1_value, 1e-12))
-    )
-    return np_module.where(
-        (x_values > x1_value) | (shadow_recovery < 0.001),
-        rollover,
-        curved,
-    )
-
-
-def _rt_simplebasecurve(np_module, x_values, black_point, shadow_recovery):
-    """@brief Evaluate RawTherapee shadow/base curve on normalized values.
-
-    @details Ports `simplebasecurve` from RawTherapee `curves.h`. The function
-    applies a pure identity when `black_point == 0`, otherwise evaluates the
-    positive-black or negative-black branch used by the exposure tool.
-    @param np_module {ModuleType} Imported numpy module.
-    @param x_values {object} Normalized input tensor in `[0,1]`.
-    @param black_point {float} Black-point parameter normalized by `65535`.
-    @param shadow_recovery {float} Shadow recovery parameter.
-    @return {object} Float tensor after shadow/base-curve evaluation.
-    @satisfies REQ-116
-    """
-
-    x_values = np_module.asarray(x_values, dtype=np_module.float64)
-    if black_point == 0.0:
-        return x_values
-    if black_point < 0.0:
-        midpoint = 0.5
-        slope_value = 1.0 + black_point
-        y_value = -black_point + midpoint * slope_value
-        return np_module.where(
-            x_values > midpoint,
-            y_value + (x_values - midpoint) * slope_value,
-            y_value
-            * _rt_clower2(
-                np_module=np_module,
-                x_values=x_values / midpoint,
-                slope_value=slope_value * midpoint / y_value,
-                shadow_recovery=2.0 - shadow_recovery,
-            ),
-        )
-    slope_value = 1.0 / (1.0 - black_point)
-    midpoint = black_point + (1.0 - black_point) * 0.25
-    y_value = (midpoint - black_point) * slope_value
-    return np_module.where(
-        x_values <= midpoint,
-        _rt_clower(
-            np_module=np_module,
-            x_values=x_values / midpoint,
-            slope_value=slope_value * midpoint / y_value,
-            shadow_recovery=shadow_recovery,
-        )
-        * y_value,
-        y_value + (x_values - midpoint) * slope_value,
-    )
-
-
-def _apply_rt_highlight_compression(np_module, image_rgb, auto_levels_metrics):
-    """@brief Apply RawTherapee exposure and highlight-compression transfer.
-
-    @details Reconstructs the effective exposure-tool highlight branch used by
-    RawTherapee auto-levels: linear exposure scaling from `expcomp`, optional
-    logarithmic shoulder from `hlcompr`, and deterministic shoulder placement
-    from `hlcomprthresh`.
-    @param np_module {ModuleType} Imported numpy module.
-    @param image_rgb {object} RGB float tensor on uint16 scale.
-    @param auto_levels_metrics {dict[str, int|float]} Histogram-derived auto-levels metrics.
-    @return {object} RGB float tensor after exposure and highlight compression.
-    @satisfies REQ-116
-    """
-
-    rgb = np_module.asarray(image_rgb, dtype=np_module.float64)
-    expcomp = float(auto_levels_metrics["expcomp"])
-    hlcompr = float(auto_levels_metrics["hlcompr"])
-    hlcomprthresh = float(auto_levels_metrics["hlcomprthresh"])
-    exp_scale = math.pow(2.0, expcomp)
-    comp = (max(0.0, expcomp) + 1.0) * hlcompr / 100.0
-    if comp <= 0.0:
-        return rgb * exp_scale
-    shoulder = ((65536.0 / max(1.0, exp_scale)) * (hlcomprthresh / 200.0)) + 0.1
-    hlrange = 65536.0 - shoulder
-    output = rgb * exp_scale
-    highlight_mask = rgb > shoulder
-    if not np_module.any(highlight_mask):
-        return output
-    recovery_ratio = ((rgb - shoulder) * comp) / max(hlrange, 1e-12)
-    output[highlight_mask] = np_module.log1p(
-        recovery_ratio[highlight_mask] * exp_scale
-    ) / np_module.maximum(recovery_ratio[highlight_mask], 1e-12)
-    return output
-
-
-def _apply_rt_black_shadow_curve(np_module, image_rgb, black_level, shadow_recovery=0.75):
-    """@brief Apply RawTherapee black-point/shadow curve on RGB float data.
-
-    @details Ports the auto-levels black-point stage by normalizing the RGB
-    tensor to `[0,1]`, evaluating `simplebasecurve`, and restoring the uint16
-    scale. `shadow_recovery=0.75` matches the exposure panel default
-    `shcompr=50`.
-    @param np_module {ModuleType} Imported numpy module.
-    @param image_rgb {object} RGB float tensor on uint16 scale.
-    @param black_level {int|float} RawTherapee black-point metric on uint16 scale.
-    @param shadow_recovery {float} Shadow recovery strength.
-    @return {object} RGB float tensor after black-point/shadow correction.
-    @satisfies REQ-116
-    """
-
-    black_normalized = float(black_level) / 65535.0
-    if black_normalized == 0.0:
-        return np_module.asarray(image_rgb, dtype=np_module.float64)
-    normalized = np_module.clip(
-        np_module.asarray(image_rgb, dtype=np_module.float64) / 65535.0,
-        0.0,
-        None,
-    )
-    curved = _rt_simplebasecurve(
-        np_module=np_module,
-        x_values=normalized,
-        black_point=black_normalized,
-        shadow_recovery=shadow_recovery,
-    )
-    return np_module.clip(curved, 0.0, None) * 65535.0
-
-
-def _apply_piecewise_curve(np_module, values, x_points, y_points):
-    """@brief Apply one monotonic piecewise-linear curve to a float tensor.
-
-    @details Normalizes control points to a strictly increasing x-domain,
-    removes duplicates, and applies deterministic `numpy.interp` mapping over
-    the flattened tensor.
-    @param np_module {ModuleType} Imported numpy module.
-    @param values {object} Input float tensor in `[0,1]`.
-    @param x_points {tuple[float, ...]} Monotonic control-point x coordinates.
-    @param y_points {tuple[float, ...]} Control-point y coordinates.
-    @return {object} Float tensor after piecewise-linear interpolation.
-    @satisfies REQ-116
-    """
-
-    curve_x = np_module.clip(np_module.asarray(x_points, dtype=np_module.float64), 0.0, 1.0)
-    curve_y = np_module.clip(np_module.asarray(y_points, dtype=np_module.float64), 0.0, 1.0)
-    curve_x = np_module.maximum.accumulate(curve_x)
-    unique_x, unique_indices = np_module.unique(curve_x, return_index=True)
-    unique_y = curve_y[unique_indices]
-    flat_values = np_module.asarray(values, dtype=np_module.float64).reshape(-1)
-    mapped = np_module.interp(flat_values, unique_x, unique_y)
-    return mapped.reshape(np_module.asarray(values).shape)
-
-
-def _apply_rt_brightness_contrast(np_module, image_rgb, auto_levels_metrics):
-    """@brief Apply RawTherapee-derived brightness and contrast curves.
-
-    @details Maps the RGB tensor into gamma domain with `_rt_gamma2`, applies
-    the same control-point formulas used by RawTherapee for brightness and
-    contrast sliders, and restores linear-domain intensity with `_rt_igamma2`.
-    The implementation uses piecewise-linear interpolation over the derived
-    control points to stay deterministic and dependency-free.
-    @param np_module {ModuleType} Imported numpy module.
-    @param image_rgb {object} RGB float tensor on uint16 scale.
-    @param auto_levels_metrics {dict[str, int|float]} Histogram-derived auto-levels metrics.
-    @return {object} RGB float tensor after brightness/contrast correction.
-    @satisfies REQ-116
-    """
-
-    brightness = float(auto_levels_metrics["brightness"])
-    contrast = float(auto_levels_metrics["contrast"])
-    if brightness == 0.0 and contrast == 0.0:
-        return np_module.asarray(image_rgb, dtype=np_module.float64)
-    gamma_rgb = _rt_gamma2(
-        np_module=np_module,
-        values=np_module.clip(
-            np_module.asarray(image_rgb, dtype=np_module.float64) / 65535.0,
-            0.0,
-            1.0,
-        ),
-    )
-    if brightness != 0.0:
-        if brightness > 0.0:
-            toe_x = 0.1
-            toe_y = 0.1 + brightness / 150.0
-            shoulder_x = 0.7
-            shoulder_y = min(1.0, 0.7 + brightness / 300.0)
-        else:
-            toe_x = max(0.0, 0.1 - brightness / 150.0)
-            toe_y = 0.1
-            shoulder_x = 0.7 - brightness / 300.0
-            shoulder_y = 0.7
-        gamma_rgb = _apply_piecewise_curve(
-            np_module=np_module,
-            values=gamma_rgb,
-            x_points=(0.0, toe_x, shoulder_x, 1.0),
-            y_points=(0.0, toe_y, shoulder_y, 1.0),
-        )
-    if contrast != 0.0:
-        average_gamma = float(np_module.mean(gamma_rgb))
-        average_gamma = min(max(average_gamma, 1e-6), 1.0 - 1e-6)
-        toe_x = average_gamma - average_gamma * (0.6 - contrast / 250.0)
-        toe_y = average_gamma - average_gamma * (0.6 + contrast / 250.0)
-        shoulder_x = average_gamma + (1.0 - average_gamma) * (0.6 - contrast / 250.0)
-        shoulder_y = average_gamma + (1.0 - average_gamma) * (0.6 + contrast / 250.0)
-        gamma_rgb = _apply_piecewise_curve(
-            np_module=np_module,
-            values=gamma_rgb,
-            x_points=(0.0, toe_x, shoulder_x, 1.0),
-            y_points=(0.0, toe_y, shoulder_y, 1.0),
-        )
-    linear_rgb = _rt_igamma2(np_module=np_module, values=np_module.clip(gamma_rgb, 0.0, 1.0))
-    return linear_rgb * 65535.0
-
-
-def _filmlike_clip_rgb_float(np_module, image_rgb, maxval=65535.0):
-    """@brief Apply hue-stable film-like clipping to out-of-range RGB pixels.
-
-    @details Ports the RawTherapee/Adobe film-like clipping logic used when
-    `ClampOOG` is enabled: clamp negatives to zero, clamp the highest and
-    lowest ordered channels to `maxval`, and reconstruct the middle channel by
-    linear interpolation in sorted-channel space to preserve hue.
-    @param np_module {ModuleType} Imported numpy module.
-    @param image_rgb {object} RGB float tensor on uint16 scale.
-    @param maxval {float} Maximum in-range channel value.
-    @return {object} RGB float tensor after hue-stable clipping.
-    @satisfies REQ-119
-    """
-
-    source_rgb = np_module.asarray(image_rgb, dtype=np_module.float64)
-    oog_mask = np_module.any((source_rgb < 0.0) | (source_rgb > maxval), axis=-1)
-    rgb = np_module.maximum(source_rgb, 0.0)
-    if not np_module.any(oog_mask):
-        return rgb
-    order = np_module.argsort(rgb, axis=-1)
-    sorted_rgb = np_module.take_along_axis(rgb, order, axis=-1)
-    low_channel = sorted_rgb[..., 0]
-    mid_channel = sorted_rgb[..., 1]
-    high_channel = sorted_rgb[..., 2]
-    low_clipped = np_module.minimum(low_channel, maxval)
-    high_clipped = np_module.minimum(high_channel, maxval)
-    slope_denom = np_module.maximum(high_channel - low_channel, 1e-12)
-    mid_clipped = np_module.where(
-        high_channel > low_channel,
-        low_clipped + (high_clipped - low_clipped) * (mid_channel - low_channel) / slope_denom,
-        np_module.minimum(mid_channel, maxval),
-    )
-    sorted_clipped = np_module.stack(
-        [low_clipped, mid_clipped, high_clipped],
-        axis=-1,
-    )
-    reverse_order = np_module.argsort(order, axis=-1)
-    clipped_rgb = np_module.take_along_axis(sorted_clipped, reverse_order, axis=-1)
-    return np_module.where(oog_mask[..., None], clipped_rgb, rgb)
-
-
-def _dilate_mask3x3(np_module, mask):
-    """@brief Dilate one boolean mask by a single 3x3 neighborhood step.
-
-    @details Mirrors the one-pass dilation used by RawTherapee `Inpaint
-    Opposed` to expand clipped highlight neighborhoods before chrominance
-    offset estimation.
-    @param np_module {ModuleType} Imported numpy module.
-    @param mask {object} Boolean 2D tensor.
-    @return {object} Dilated boolean 2D tensor.
-    @satisfies REQ-102
-    """
-
-    mask = np_module.asarray(mask, dtype=bool)
-    padded = np_module.pad(mask, 1, mode="constant", constant_values=False)
-    dilated = np_module.zeros_like(mask, dtype=bool)
-    for row_offset in range(3):
-        for col_offset in range(3):
-            dilated |= padded[
-                row_offset : row_offset + mask.shape[0],
-                col_offset : col_offset + mask.shape[1],
-            ]
-    return dilated
-
-
-def _hlrecovery_inpaint_opposed_uint16(
-    np_module,
-    image_rgb,
-    maxval=65535.0,
-    gain_threshold=DEFAULT_AL_INPAINT_OPPOSED_GAIN_THRESHOLD,
-):
-    """@brief Apply simplified RawTherapee `Inpaint Opposed` highlight recovery.
-
-    @details Reconstructs clipped highlights by estimating each clipped channel
-    from the opposed-channel neighborhood average, dilating the clipped mask,
-    measuring a chrominance offset from near-clipped pixels, and reinjecting
-    the reconstructed values only inside the clipped bounding box. The Python
-    port operates on already white-balanced RGB uint16-scale data, so channel
-    clip thresholds are symmetric rather than RAW/WB-specific.
-    @param np_module {ModuleType} Imported numpy module.
-    @param image_rgb {object} RGB float tensor on uint16 scale.
-    @param maxval {float} Maximum in-range channel value.
-    @param gain_threshold {float} Gain-threshold parameter used to derive clip thresholds.
-    @return {object} RGB float tensor after `Inpaint Opposed` reconstruction.
-    @satisfies REQ-102
-    """
-
-    rgb = np_module.asarray(image_rgb, dtype=np_module.float64).copy()
-    gain_value = max(1.2 * float(gain_threshold), 1e-6)
-    clip_value = 0.987 / gain_value
-    clips = np_module.full(3, clip_value * maxval, dtype=np_module.float64)
-    clipdark = clips * np_module.asarray([0.03, 0.125, 0.03], dtype=np_module.float64)
-    clipped_mask = rgb >= clips[None, None, :]
-    if not np_module.any(clipped_mask):
-        return rgb
-    clipped_pixels = np_module.any(clipped_mask, axis=-1)
-    coordinates = np_module.argwhere(clipped_pixels)
-    y1_value = max(int(np_module.min(coordinates[:, 0])) - 1, 0)
-    y2_value = min(int(np_module.max(coordinates[:, 0])) + 1, rgb.shape[0] - 1)
-    x1_value = max(int(np_module.min(coordinates[:, 1])) - 1, 0)
-    x2_value = min(int(np_module.max(coordinates[:, 1])) + 1, rgb.shape[1] - 1)
-    crop = rgb[y1_value : y2_value + 1, x1_value : x2_value + 1].copy()
-    reference = np_module.maximum(crop, 0.0)
-    mask = np_module.zeros_like(reference, dtype=bool)
-    height, width, _channels = crop.shape
-    for row_index in range(1, height - 1):
-        for col_index in range(1, width - 1):
-            clipped_channels = crop[row_index, col_index] >= clips
-            if not np_module.any(clipped_channels):
-                continue
-            neighborhood = np_module.maximum(
-                crop[row_index - 1 : row_index + 2, col_index - 1 : col_index + 2],
-                0.0,
-            )
-            mean_values = np_module.power(
-                np_module.mean(neighborhood, axis=(0, 1)),
-                1.0 / 3.0,
-            )
-            opposed_average = np_module.asarray(
-                [
-                    0.5 * (mean_values[1] + mean_values[2]),
-                    0.5 * (mean_values[0] + mean_values[2]),
-                    0.5 * (mean_values[0] + mean_values[1]),
-                ],
-                dtype=np_module.float64,
-            )
-            reference[row_index, col_index, clipped_channels] = np_module.power(
-                opposed_average[clipped_channels],
-                3.0,
-            )
-            mask[row_index, col_index, clipped_channels] = True
-    chrominance = np_module.zeros(3, dtype=np_module.float64)
-    for channel_index in range(3):
-        dilated = _dilate_mask3x3(np_module=np_module, mask=mask[..., channel_index])
-        input_channel = np_module.maximum(crop[..., channel_index], 0.0)
-        valid_mask = (
-            dilated
-            & (input_channel > clipdark[channel_index])
-            & (input_channel < clips[channel_index])
-        )
-        if np_module.any(valid_mask):
-            chrominance[channel_index] = float(
-                np_module.mean(
-                    input_channel[valid_mask]
-                    - reference[..., channel_index][valid_mask]
-                )
-            )
-    for channel_index in range(3):
-        channel_input = np_module.maximum(crop[..., channel_index], 0.0)
-        clipped_channel_mask = channel_input >= clips[channel_index]
-        if not np_module.any(clipped_channel_mask):
-            continue
-        crop[..., channel_index][clipped_channel_mask] = np_module.maximum(
-            channel_input[clipped_channel_mask],
-            reference[..., channel_index][clipped_channel_mask]
-            + chrominance[channel_index],
-        )
-    rgb[y1_value : y2_value + 1, x1_value : x2_value + 1] = crop
-    return rgb
-
-
-def _apply_auto_levels_rt_tone_map(np_module, image_rgb, auto_levels_metrics):
-    """@brief Apply RawTherapee-derived auto-levels tone mapping to RGB data.
-
-    @details Executes the Python port of the effective RawTherapee auto-levels
-    transfer pipeline: exposure/highlight compression, black-point/shadow
-    curve, then brightness/contrast curves in gamma domain. The helper keeps
-    the tensor in float domain and leaves output-range clipping to the caller.
-    @param np_module {ModuleType} Imported numpy module.
-    @param image_rgb {object} RGB float tensor on uint16 scale.
-    @param auto_levels_metrics {dict[str, int|float]} Histogram-derived auto-levels metrics.
-    @return {object} RGB float tensor after RawTherapee-derived auto-levels transfer.
-    @satisfies REQ-116
-    """
-
-    tone_mapped = _apply_rt_highlight_compression(
-        np_module=np_module,
-        image_rgb=image_rgb,
-        auto_levels_metrics=auto_levels_metrics,
-    )
-    tone_mapped = _apply_rt_black_shadow_curve(
-        np_module=np_module,
-        image_rgb=tone_mapped,
-        black_level=auto_levels_metrics["black"],
-    )
-    return _apply_rt_brightness_contrast(
-        np_module=np_module,
-        image_rgb=tone_mapped,
-        auto_levels_metrics=auto_levels_metrics,
-    )
-
-
 def _apply_auto_levels_uint16(np_module, image_rgb_uint16, auto_levels_options):
     """@brief Apply auto-levels stage on RGB uint16 tensor.
 
-    @details Executes RawTherapee-derived auto-levels histogram analysis,
-    applies the reconstructed exposure-tool tone transfer in float domain,
-    optionally runs highlight reconstruction with method-specific dispatch, and
-    optionally clips out-of-range RGB pixels with hue-stable film-like
-    clipping before restoring uint16 output.
+    @details Executes auto-levels histogram analysis ported from attached source,
+    applies gain derived from exposure compensation, and conditionally runs
+    mandatory-method highlight reconstruction when enabled.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_uint16 {object} RGB uint16 image tensor.
     @param auto_levels_options {AutoLevelsOptions} Parsed auto-levels options.
     @return {object} RGB uint16 tensor after auto-levels stage.
     @exception ValueError Raised when input tensor is not uint16 RGB.
-    @satisfies REQ-100, REQ-102, REQ-116, REQ-119
+    @satisfies REQ-100, REQ-101, REQ-102
     """
 
     if str(getattr(image_rgb_uint16, "dtype", "")) != "uint16":
@@ -5474,11 +4842,8 @@ def _apply_auto_levels_uint16(np_module, image_rgb_uint16, auto_levels_options):
         histcompr=auto_levels_options.histcompr,
         clip_percent=auto_levels_options.clip_percent,
     )
-    image_float = _apply_auto_levels_rt_tone_map(
-        np_module=np_module,
-        image_rgb=image_rgb_uint16.astype(np_module.float64),
-        auto_levels_metrics=auto_levels_metrics,
-    )
+    gain = float(auto_levels_metrics["gain"])
+    image_float = image_rgb_uint16.astype(np_module.float64) * gain
     if auto_levels_options.highlight_reconstruction_enabled:
         method = auto_levels_options.highlight_reconstruction_method
         if method is None:
@@ -5505,21 +4870,8 @@ def _apply_auto_levels_uint16(np_module, image_rgb_uint16, auto_levels_options):
                 hlmax=channel_max,
                 maxval=65535.0,
             )
-        elif method == "Inpaint Opposed":
-            image_float = _hlrecovery_inpaint_opposed_uint16(
-                np_module=np_module,
-                image_rgb=image_float,
-                maxval=65535.0,
-                gain_threshold=auto_levels_options.inpaint_opposed_gain_threshold,
-            )
         else:
             raise ValueError(f"Unsupported highlight reconstruction method: {method}")
-    if auto_levels_options.clip_out_of_gamut_colors:
-        image_float = _filmlike_clip_rgb_float(
-            np_module=np_module,
-            image_rgb=image_float,
-            maxval=65535.0,
-        )
     return np_module.clip(np_module.round(image_float), 0.0, 65535.0).astype(
         np_module.uint16
     )
@@ -6671,8 +6023,6 @@ def run(args):
         print_info(
             "Auto-levels knobs: "
             f"clip-pct={postprocess_options.auto_levels_options.clip_percent:g}, "
-            "clip-out-of-gamut-colors="
-            f"{'enabled' if postprocess_options.auto_levels_options.clip_out_of_gamut_colors else 'disabled'}, "
             f"highlight-reconstruction="
             f"{'enabled' if postprocess_options.auto_levels_options.highlight_reconstruction_enabled else 'disabled'}, "
             "highlight-reconstruction-method="
