@@ -285,7 +285,7 @@ def test_parse_run_options_accepts_all_original_auto_brightness_controls() -> No
             "input.dng",
             "output.jpg",
             "--ev=1",
-            "--auto-brightness",
+            "--auto-brightness=enable",
             "--ab-key-value=0.22",
             "--ab-white-point-pct=99.5",
             "--ab-key-min=0.05",
@@ -297,7 +297,7 @@ def test_parse_run_options_accepts_all_original_auto_brightness_controls() -> No
             "--ab-clahe-tile-grid-size=6x10",
             "--ab-enable-luminance-preserving-desat=false",
             "--ab-eps=1e-5",
-            "--enable-opencv",
+            "--hdr-merge=OpenCV",
         ]
     )
 
@@ -464,11 +464,11 @@ def test_apply_auto_brightness_rgb_float_executes_original_stage_order(
     ]
 
 
-def test_parse_run_options_accepts_enable_opencv_backend() -> None:
-    """Parser must accept `--enable-opencv` as exclusive backend selector."""
+def test_parse_run_options_accepts_hdr_merge_opencv_backend() -> None:
+    """Parser must accept `--hdr-merge=OpenCV` as backend selector."""
 
     parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--ev=1", "--enable-opencv"]
+        ["input.dng", "output.jpg", "--ev=1", "--hdr-merge=OpenCV"]
     )
     assert parsed is not None
     _input_path = parsed[0]
@@ -493,19 +493,103 @@ def test_parse_run_options_accepts_enable_opencv_backend() -> None:
     assert opencv_merge_options.debevec_white_point_percentile > 0.0
 
 
-def test_parse_run_options_rejects_multiple_backends_with_opencv() -> None:
-    """Parser must reject simultaneous backend selectors including OpenCV."""
+def test_parse_run_options_defaults_hdr_merge_to_opencv() -> None:
+    """Parser must default backend selector to OpenCV when omitted."""
 
     parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        [
-            "input.dng",
-            "output.jpg",
-            "--ev=1",
-            "--enable-opencv",
-            "--enable-enfuse",
-        ]
+        ["input.dng", "output.jpg", "--ev=1"]
+    )
+    assert parsed is not None
+    assert parsed[7] is True
+    assert parsed[6] is False
+    assert parsed[11] is False
+
+
+def test_parse_run_options_rejects_unknown_hdr_merge_backend() -> None:
+    """Parser must reject unknown `--hdr-merge` selector values."""
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--ev=1", "--hdr-merge=unknown-backend"]
     )
     assert parsed is None
+
+
+def test_parse_run_options_auto_ev_defaults_and_override_behavior(capsys) -> None:
+    """`--auto-ev` defaults and `--ev` override must be deterministic."""
+
+    parsed_default_auto = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg"]
+    )
+    assert parsed_default_auto is not None
+    assert parsed_default_auto[2] is None
+    assert parsed_default_auto[3] is True
+
+    parsed_disabled_without_ev = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--auto-ev=disable"]
+    )
+    assert parsed_disabled_without_ev is None
+
+    parsed_override = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--ev=1", "--auto-ev=enable"]
+    )
+    assert parsed_override is not None
+    assert parsed_override[2] == 1.0
+    assert parsed_override[3] is False
+    captured = capsys.readouterr()
+    assert "Ignoring --auto-ev because --ev is specified." in captured.out
+
+
+def test_parse_run_options_auto_zero_defaults_and_override_behavior(capsys) -> None:
+    """`--auto-zero` defaults and `--ev-zero` override must be deterministic."""
+
+    parsed_default_auto_zero = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg"]
+    )
+    assert parsed_default_auto_zero is not None
+    assert parsed_default_auto_zero[13] is True
+
+    parsed_default_manual_zero = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--ev-zero=0.5"]
+    )
+    assert parsed_default_manual_zero is not None
+    assert parsed_default_manual_zero[12] == 0.5
+    assert parsed_default_manual_zero[13] is False
+
+    parsed_override_zero = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--ev-zero=0.5", "--auto-zero=enable"]
+    )
+    assert parsed_override_zero is not None
+    assert parsed_override_zero[13] is False
+    captured = capsys.readouterr()
+    assert "Ignoring --auto-zero because --ev-zero is specified." in captured.out
+
+
+def test_parse_run_options_requires_explicit_auto_brightness_value() -> None:
+    """`--auto-brightness` must require explicit enable/disable value."""
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--auto-brightness"]
+    )
+    assert parsed is None
+
+
+def test_parse_run_options_requires_explicit_auto_levels_value() -> None:
+    """`--auto-levels` must require explicit enable/disable value."""
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--auto-levels"]
+    )
+    assert parsed is None
+
+
+def test_parse_run_options_defaults_enable_auto_adjust_mode() -> None:
+    """Auto-adjust mode must default to OpenCV when omitted."""
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg"]
+    )
+    assert parsed is not None
+    assert parsed[5].auto_adjust_mode == "OpenCV"
 
 
 def test_build_ev_times_from_ev_zero_and_delta_matches_bracket_sequence() -> None:
@@ -605,13 +689,13 @@ def test_parse_run_options_accepts_extended_auto_levels_knobs() -> None:
             "input.dng",
             "output.jpg",
             "--ev=1",
-            "--auto-levels",
+            "--auto-levels=enable",
             "--al-clip-pct=0.5",
             "--al-clip-out-of-gamut=false",
             "--al-highlight-reconstruction-method",
             "Inpaint Opposed",
             "--al-gain-threshold=1.25",
-            "--enable-opencv",
+            "--hdr-merge=OpenCV",
         ]
     )
     assert parsed is not None
@@ -813,7 +897,7 @@ def test_parse_run_options_accepts_hdrplus_controls() -> None:
             "input.dng",
             "output.jpg",
             "--ev=1",
-            "--enable-hdr-plus",
+            "--hdr-merge=HDR-Plus",
             "--hdrplus-proxy-mode=bt709",
             "--hdrplus-search-radius=3",
             "--hdrplus-temporal-factor=6.5",
@@ -843,7 +927,7 @@ def test_parse_run_options_rejects_invalid_hdrplus_controls() -> None:
             "input.dng",
             "output.jpg",
             "--ev=1",
-            "--enable-hdr-plus",
+            "--hdr-merge=HDR-Plus",
             "--hdrplus-temporal-min-dist=30",
             "--hdrplus-temporal-max-dist=30",
         ]

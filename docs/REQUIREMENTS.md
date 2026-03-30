@@ -82,8 +82,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 
 ### 2.2 Project Constraints
 - **CTN-001**: MUST execute conversion only on Linux runtime and reject unsupported operating systems with explicit error output.
-- **CTN-002**: MUST require exactly one backend selector between `--enable-enfuse`, `--enable-luminance`, `--enable-opencv`, and `--enable-hdr-plus`.
-- **CTN-003**: MUST require exactly one exposure selector between `--ev` and `--auto-ev`.
+- **CTN-002**: MUST parse `--hdr-merge <enfuse|Luminace-HDR|OpenCV|HDR-Plus>` and MUST default to `OpenCV` when omitted.
+- **CTN-003**: MUST resolve exposure mode from `--ev` and `--auto-ev <enable|disable>`, and MUST let `--ev` override enabled auto exposure when both are specified.
 - **CTN-004**: MUST require `.dng` input extension, existing input file, and existing output parent directory.
 - **CTN-005**: MUST fail when required Python modules or required backend executables for enabled features are unavailable.
 - **CTN-006**: MUST reject launcher execution when resolved launcher base directory differs from repository git root.
@@ -106,9 +106,9 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-004**: MUST execute `uv tool install` and `uv tool uninstall` automatically on Linux for management upgrade and uninstall commands.
 - **REQ-005**: MUST print manual management commands instead of auto-executing them on non-Linux systems.
 - **REQ-006**: MUST reject unknown options, missing option values, and invalid option values with explicit parse errors.
-- **REQ-007**: MUST require `--auto-adjust` before accepting any `--aa-*` option and require `--auto-brightness` before accepting any `--ab-*` option.
-- **REQ-008**: MUST compute automatic EV center from preview luminance when `--auto-zero` is enabled and clamp it to safe bit-derived bounds.
-- **REQ-009**: MUST compute adaptive EV from preview luminance statistics when `--auto-ev` is enabled and clamp it to supported selectors.
+- **REQ-007**: MUST require `--auto-adjust` before accepting any `--aa-*` option and MUST reject `--ab-*` options when `--auto-brightness` resolves to `disable`.
+- **REQ-008**: MUST compute automatic EV center from preview luminance when `--auto-zero` resolves to `enable` and clamp it to safe bit-derived bounds.
+- **REQ-009**: MUST compute adaptive EV from preview luminance statistics when `--auto-ev` resolves to `enable` and `--ev` is not specified, then clamp it to supported selectors.
 - **REQ-010**: MUST extract brackets `ev_minus`, `ev_zero`, and `ev_plus` with `rawpy.postprocess output_bps=16`, convert each bracket to normalized OpenCV-compatible RGB float `[0,1]`, and expose only that float triplet to downstream merge stages.
 - **REQ-011**: MUST run `enfuse` with LZW compression for enfuse backend and `luminance-hdr-cli` with deterministic HDR/TMO arguments for luminance backend, confining any required 16-bit TIFF intermediates to the backend step and returning normalized RGB float output.
 - **REQ-012**: MUST exchange normalized OpenCV-compatible RGB float tensors `[0,1]` between merge, auto-brightness, auto-levels, static postprocess, auto-adjust, and final-save preparation stages, and MUST perform exactly one float-to-uint8 quantization immediately before final JPEG save.
@@ -118,14 +118,14 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-015**: MUST return `1` on parse, validation, dependency, and processing errors, and return `0` on successful processing.
 - **REQ-016**: MUST execute GitHub latest-release version checks with an idle-time cache file and print version status or check errors.
 - **REQ-017**: MUST render conversion usage with canonical executable name `dng2jpg` and MUST NOT prepend alternative launcher labels.
-- **REQ-018**: MUST support exactly one EV-zero selector between `--ev-zero` and `--auto-zero`.
+- **REQ-018**: MUST parse `--auto-zero <enable|disable>`, default it to `enable` without `--ev-zero` and `disable` with `--ev-zero`, and MUST let `--ev-zero` override enabled auto-zero with an explicit ignored-parameter output.
 - **REQ-019**: MUST enforce `--auto-zero-pct` and `--auto-ev-pct` values in inclusive range `0..100`.
 - **REQ-020**: MUST parse `--gamma` as two positive numeric values and reject malformed pairs.
 - **REQ-021**: MUST enforce `--jpg-compression` in inclusive range `0..100`.
-- **REQ-022**: MUST reject luminance-specific options when `--enable-luminance` is not selected.
-- **REQ-023**: MUST reject missing backend selector when both backend flags are false.
-- **REQ-024**: MUST reject backend selection when both backend flags are true.
-- **REQ-025**: MUST reject unsupported `--auto-adjust` mode values and accept only `ImageMagick` or `OpenCV`.
+- **REQ-022**: MUST reject luminance-specific options when `--hdr-merge` is not `Luminace-HDR`.
+- **REQ-023**: MUST reject unknown `--hdr-merge` values and accept only `enfuse`, `Luminace-HDR`, `OpenCV`, or `HDR-Plus`.
+- **REQ-024**: MUST route backend execution from resolved `--hdr-merge` mode and MUST preserve backend-specific processing behavior.
+- **REQ-025**: MUST reject unsupported `--auto-adjust` mode values, accept only `ImageMagick` or `OpenCV`, and default `--auto-adjust` to `OpenCV` when omitted.
 - **REQ-026**: MUST resolve DNG bit depth from `raw_image_visible.dtype.itemsize * 8` with fallback to `white_level.bit_length()`.
 - **REQ-027**: MUST enforce minimum supported bit depth as `9` bits per color.
 - **REQ-028**: MUST compute bracket EV ceiling with `MAX_BRACKET=((bits_per_color-8)/2)-abs(ev_zero)`.
@@ -156,8 +156,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-103**: MUST classify normalized BT.709 luminance as `low-key` when `median<0.35 && p95<0.85`, `high-key` when `median>0.65 && p05>0.15`, else `normal-key`.
 - **REQ-104**: MUST map luminance with `L=(a/Lw_bar)*Y`, percentile-derived robust `Lwhite`, and burn-out compression `Ld=(L*(1+L/Lwhite^2))/(1+L)` before linear-domain chromaticity-preserving RGB scaling.
 - **REQ-105**: MUST desaturate only overflowing linear RGB pixels by blending toward `(Ld,Ld,Ld)` with the minimal factor that restores `max(R,G,B)<=1` while preserving luminance.
-- **REQ-100**: MUST execute `--auto-levels` after optional `--auto-brightness` and before static postprocess while preserving RGB float input/output buffers and float internal calculations.
-- **REQ-101**: MUST parse `--auto-levels`, `--al-clip-pct`, `--al-clip-out-of-gamut`, `--al-highlight-reconstruction-method`, and `--al-gain-threshold`, requiring `--auto-levels` before any `--al-*` option.
+- **REQ-100**: MUST execute auto-levels after optional auto-brightness and before static postprocess when `--auto-levels` resolves to `enable`, while preserving RGB float input/output buffers and float internal calculations.
+- **REQ-101**: MUST parse `--auto-levels <enable|disable>`, `--al-clip-pct`, `--al-clip-out-of-gamut`, `--al-highlight-reconstruction-method`, and `--al-gain-threshold`, requiring resolved auto-levels state `enable` before any `--al-*` option.
 - **REQ-102**: MUST accept highlight reconstruction methods `Luminance Recovery`, `CIELab Blending`, `Blend`, `Color Propagation`, and `Inpaint Opposed`.
 - **REQ-116**: MUST default auto-levels knobs to `clip_pct=0.02`, `clip_out_of_gamut=true`, `highlight_reconstruction=disabled`, `highlight_reconstruction_method=Inpaint Opposed`, and `gain_threshold=1.0`.
 - **REQ-117**: MUST derive auto-levels calibration from a RawTherapee-compatible luminance histogram using `sum`, `average`, `median`, octiles, `ospread`, `rawmax`, clipped white point, and clipped black point.
@@ -169,11 +169,11 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-123**: MUST apply optional mild local contrast after sRGB re-encoding using YCrCb/Y-channel CLAHE with configurable enable flag, blend strength, clip limit, and tile grid size.
 - **REQ-124**: MUST expose auto-brightness CLI knobs for `key_value`, `white_point_percentile`, `a_min`, `a_max`, `max_auto_boost_factor`, and `eps`.
 - **REQ-125**: MUST expose auto-brightness CLI knobs for local-contrast enable, local-contrast strength, CLAHE clip limit, CLAHE tile grid size, and luminance-preserving desaturation enable.
-- **REQ-107**: MUST accept `--enable-opencv` as HDR backend selector and enforce backend exclusivity across `--enable-enfuse`, `--enable-luminance`, `--enable-opencv`, and `--enable-hdr-plus`.
+- **REQ-107**: MUST accept `--hdr-merge OpenCV` as HDR backend selector and execute OpenCV backend behavior when selected or by default.
 - **REQ-108**: MUST execute OpenCV backend merge from three in-memory RGB float brackets ordered as `ev_minus`, `ev_zero`, `ev_plus`, using `MergeMertens`, `MergeDebevec`, and EV-derived exposure times.
 - **REQ-109**: MUST normalize Debevec HDR radiance in float domain using robust luminance white-point percentile, blend it with Mertens fusion in float domain, and return one normalized RGB float image.
 - **REQ-110**: MUST confine any OpenCV-backend float-to-uint16 adaptation required by `MergeDebevec` to the merge step itself and MUST preserve RGB float input/output interfaces for the merge step.
-- **REQ-111**: MUST accept `--enable-hdr-plus` as HDR backend selector and enforce backend exclusivity across `--enable-enfuse`, `--enable-luminance`, `--enable-opencv`, and `--enable-hdr-plus`.
+- **REQ-111**: MUST accept `--hdr-merge HDR-Plus` as HDR backend selector and execute HDR+ backend behavior when selected.
 - **REQ-112**: MUST execute HDR+ backend in source step order `scalar proxy -> hierarchical alignment -> box_down2 -> temporal merge -> spatial merge`, using `ev_zero` as reference frame.
 - **REQ-113**: MUST compute three-level HDR+ alignment on the scalar proxy with `box_down2`, two `gauss_down4` levels, per-tile L1 minimization over offsets `[-4,+3]`, and final full-resolution offset lift by `2`.
 - **REQ-114**: MUST compute HDR+ temporal alternate-frame weights from aligned 16x16 downsampled tiles with `factor=8`, `min_dist=10`, `max_dist=300`, hard cutoff, and reference-inclusive normalization.
@@ -187,7 +187,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 
 ## 4. Test Requirements
 
-- **TST-001**: MUST verify `_parse_run_options` rejects missing or simultaneous exposure/backend selectors and returns `None` with deterministic error output.
+- **TST-001**: MUST verify `_parse_run_options` applies `--ev`/`--auto-ev` precedence, parses `--hdr-merge`, and rejects unknown `--hdr-merge` values with deterministic error output.
 - **TST-002**: MUST verify `run` returns `1` for unsupported runtime OS, missing external executables, and missing Python dependencies.
 - **TST-003**: MUST verify successful `run` execution returns `0`, writes output JPG, and emits success message `HDR JPG created: <output>`.
 - **TST-004**: MUST verify `_resolve_ev_zero` enforces `SAFE_ZERO_MAX=((bits_per_color-8)/2)-1` and rejects out-of-range values.
@@ -196,10 +196,10 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-007**: MUST verify `_extract_dng_exif_payload_and_timestamp` applies datetime priority `36867` then `36868` then `306`.
 - **TST-008**: MUST verify `_refresh_output_jpg_exif_thumbnail_after_save` preserves source orientation in `0th` IFD and sets `1st` IFD orientation to `1`.
 - **TST-009**: MUST verify release workflow gates `build-release` execution on `needs.check-branch.outputs.is_master == "true"`.
-- **TST-010**: MUST verify `_parse_run_options` enforces `--auto-levels`/`--al-*` coupling and validates `Clip out-of-gamut colors`, `Clip %`, method, and gain-threshold knobs.
+- **TST-010**: MUST verify `_parse_run_options` enforces `--auto-levels <enable|disable>` with `--al-*` coupling and validates `Clip out-of-gamut colors`, `Clip %`, method, and gain-threshold knobs.
 - **TST-011**: MUST verify `_apply_auto_brightness_rgb_float` preserves float I/O and executes the original step order, key-analysis thresholds, Reinhard mapping, optional desaturation, and optional local-contrast blending.
 - **TST-012**: MUST verify `_encode_jpg` keeps float stage buffers and applies a single float-to-uint8 conversion immediately before JPEG save.
-- **TST-013**: MUST verify `_parse_run_options` accepts `--enable-opencv` and rejects simultaneous backend selectors.
+- **TST-013**: MUST verify `_parse_run_options` accepts `--hdr-merge OpenCV`, defaults `--hdr-merge` to `OpenCV`, and rejects unknown `--hdr-merge` values.
 - **TST-014**: MUST verify OpenCV EV-time derivation returns deterministic three-element stop-space sequence mapped to bracket order.
 - **TST-015**: MUST verify Debevec normalization clamps blended radiance contribution to `[0,1]` float range before merge-step float return.
 - **TST-016**: MUST verify auto-levels parser defaults `clip_pct=0.02`, `clip_out_of_gamut=true`, `highlight_reconstruction_method=Inpaint Opposed`, and `gain_threshold=1.0`.
@@ -223,8 +223,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | PRJ-004 | `.github/workflows/release-uvx.yml`; excerpt: semantic tag trigger, build job, attestation, and GitHub release upload flow. |
 | PRJ-005 | `scripts/d2j.sh`; excerpt: `exec "${UV_TOOL}" run --project "${BASE_DIR}" python -m dng2jpg "$@"`. |
 | CTN-001 | `src/dng2jpg/dng2jpg.py::_is_supported_runtime_os`; excerpt: returns true only on Linux and prints Linux-only error otherwise. |
-| CTN-002 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: counts four backend selectors and emits "Exactly one backend selector is required: --enable-enfuse, --enable-luminance, --enable-opencv, or --enable-hdr-plus". |
-| CTN-003 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: emits "Exactly one exposure selector is required". |
+| CTN-002 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: parses `--hdr-merge` and defaults to `OpenCV` when omitted. |
+| CTN-003 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: resolves `--ev` and `--auto-ev <enable|disable>` with deterministic precedence. |
 | CTN-004 | `src/dng2jpg/dng2jpg.py::run`; excerpt: validates `.dng` suffix, input existence, and output parent directory existence. |
 | CTN-005 | `src/dng2jpg/dng2jpg.py::_load_image_dependencies`, dependency checks in `run`; excerpt: explicit missing dependency diagnostics and return `1`. |
 | CTN-006 | `scripts/d2j.sh`; excerpt: compares `${PROJECT_ROOT}` and `${BASE_DIR}` and exits `1` on mismatch. |
@@ -252,14 +252,14 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-015 | `src/dng2jpg/dng2jpg.py::run`; excerpt: parse/dependency/processing failures return `1`, success returns `0`. |
 | REQ-016 | `src/dng2jpg/core.py::_check_online_version`; excerpt: GitHub API check with idle-time cache policy and error/status outputs. |
 | REQ-017 | `src/dng2jpg/dng2jpg.py`; excerpt: `PROGRAM = "dng2jpg"` and help usage renders canonical command label without duplicated command token. |
-| REQ-018 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: rejects simultaneous `--ev-zero` and `--auto-zero`. |
+| REQ-018 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: resolves `--ev-zero` and `--auto-zero <enable|disable>` defaults with explicit ignored-parameter output on override. |
 | REQ-019 | `src/dng2jpg/dng2jpg.py::_parse_percentage_option`; excerpt: enforces inclusive `0..100` bounds. |
 | REQ-020 | `src/dng2jpg/dng2jpg.py::_parse_gamma_option`; excerpt: requires two positive numeric values. |
 | REQ-021 | `src/dng2jpg/dng2jpg.py::_parse_jpg_compression_option`; excerpt: enforces inclusive `0..100`. |
-| REQ-022 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: rejects luminance options without `--enable-luminance`. |
-| REQ-023 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: rejects missing backend selection. |
-| REQ-024 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: rejects both backends enabled simultaneously. |
-| REQ-025 | `src/dng2jpg/dng2jpg.py::_parse_auto_adjust_mode_option`; excerpt: allowed values restricted to `ImageMagick` and `OpenCV`. |
+| REQ-022 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: rejects luminance options unless `--hdr-merge Luminace-HDR` is selected. |
+| REQ-023 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: validates `--hdr-merge` against allowed modes. |
+| REQ-024 | `src/dng2jpg/dng2jpg.py::run`; excerpt: routes backend execution from resolved `--hdr-merge` mode. |
+| REQ-025 | `src/dng2jpg/dng2jpg.py::_parse_auto_adjust_mode_option`, `_parse_run_options`; excerpt: validates mode values and defaults auto-adjust mode to `OpenCV`. |
 | REQ-026 | `src/dng2jpg/dng2jpg.py::_detect_dng_bits_per_color`; excerpt: container bit depth primary path with white-level fallback. |
 | REQ-027 | `src/dng2jpg/dng2jpg.py::_calculate_max_ev_from_bits`; excerpt: raises on bit depth below `MIN_SUPPORTED_BITS_PER_COLOR=9`. |
 | REQ-028 | `src/dng2jpg/dng2jpg.py::_derive_supported_ev_values`; excerpt: uses `MAX_BRACKET=((bits_per_color-8)/2)-abs(ev_zero)`. |
@@ -290,8 +290,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-103 | `src/dng2jpg/dng2jpg.py::_analyze_luminance_key`; excerpt: classifies `low-key`/`normal-key`/`high-key` with the original median and percentile thresholds. |
 | REQ-104 | `src/dng2jpg/dng2jpg.py::_reinhard_global_tonemap_luminance`, `_apply_auto_brightness_rgb_float`; excerpt: percentile robust `Lwhite` and burn-out compression before RGB scaling. |
 | REQ-105 | `src/dng2jpg/dng2jpg.py::_luminance_preserving_desaturate_to_fit`; excerpt: overflow-only luminance-preserving grayscale blending with minimal factor selection. |
-| REQ-100 | `src/dng2jpg/dng2jpg.py::_encode_jpg`, `_apply_auto_levels_float`, `_apply_static_postprocess_float`; excerpt: executes auto-levels between optional auto-brightness and static postprocess on RGB float stage interfaces. |
-| REQ-101 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `_parse_auto_levels_options`; excerpt: parses `--auto-levels` plus all `--al-*` knobs with explicit coupling and validation. |
+| REQ-100 | `src/dng2jpg/dng2jpg.py::_encode_jpg`, `_apply_auto_levels_float`, `_apply_static_postprocess_float`; excerpt: executes auto-levels only when resolved state is `enable`, between auto-brightness and static postprocess. |
+| REQ-101 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `_parse_auto_levels_options`; excerpt: parses `--auto-levels <enable|disable>` and validates `--al-*` coupling. |
 | REQ-102 | `src/dng2jpg/dng2jpg.py::_parse_auto_levels_hr_method_option`, `_apply_auto_levels_float`; excerpt: validates and executes the full RawTherapee-aligned highlight reconstruction method set. |
 | REQ-116 | `src/dng2jpg/dng2jpg.py::AutoLevelsOptions`, `_parse_auto_levels_options`; excerpt: sets parser defaults for clip percentage, gamut clipping, highlight method, and gain threshold. |
 | REQ-117 | `src/dng2jpg/dng2jpg.py::_build_autoexp_histogram_rgb_uint16`, `_compute_auto_levels_from_histogram`; excerpt: derives RawTherapee-compatible histogram statistics and clipping points. |
@@ -303,11 +303,11 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-123 | `src/dng2jpg/dng2jpg.py::_apply_auto_brightness_rgb_float`, `_apply_mild_local_contrast_bgr_uint16`; excerpt: applies optional CLAHE Y-channel local contrast after sRGB re-encoding. |
 | REQ-124 | `src/dng2jpg/dng2jpg.py::AutoBrightnessOptions`, `_parse_auto_brightness_options`, `print_help`; excerpt: exposes `key_value`, `white_point_percentile`, `a_min`, `a_max`, `max_auto_boost_factor`, and `eps` as CLI-configurable controls. |
 | REQ-125 | `src/dng2jpg/dng2jpg.py::AutoBrightnessOptions`, `_parse_auto_brightness_options`, `print_help`; excerpt: exposes local-contrast enable, local-contrast strength, CLAHE clip limit, CLAHE tile grid size, and desaturation enable as CLI-configurable controls. |
-| REQ-107 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `print_help`; excerpt: parses `--enable-opencv`, enforces single backend selector, and documents exclusivity across four backend flags. |
+| REQ-107 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `print_help`; excerpt: parses `--hdr-merge OpenCV` and defaults to `OpenCV` when omitted. |
 | REQ-108 | `src/dng2jpg/dng2jpg.py::_run_opencv_hdr_merge`, `_build_ev_times_from_ev_zero_and_delta`; excerpt: executes OpenCV Mertens+Debevec using ordered bracket inputs and EV-derived exposure times. |
 | REQ-109 | `src/dng2jpg/dng2jpg.py::_normalize_debevec_hdr_to_unit_range`, `_run_opencv_hdr_merge`; excerpt: applies robust luminance white-point percentile normalization and blends Debevec with Mertens in float domain. |
 | REQ-110 | `src/dng2jpg/dng2jpg.py::_run_opencv_hdr_merge`; excerpt: maintains float-domain processing and performs one float-to-uint16 conversion for merged TIFF write. |
-| REQ-111 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `print_help`, `run`; excerpt: accepts `--enable-hdr-plus`, documents backend, and routes execution to HDR+ merge path. |
+| REQ-111 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `print_help`, `run`; excerpt: accepts `--hdr-merge HDR-Plus`, documents backend, and routes execution to HDR+ merge path. |
 | REQ-112 | `src/dng2jpg/dng2jpg.py::_order_hdr_plus_reference_paths`, `_hdrplus_build_scalar_proxy_float32`, `_hdrplus_align_layers`, `_hdrplus_box_down2_float32`, `_hdrplus_compute_temporal_weights`, `_hdrplus_merge_temporal_rgb`, `_hdrplus_merge_spatial_rgb`, `_run_hdr_plus_merge`; excerpt: executes source order `scalar proxy -> hierarchical alignment -> box_down2 -> temporal merge -> spatial merge` with `ev_zero` reference. |
 | REQ-113 | `src/dng2jpg/dng2jpg.py::_hdrplus_align_layer`, `_hdrplus_align_layers`; excerpt: applies three-level hierarchical tile alignment with `box_down2`, two `gauss_down4` levels, search offsets `[-4,+3]`, and final full-resolution offset lift. |
 | REQ-114 | `src/dng2jpg/dng2jpg.py::_hdrplus_compute_temporal_weights`, `_hdrplus_merge_temporal_rgb`; excerpt: applies aligned 16x16 tile L1 weights with `factor=8`, `min_dist=10`, `max_dist=300`, cutoff, and reference-inclusive normalization. |
@@ -318,7 +318,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-129 | `src/dng2jpg/dng2jpg.py::_run_hdr_plus_merge`, `_hdrplus_align_layers`, `_hdrplus_compute_temporal_weights`, `_hdrplus_merge_temporal_rgb`; excerpt: preserves float internals with `uint16` input/output boundaries. |
 | REQ-130 | `src/dng2jpg/dng2jpg.py::_parse_hdrplus_options`, `_parse_run_options`; excerpt: rejects invalid HDR+ knob ranges and inconsistent temporal thresholds. |
 | REQ-131 | `src/dng2jpg/dng2jpg.py::run`; excerpt: prints resolved HDR+ proxy, alignment, and temporal knob diagnostics. |
-| TST-001 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; branches for selector exclusivity and deterministic parse failures. |
+| TST-001 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; branches for exposure precedence, hdr-merge parsing, and deterministic parse failures. |
 | TST-002 | `src/dng2jpg/dng2jpg.py::run`; branches for unsupported OS and dependency failures returning `1`. |
 | TST-003 | `src/dng2jpg/dng2jpg.py::run`; success branch prints `HDR JPG created: ...` and returns `0`. |
 | TST-004 | `src/dng2jpg/dng2jpg.py::_resolve_ev_zero`; safe-range enforcement branch raises on out-of-range EV-zero. |
@@ -327,9 +327,9 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | TST-007 | `src/dng2jpg/dng2jpg.py::_extract_dng_exif_payload_and_timestamp`; explicit EXIF datetime tag priority loop. |
 | TST-008 | `src/dng2jpg/dng2jpg.py::_refresh_output_jpg_exif_thumbnail_after_save`; orientation handling in `0th` and `1st` IFDs. |
 | TST-009 | `.github/workflows/release-uvx.yml`; release job condition depends on `is_master` gate output. |
-| TST-010 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; branch checks for `--auto-levels` coupling and all `--al-*` knob validations. |
+| TST-010 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; branch checks for `--auto-levels <enable|disable>` coupling and `--al-*` knob validations. |
 | TST-011 | `tests/test_uint16_postprocess_pipeline.py::test_apply_auto_brightness_rgb_float_executes_original_stage_order`; verifies float-interface auto-brightness stage order, optional desaturation, and optional CLAHE local contrast. |
-| TST-013 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_accepts_enable_opencv_backend`, `test_parse_run_options_rejects_multiple_backends_with_opencv`; validates acceptance and exclusivity for `--enable-opencv`. |
+| TST-013 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_accepts_hdr_merge_opencv_backend`, `test_parse_run_options_rejects_unknown_hdr_merge_backend`, `test_parse_run_options_defaults_hdr_merge_to_opencv`; validates hdr-merge selection, default, and invalid-value rejection. |
 | TST-014 | `tests/test_uint16_postprocess_pipeline.py::test_build_ev_times_from_ev_zero_and_delta_matches_bracket_sequence`; verifies deterministic stop-space EV-time sequence generation. |
 | TST-015 | `tests/test_uint16_postprocess_pipeline.py::test_normalize_debevec_hdr_to_unit_range_clamps_to_valid_interval`; verifies Debevec normalization clamps float output to `[0,1]`. |
 | TST-016 | `tests/test_uint16_postprocess_pipeline.py::test_parse_auto_levels_options_defaults_match_rawtherapee`; verifies parser default values for clip percentage, gamut clipping, method, and gain threshold. |

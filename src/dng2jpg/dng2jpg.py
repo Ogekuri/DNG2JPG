@@ -75,6 +75,11 @@ DEFAULT_LUMINANCE_HDR_MODEL = "debevec"
 DEFAULT_LUMINANCE_HDR_WEIGHT = "flat"
 DEFAULT_LUMINANCE_HDR_RESPONSE_CURVE = "srgb"
 DEFAULT_LUMINANCE_TMO = "mantiuk08"
+DEFAULT_AUTO_ADJUST_MODE = "OpenCV"
+HDR_MERGE_MODE_ENFUSE = "enfuse"
+HDR_MERGE_MODE_LUMINANCE = "Luminace-HDR"
+HDR_MERGE_MODE_OPENCV = "OpenCV"
+HDR_MERGE_MODE_HDR_PLUS = "HDR-Plus"
 DEFAULT_REINHARD02_BRIGHTNESS = 1.25
 DEFAULT_REINHARD02_CONTRAST = 0.85
 DEFAULT_REINHARD02_SATURATION = 0.55
@@ -152,6 +157,12 @@ _HDRPLUS_KNOB_OPTIONS = (
     "--hdrplus-temporal-factor",
     "--hdrplus-temporal-min-dist",
     "--hdrplus-temporal-max-dist",
+)
+_HDR_MERGE_MODES = (
+    HDR_MERGE_MODE_ENFUSE,
+    HDR_MERGE_MODE_LUMINANCE,
+    HDR_MERGE_MODE_OPENCV,
+    HDR_MERGE_MODE_HDR_PLUS,
 )
 _AUTO_LEVELS_KNOB_OPTIONS = (
     "--al-clip-pct",
@@ -463,7 +474,8 @@ class LuminanceOptions:
 class OpenCvMergeOptions:
     """@brief Hold deterministic OpenCV HDR merge option values.
 
-    @details Encapsulates OpenCV merge controls used by the `--enable-opencv`
+    @details Encapsulates OpenCV merge controls used by the
+    `--hdr-merge=OpenCV`
     backend. The backend computes exposure fusion (`MergeMertens`) and
     radiance merge (`MergeDebevec`) from the same uint16 bracket TIFF set, then
     blends both outputs in float domain before one uint16 conversion.
@@ -597,10 +609,10 @@ def print_help(version):
 
     print(
         f"Usage: {PROGRAM} <input.dng> <output.jpg> "
-        f"(--ev=<value> | --auto-ev[=<1|true|yes|on>]) [--ev-zero=<value> | --auto-zero[=<1|true|yes|on>]] [--gamma=<a,b>] [--post-gamma=<value>] "
+        "[--ev=<value>] [--auto-ev=<enable|disable>] [--ev-zero=<value>] [--auto-zero=<enable|disable>] [--gamma=<a,b>] [--post-gamma=<value>] "
         "[--auto-zero-pct=<0..100>] [--auto-ev-pct=<0..100>] "
         f"[--brightness=<value>] [--contrast=<value>] [--saturation=<value>] "
-        "[--auto-brightness[=<1|true|yes|on>]] "
+        "[--auto-brightness=<enable|disable>] "
         "[--ab-key-value=<value>] [--ab-white-point-pct=<(0,100)>] "
         "[--ab-key-min=<value>] [--ab-key-max=<value>] "
         "[--ab-max-auto-boost=<value>] "
@@ -610,7 +622,7 @@ def print_help(version):
         "[--ab-clahe-tile-grid-size=<rows>x<cols>] "
         "[--ab-enable-luminance-preserving-desat[=<0|1|false|true|no|yes|off|on>]] "
         "[--ab-eps=<value>] "
-        "[--auto-levels[=<1|true|yes|on>]] "
+        "[--auto-levels=<enable|disable>] "
         "[--al-clip-pct=<value>] "
         "[--al-clip-out-of-gamut[=<0|1|false|true|no|yes|off|on>]] "
         "[--al-highlight-reconstruction-method <Luminance Recovery|CIELab Blending|Blend|Color Propagation|Inpaint Opposed>] "
@@ -620,7 +632,7 @@ def print_help(version):
         "[--aa-level-low-pct=<0..100>] [--aa-level-high-pct=<0..100>] "
         "[--aa-sigmoid-contrast=<value>] [--aa-sigmoid-midpoint=<0..1>] "
         "[--aa-saturation-gamma=<value>] [--aa-highpass-blur-sigma=<value>] "
-        f"(--enable-enfuse | --enable-luminance | --enable-opencv | --enable-hdr-plus) "
+        f"[--hdr-merge <{HDR_MERGE_MODE_ENFUSE}|{HDR_MERGE_MODE_LUMINANCE}|{HDR_MERGE_MODE_OPENCV}|{HDR_MERGE_MODE_HDR_PLUS}>] "
         "[--hdrplus-proxy-mode=<rggb|bt709|mean>] "
         "[--hdrplus-search-radius=<value>] "
         "[--hdrplus-temporal-factor=<value>] "
@@ -638,20 +650,16 @@ def print_help(version):
         "  --ev=<value>     - Fixed exposure bracket EV: 0.25 .. MAX_BRACKET in 0.25 steps"
         " (MAX_BRACKET = ((bits_per_color-8)/2)-abs(ev_zero) from input DNG)."
     )
-    print("  --auto-ev        - Adaptive EV mode (required unless --ev is selected).")
     print(
-        "                     Optional value forms: --auto-ev=1, --auto-ev=true, --auto-ev yes."
+        "  --auto-ev=<enable|disable> - Adaptive EV mode (default: enable when --ev is omitted, disable when --ev is provided)."
     )
     print(
         "  --ev-zero=<value> - Central EV for bracket export: -SAFE_ZERO_MAX .. +SAFE_ZERO_MAX in 0.25 steps"
         " (SAFE_ZERO_MAX = ((bits_per_color-8)/2)-1 from input DNG, default: 0)."
     )
     print(
-        "  --auto-zero      - Auto-resolve EV center from RAW median luminance"
-        " (mutually exclusive with --ev-zero)."
-    )
-    print(
-        "                     Optional value forms: --auto-zero=1, --auto-zero=true, --auto-zero yes."
+        "  --auto-zero=<enable|disable> - Auto-resolve EV center from RAW median luminance"
+        " (default: enable when --ev-zero is omitted, disable when --ev-zero is provided)."
     )
     print(
         f"  --auto-zero-pct=<0..100> - Scale auto-resolved EV center by percentage before 0.25-step quantization toward zero (default: {DEFAULT_AUTO_ZERO_PCT:g})."
@@ -676,13 +684,10 @@ def print_help(version):
         "  --saturation=<value> - Postprocess saturation factor (backend-default when omitted)."
     )
     print(
-        "  --auto-brightness   - Enable auto-brightness pre-stage before static postprocess factors."
+        "  --auto-brightness=<enable|disable> - Enable/disable auto-brightness pre-stage before static postprocess factors (default: enable)."
     )
     print(
-        "                     Optional value forms: --auto-brightness=1, --auto-brightness=true, --auto-brightness yes."
-    )
-    print(
-        "  [auto-brightness knobs] - Effective only when --auto-brightness is set."
+        "  [auto-brightness knobs] - Effective only when --auto-brightness resolves to enable."
     )
     print(
         "  --ab-key-value=<value> - Manual Reinhard key value a (>0); omit to enable automatic low/normal/high-key selection."
@@ -719,13 +724,10 @@ def print_help(version):
         f"  --ab-eps=<value> - Positive numerical guard for logarithms and divisions (default: {DEFAULT_AB_EPS:g})."
     )
     print(
-        "  --auto-levels      - Enable auto-levels stage after auto-brightness and before post-gamma/brightness/contrast/saturation."
+        "  --auto-levels=<enable|disable> - Enable/disable auto-levels stage after auto-brightness and before post-gamma/brightness/contrast/saturation (default: enable)."
     )
     print(
-        "                     Optional value forms: --auto-levels=1, --auto-levels=true, --auto-levels yes."
-    )
-    print(
-        "  [auto-levels knobs] - Effective only when --auto-levels is set."
+        "  [auto-levels knobs] - Effective only when --auto-levels resolves to enable."
     )
     print(
         f"  --al-clip-pct=<value> - Histogram clipping percentage >= 0 (default: {DEFAULT_AL_CLIP_PERCENT:g})."
@@ -751,7 +753,7 @@ def print_help(version):
         f"  --jpg-compression=<0..100> - JPEG compression level (default: {DEFAULT_JPG_COMPRESSION})."
     )
     print(
-        "  --auto-adjust <name>     - Enable auto-adjust stage implementation (`ImageMagick` or `OpenCV`)."
+        f"  --auto-adjust <name>     - Select auto-adjust stage implementation (`ImageMagick` or `OpenCV`, default: {DEFAULT_AUTO_ADJUST_MODE})."
     )
     print(
         "  [auto-adjust knobs]      - Effective only when --auto-adjust is set; shared by ImageMagick and OpenCV."
@@ -780,23 +782,12 @@ def print_help(version):
     print(
         f"  --aa-highpass-blur-sigma=<value> - High-pass blur sigma > 0 (default: {DEFAULT_AA_HIGHPASS_BLUR_SIGMA:g})."
     )
-    print("  --enable-enfuse")
     print(
-        "                   - Select enfuse backend (required, mutually exclusive with --enable-luminance, --enable-opencv, and --enable-hdr-plus)."
+        f"  --hdr-merge <name> - Select HDR merge backend ({HDR_MERGE_MODE_ENFUSE}, {HDR_MERGE_MODE_LUMINANCE}, {HDR_MERGE_MODE_OPENCV}, {HDR_MERGE_MODE_HDR_PLUS}; default: {HDR_MERGE_MODE_OPENCV})."
     )
-    print("  --enable-luminance")
     print(
-        "                   - Select luminance-hdr-cli backend (required, mutually exclusive with --enable-enfuse, --enable-opencv, and --enable-hdr-plus)."
+        f"  [HDR+ knobs]      - Effective only when --hdr-merge {HDR_MERGE_MODE_HDR_PLUS} is selected."
     )
-    print("  --enable-opencv")
-    print(
-        "                   - Select OpenCV merge backend (Mertens+Debevec, required, mutually exclusive with --enable-enfuse, --enable-luminance, and --enable-hdr-plus)."
-    )
-    print("  --enable-hdr-plus")
-    print(
-        "                   - Select HDR+ tile merge backend (Google Pixel temporal+spatial merge, ev_zero reference, required, mutually exclusive with --enable-enfuse, --enable-luminance, and --enable-opencv)."
-    )
-    print("  [HDR+ knobs]      - Effective only when --enable-hdr-plus is set.")
     print(
         "  --hdrplus-proxy-mode=<name> - Scalar proxy mode for RGB->single-channel adaptation."
         f" Allowed values: {', '.join(_HDRPLUS_PROXY_MODES)} (default: {DEFAULT_HDRPLUS_PROXY_MODE})."
@@ -815,31 +806,31 @@ def print_help(version):
     )
     print(
         "  [postprocess defaults]"
-        f" - --enable-enfuse: post-gamma={DEFAULT_POST_GAMMA}, brightness={DEFAULT_BRIGHTNESS},"
+        f" - --hdr-merge {HDR_MERGE_MODE_ENFUSE}: post-gamma={DEFAULT_POST_GAMMA}, brightness={DEFAULT_BRIGHTNESS},"
         f" contrast={DEFAULT_CONTRAST}, saturation={DEFAULT_SATURATION}."
     )
     print(
-        "                   - --enable-luminance + --luminance-tmo=reinhard02: "
+        f"                   - --hdr-merge {HDR_MERGE_MODE_LUMINANCE} + --luminance-tmo=reinhard02: "
         f"post-gamma={DEFAULT_POST_GAMMA}, brightness={DEFAULT_REINHARD02_BRIGHTNESS}, "
         f"contrast={DEFAULT_REINHARD02_CONTRAST}, saturation={DEFAULT_REINHARD02_SATURATION}."
     )
     print(
-        "                   - --enable-luminance + --luminance-tmo=mantiuk08: "
+        f"                   - --hdr-merge {HDR_MERGE_MODE_LUMINANCE} + --luminance-tmo=mantiuk08: "
         f"post-gamma={DEFAULT_POST_GAMMA}, brightness={DEFAULT_BRIGHTNESS}, "
         f"contrast={DEFAULT_MANTIUK08_CONTRAST}, saturation={DEFAULT_SATURATION}."
     )
     print(
-        "                   - --enable-luminance + other --luminance-tmo (except reinhard02,mantiuk08): "
+        f"                   - --hdr-merge {HDR_MERGE_MODE_LUMINANCE} + other --luminance-tmo (except reinhard02,mantiuk08): "
         f"post-gamma={DEFAULT_POST_GAMMA}, brightness={DEFAULT_BRIGHTNESS}, "
         f"contrast={DEFAULT_CONTRAST}, saturation={DEFAULT_SATURATION}."
     )
     print(
-        "                   - --enable-opencv: "
+        f"                   - --hdr-merge {HDR_MERGE_MODE_OPENCV}: "
         f"post-gamma={DEFAULT_POST_GAMMA}, brightness={DEFAULT_BRIGHTNESS}, "
         f"contrast={DEFAULT_CONTRAST}, saturation={DEFAULT_SATURATION}."
     )
     print(
-        "                   - --enable-hdr-plus: "
+        f"                   - --hdr-merge {HDR_MERGE_MODE_HDR_PLUS}: "
         f"post-gamma={DEFAULT_POST_GAMMA}, brightness={DEFAULT_BRIGHTNESS}, "
         f"contrast={DEFAULT_CONTRAST}, saturation={DEFAULT_SATURATION}."
     )
@@ -1083,36 +1074,40 @@ def _parse_ev_zero_option(ev_zero_raw):
 def _parse_auto_ev_option(auto_ev_raw):
     """@brief Parse and validate one `--auto-ev` option value.
 
-    @details Accepts only boolean-like activator tokens (`1`, `true`, `yes`,
-    `on`) and rejects all other values to keep deterministic CLI behavior.
+    @details Accepts only explicit enable/disable tokens to keep deterministic
+    CLI behavior and unambiguous precedence handling with `--ev`.
     @param auto_ev_raw {str} Raw `--auto-ev` value token from CLI args.
-    @return {bool|None} `True` when token enables adaptive mode; `None` on parse failure.
-    @satisfies REQ-056
+    @return {bool|None} Parsed enable-state value; `None` on parse failure.
+    @satisfies REQ-056, CTN-003
     """
 
     auto_ev_text = auto_ev_raw.strip().lower()
-    if auto_ev_text in ("1", "true", "yes", "on"):
+    if auto_ev_text == "enable":
         return True
+    if auto_ev_text == "disable":
+        return False
     print_error(f"Invalid --auto-ev value: {auto_ev_raw}")
-    print_error("Allowed values: 1, true, yes, on")
+    print_error("Allowed values: enable, disable")
     return None
 
 
 def _parse_auto_zero_option(auto_zero_raw):
     """@brief Parse and validate one `--auto-zero` option value.
 
-    @details Accepts only boolean-like activator tokens (`1`, `true`, `yes`,
-    `on`) and rejects all other values to keep deterministic CLI behavior.
+    @details Accepts only explicit enable/disable tokens to keep deterministic
+    CLI behavior and unambiguous precedence handling with `--ev-zero`.
     @param auto_zero_raw {str} Raw `--auto-zero` value token from CLI args.
-    @return {bool|None} `True` when token enables automatic EV-zero mode; `None` on parse failure.
-    @satisfies REQ-094
+    @return {bool|None} Parsed enable-state value; `None` on parse failure.
+    @satisfies REQ-018
     """
 
     auto_zero_text = auto_zero_raw.strip().lower()
-    if auto_zero_text in ("1", "true", "yes", "on"):
+    if auto_zero_text == "enable":
         return True
+    if auto_zero_text == "disable":
+        return False
     print_error(f"Invalid --auto-zero value: {auto_zero_raw}")
-    print_error("Allowed values: 1, true, yes, on")
+    print_error("Allowed values: enable, disable")
     return None
 
 
@@ -1142,36 +1137,40 @@ def _parse_percentage_option(option_name, option_raw):
 def _parse_auto_brightness_option(auto_brightness_raw):
     """@brief Parse and validate one `--auto-brightness` option value.
 
-    @details Accepts only boolean-like activator tokens (`1`, `true`, `yes`,
-    `on`) and rejects all other values to keep deterministic CLI behavior.
+    @details Accepts only explicit enable/disable tokens to keep deterministic
+    toggle behavior for stage activation.
     @param auto_brightness_raw {str} Raw `--auto-brightness` value token from CLI args.
-    @return {bool|None} `True` when token enables auto-brightness; `None` on parse failure.
+    @return {bool|None} Parsed enable-state value; `None` on parse failure.
     @satisfies REQ-065, REQ-089
     """
 
     auto_brightness_text = auto_brightness_raw.strip().lower()
-    if auto_brightness_text in ("1", "true", "yes", "on"):
+    if auto_brightness_text == "enable":
         return True
+    if auto_brightness_text == "disable":
+        return False
     print_error(f"Invalid --auto-brightness value: {auto_brightness_raw}")
-    print_error("Allowed values: 1, true, yes, on")
+    print_error("Allowed values: enable, disable")
     return None
 
 
 def _parse_auto_levels_option(auto_levels_raw):
     """@brief Parse and validate one `--auto-levels` option value.
 
-    @details Accepts only boolean-like activator tokens (`1`, `true`, `yes`,
-    `on`) and rejects all other values to keep deterministic CLI behavior.
+    @details Accepts only explicit enable/disable tokens to keep deterministic
+    toggle behavior for stage activation.
     @param auto_levels_raw {str} Raw `--auto-levels` value token from CLI args.
-    @return {bool|None} `True` when token enables auto-levels; `None` on parse failure.
+    @return {bool|None} Parsed enable-state value; `None` on parse failure.
     @satisfies REQ-100, REQ-101
     """
 
     auto_levels_text = auto_levels_raw.strip().lower()
-    if auto_levels_text in ("1", "true", "yes", "on"):
+    if auto_levels_text == "enable":
         return True
+    if auto_levels_text == "disable":
+        return False
     print_error(f"Invalid --auto-levels value: {auto_levels_raw}")
-    print_error("Allowed values: 1, true, yes, on")
+    print_error("Allowed values: enable, disable")
     return None
 
 
@@ -2319,10 +2318,39 @@ def _parse_auto_adjust_mode_option(auto_adjust_raw):
     return None
 
 
+def _parse_hdr_merge_option(hdr_merge_raw):
+    """@brief Parse HDR backend selector option value.
+
+    @details Accepts case-insensitive backend selector names and normalizes
+    them to canonical runtime mode names.
+    @param hdr_merge_raw {str} Raw `--hdr-merge` selector token.
+    @return {str|None} Canonical HDR merge mode or `None` on parse failure.
+    @satisfies CTN-002, REQ-023, REQ-024, REQ-107, REQ-111
+    """
+
+    hdr_merge_text = hdr_merge_raw.strip()
+    if not hdr_merge_text:
+        print_error("Invalid --hdr-merge value: empty value")
+        return None
+    normalized = hdr_merge_text.lower()
+    mapping = {
+        HDR_MERGE_MODE_ENFUSE.lower(): HDR_MERGE_MODE_ENFUSE,
+        HDR_MERGE_MODE_LUMINANCE.lower(): HDR_MERGE_MODE_LUMINANCE,
+        HDR_MERGE_MODE_OPENCV.lower(): HDR_MERGE_MODE_OPENCV,
+        HDR_MERGE_MODE_HDR_PLUS.lower(): HDR_MERGE_MODE_HDR_PLUS,
+    }
+    resolved = mapping.get(normalized)
+    if resolved is not None:
+        return resolved
+    print_error(f"Invalid --hdr-merge value: {hdr_merge_raw}")
+    print_error(
+        f"Allowed values: {HDR_MERGE_MODE_ENFUSE}, {HDR_MERGE_MODE_LUMINANCE}, {HDR_MERGE_MODE_OPENCV}, {HDR_MERGE_MODE_HDR_PLUS}"
+    )
+    return None
+
+
 def _resolve_default_postprocess(
-    enable_luminance,
-    enable_opencv,
-    enable_hdr_plus,
+    hdr_merge_mode,
     luminance_tmo,
 ):
     """@brief Resolve backend-specific postprocess defaults.
@@ -2330,17 +2358,13 @@ def _resolve_default_postprocess(
     @details Selects neutral defaults for enfuse/OpenCV/HDR+ and non-tuned luminance
     operators, and selects tuned defaults for luminance `reinhard02` and
     `mantiuk08`.
-    @param enable_luminance {bool} Backend selector state.
-    @param enable_opencv {bool} OpenCV backend selector state.
-    @param enable_hdr_plus {bool} HDR+ backend selector state.
+    @param hdr_merge_mode {str} Canonical HDR merge mode selector.
     @param luminance_tmo {str} Selected luminance tone-mapping operator.
     @return {tuple[float, float, float, float]} Defaults in `(post_gamma, brightness, contrast, saturation)` order.
     @satisfies REQ-069, REQ-071, REQ-072, REQ-091, REQ-107, REQ-111
     """
 
-    del enable_opencv
-    del enable_hdr_plus
-    if not enable_luminance:
+    if hdr_merge_mode != HDR_MERGE_MODE_LUMINANCE:
         return (
             DEFAULT_POST_GAMMA,
             DEFAULT_BRIGHTNESS,
@@ -2374,31 +2398,32 @@ def _resolve_default_postprocess(
 def _parse_run_options(args):
     """@brief Parse CLI args into input, output, and EV parameters.
 
-    @details Supports positional file arguments, required mutually exclusive
-    exposure selectors (`--ev=<value>`/`--ev <value>` or
-    `--auto-ev[=<1|true|yes|on>]`), optional `--ev-zero=<value>` or
-    `--ev-zero <value>`, optional `--auto-zero[=<1|true|yes|on>]`,
+    @details Supports positional file arguments, optional exposure selectors
+    (`--ev=<value>`/`--ev <value>` and `--auto-ev[=<enable|disable>]`) with
+    deterministic precedence where static `--ev` overrides enabled `--auto-ev`,
+    optional `--ev-zero=<value>` or `--ev-zero <value>`, optional
+    `--auto-zero[=<enable|disable>]`,
     optional `--auto-zero-pct=<0..100>`, optional `--auto-ev-pct=<0..100>`,
     optional `--gamma=<a,b>` or `--gamma <a,b>`,
     optional postprocess controls, optional auto-brightness stage and
     `--ab-*` knobs, optional auto-levels stage and `--al-*` knobs,
-    optional shared auto-adjust knobs, required backend selector
-    (`--enable-enfuse`, `--enable-luminance`, `--enable-opencv`, or
-    `--enable-hdr-plus`), HDR+ backend controls, and luminance backend controls
+    optional shared auto-adjust knobs, optional backend selector
+    (`--hdr-merge=<enfuse|Luminace-HDR|OpenCV|HDR-Plus>` default `OpenCV`),
+    HDR+ backend controls, and luminance backend controls
     including explicit `--tmo*` passthrough options and optional
     auto-adjust implementation selector (`--auto-adjust <ImageMagick|OpenCV>`);
     rejects unknown options and invalid arity.
     @param args {list[str]} Raw command argument vector.
     @return {tuple[Path, Path, float|None, bool, tuple[float, float], PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, bool, float, float]|None} Parsed `(input, output, ev, auto_ev, gamma, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, auto_zero_enabled, auto_zero_pct, auto_ev_pct)` tuple; `None` on parse failure.
-    @satisfies REQ-055, REQ-056, REQ-057, REQ-060, REQ-061, REQ-064, REQ-065, REQ-067, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-079, REQ-080, REQ-081, REQ-082, REQ-083, REQ-084, REQ-085, REQ-087, REQ-088, REQ-089, REQ-090, REQ-091, REQ-094, REQ-097, REQ-107, REQ-108, REQ-111, REQ-127, REQ-128, REQ-130
+    @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111
     """
 
     positional = []
     ev_value = None
-    auto_ev_enabled = False
+    auto_ev_enabled = None
     ev_zero = 0.0
     ev_zero_specified = False
-    auto_zero_enabled = False
+    auto_zero_enabled = None
     auto_zero_pct = DEFAULT_AUTO_ZERO_PCT
     auto_ev_pct = DEFAULT_AUTO_EV_PCT
     gamma_value = DEFAULT_GAMMA
@@ -2411,16 +2436,13 @@ def _parse_run_options(args):
     brightness_set = False
     contrast_set = False
     saturation_set = False
-    auto_brightness_enabled = False
+    auto_brightness_enabled = True
     auto_brightness_raw_values = {}
-    auto_levels_enabled = False
+    auto_levels_enabled = True
     auto_levels_raw_values = {}
     auto_adjust_mode = None
     auto_adjust_raw_values = {}
-    enable_enfuse = False
-    enable_luminance = False
-    enable_opencv = False
-    enable_hdr_plus = False
+    hdr_merge_mode = HDR_MERGE_MODE_OPENCV
     hdrplus_raw_values = {}
     luminance_hdr_model = DEFAULT_LUMINANCE_HDR_MODEL
     luminance_hdr_weight = DEFAULT_LUMINANCE_HDR_WEIGHT
@@ -2428,27 +2450,31 @@ def _parse_run_options(args):
     luminance_tmo = DEFAULT_LUMINANCE_TMO
     luminance_tmo_extra_args = []
     luminance_option_specified = False
+    auto_ev_option_specified = False
+    auto_zero_option_specified = False
     idx = 0
 
     while idx < len(args):
         token = args[idx]
-        if token == "--enable-enfuse":
-            enable_enfuse = True
-            idx += 1
+        if token == "--hdr-merge":
+            if idx + 1 >= len(args):
+                print_error("Missing value for --hdr-merge")
+                return None
+            if args[idx + 1].startswith("--"):
+                print_error("Missing value for --hdr-merge")
+                return None
+            parsed_hdr_merge_mode = _parse_hdr_merge_option(args[idx + 1])
+            if parsed_hdr_merge_mode is None:
+                return None
+            hdr_merge_mode = parsed_hdr_merge_mode
+            idx += 2
             continue
 
-        if token == "--enable-luminance":
-            enable_luminance = True
-            idx += 1
-            continue
-
-        if token == "--enable-opencv":
-            enable_opencv = True
-            idx += 1
-            continue
-
-        if token == "--enable-hdr-plus":
-            enable_hdr_plus = True
+        if token.startswith("--hdr-merge="):
+            parsed_hdr_merge_mode = _parse_hdr_merge_option(token.split("=", 1)[1])
+            if parsed_hdr_merge_mode is None:
+                return None
+            hdr_merge_mode = parsed_hdr_merge_mode
             idx += 1
             continue
 
@@ -2475,23 +2501,24 @@ def _parse_run_options(args):
             continue
 
         if token == "--auto-adjust":
-            if idx + 1 >= len(args):
-                print_error("Missing value for --auto-adjust")
-                return None
-            if args[idx + 1].startswith("--"):
-                print_error("Missing value for --auto-adjust")
-                return None
-            parsed_auto_adjust_mode = _parse_auto_adjust_mode_option(args[idx + 1])
-            if parsed_auto_adjust_mode is None:
-                return None
-            auto_adjust_mode = parsed_auto_adjust_mode
-            idx += 2
+            if idx + 1 < len(args) and not args[idx + 1].startswith("--"):
+                parsed_auto_adjust_mode = _parse_auto_adjust_mode_option(args[idx + 1])
+                if parsed_auto_adjust_mode is None:
+                    return None
+                auto_adjust_mode = parsed_auto_adjust_mode
+                idx += 2
+                continue
+            auto_adjust_mode = DEFAULT_AUTO_ADJUST_MODE
+            idx += 1
             continue
 
         if token.startswith("--auto-adjust="):
-            parsed_auto_adjust_mode = _parse_auto_adjust_mode_option(
-                token.split("=", 1)[1]
-            )
+            auto_adjust_value = token.split("=", 1)[1]
+            if auto_adjust_value == "":
+                auto_adjust_mode = DEFAULT_AUTO_ADJUST_MODE
+                idx += 1
+                continue
+            parsed_auto_adjust_mode = _parse_auto_adjust_mode_option(auto_adjust_value)
             if parsed_auto_adjust_mode is None:
                 return None
             auto_adjust_mode = parsed_auto_adjust_mode
@@ -2499,15 +2526,14 @@ def _parse_run_options(args):
             continue
 
         if token == "--auto-brightness":
-            if idx + 1 < len(args) and not args[idx + 1].startswith("--"):
-                parsed_auto_brightness = _parse_auto_brightness_option(args[idx + 1])
-                if parsed_auto_brightness is None:
-                    return None
-                auto_brightness_enabled = parsed_auto_brightness
-                idx += 2
-                continue
-            auto_brightness_enabled = True
-            idx += 1
+            if idx + 1 >= len(args) or args[idx + 1].startswith("--"):
+                print_error("Missing value for --auto-brightness")
+                return None
+            parsed_auto_brightness = _parse_auto_brightness_option(args[idx + 1])
+            if parsed_auto_brightness is None:
+                return None
+            auto_brightness_enabled = parsed_auto_brightness
+            idx += 2
             continue
 
         if token.startswith("--auto-brightness="):
@@ -2559,15 +2585,14 @@ def _parse_run_options(args):
             continue
 
         if token == "--auto-levels":
-            if idx + 1 < len(args) and not args[idx + 1].startswith("--"):
-                parsed_auto_levels = _parse_auto_levels_option(args[idx + 1])
-                if parsed_auto_levels is None:
-                    return None
-                auto_levels_enabled = parsed_auto_levels
-                idx += 2
-                continue
-            auto_levels_enabled = True
-            idx += 1
+            if idx + 1 >= len(args) or args[idx + 1].startswith("--"):
+                print_error("Missing value for --auto-levels")
+                return None
+            parsed_auto_levels = _parse_auto_levels_option(args[idx + 1])
+            if parsed_auto_levels is None:
+                return None
+            auto_levels_enabled = parsed_auto_levels
+            idx += 2
             continue
 
         if token.startswith("--auto-levels="):
@@ -2779,8 +2804,15 @@ def _parse_run_options(args):
             continue
 
         if token == "--auto-ev":
-            auto_ev_enabled = True
-            idx += 1
+            if idx + 1 >= len(args) or args[idx + 1].startswith("--"):
+                print_error("Missing value for --auto-ev")
+                return None
+            parsed_auto_ev = _parse_auto_ev_option(args[idx + 1])
+            if parsed_auto_ev is None:
+                return None
+            auto_ev_enabled = parsed_auto_ev
+            auto_ev_option_specified = True
+            idx += 2
             continue
 
         if token.startswith("--auto-ev="):
@@ -2788,19 +2820,20 @@ def _parse_run_options(args):
             if parsed_auto_ev is None:
                 return None
             auto_ev_enabled = parsed_auto_ev
+            auto_ev_option_specified = True
             idx += 1
             continue
 
         if token == "--auto-zero":
-            if idx + 1 < len(args) and not args[idx + 1].startswith("--"):
-                parsed_auto_zero = _parse_auto_zero_option(args[idx + 1])
-                if parsed_auto_zero is None:
-                    return None
-                auto_zero_enabled = parsed_auto_zero
-                idx += 2
-                continue
-            auto_zero_enabled = True
-            idx += 1
+            if idx + 1 >= len(args) or args[idx + 1].startswith("--"):
+                print_error("Missing value for --auto-zero")
+                return None
+            parsed_auto_zero = _parse_auto_zero_option(args[idx + 1])
+            if parsed_auto_zero is None:
+                return None
+            auto_zero_enabled = parsed_auto_zero
+            auto_zero_option_specified = True
+            idx += 2
             continue
 
         if token.startswith("--auto-zero="):
@@ -2808,6 +2841,7 @@ def _parse_run_options(args):
             if parsed_auto_zero is None:
                 return None
             auto_zero_enabled = parsed_auto_zero
+            auto_zero_option_specified = True
             idx += 1
             continue
 
@@ -3022,33 +3056,33 @@ def _parse_run_options(args):
     if len(positional) != 2:
         print_error(
             "Usage: dng2jpg <input.dng> <output.jpg> "
-            "(--ev=<value> | --auto-ev) [--ev-zero=<value>] [--gamma=<a,b>]"
+            "[--ev=<value>] [--auto-ev=<enable|disable>] [--ev-zero=<value>] [--auto-zero=<enable|disable>] [--gamma=<a,b>]"
         )
         return None
 
-    if (ev_value is None and not auto_ev_enabled) or (
-        ev_value is not None and auto_ev_enabled
-    ):
-        print_error("Exactly one exposure selector is required: --ev or --auto-ev")
-        return None
-    if auto_zero_enabled and ev_zero_specified:
-        print_error("Exactly one EV-zero selector is allowed: --ev-zero or --auto-zero")
-        return None
-
-    backend_enabled_count = (
-        int(enable_enfuse)
-        + int(enable_luminance)
-        + int(enable_opencv)
-        + int(enable_hdr_plus)
-    )
-    if backend_enabled_count != 1:
-        print_error(
-            "Exactly one backend selector is required: --enable-enfuse, --enable-luminance, --enable-opencv, or --enable-hdr-plus"
-        )
+    if auto_ev_enabled is None:
+        auto_ev_enabled = ev_value is None
+    if ev_value is not None and auto_ev_enabled:
+        if auto_ev_option_specified:
+            print_info("Ignoring --auto-ev because --ev is specified.")
+        auto_ev_enabled = False
+    if ev_value is None and not auto_ev_enabled:
+        print_error("No exposure mode selected: provide --ev or --auto-ev enable.")
         return None
 
-    if luminance_option_specified and not enable_luminance:
-        print_error("Luminance options require --enable-luminance")
+    if auto_zero_enabled is None:
+        auto_zero_enabled = not ev_zero_specified
+    if ev_zero_specified and auto_zero_enabled:
+        if auto_zero_option_specified:
+            print_info("Ignoring --auto-zero because --ev-zero is specified.")
+        auto_zero_enabled = False
+
+    if hdr_merge_mode not in _HDR_MERGE_MODES:
+        print_error(f"Invalid --hdr-merge value: {hdr_merge_mode}")
+        return None
+
+    if luminance_option_specified and hdr_merge_mode != HDR_MERGE_MODE_LUMINANCE:
+        print_error(f"Luminance options require --hdr-merge {HDR_MERGE_MODE_LUMINANCE}")
         return None
 
     if auto_adjust_mode is None and auto_adjust_raw_values:
@@ -3057,6 +3091,8 @@ def _parse_run_options(args):
             f"Auto-adjust knob {invalid_knob} requires --auto-adjust <ImageMagick|OpenCV>"
         )
         return None
+    if auto_adjust_mode is None:
+        auto_adjust_mode = DEFAULT_AUTO_ADJUST_MODE
     if not auto_brightness_enabled and auto_brightness_raw_values:
         invalid_knob = next(iter(auto_brightness_raw_values))
         print_error(
@@ -3067,9 +3103,9 @@ def _parse_run_options(args):
         invalid_knob = next(iter(auto_levels_raw_values))
         print_error(f"Auto-levels knob {invalid_knob} requires --auto-levels")
         return None
-    if not enable_hdr_plus and hdrplus_raw_values:
+    if hdr_merge_mode != HDR_MERGE_MODE_HDR_PLUS and hdrplus_raw_values:
         invalid_knob = next(iter(hdrplus_raw_values))
-        print_error(f"HDR+ knob {invalid_knob} requires --enable-hdr-plus")
+        print_error(f"HDR+ knob {invalid_knob} requires --hdr-merge {HDR_MERGE_MODE_HDR_PLUS}")
         return None
 
     (
@@ -3077,12 +3113,7 @@ def _parse_run_options(args):
         backend_brightness,
         backend_contrast,
         backend_saturation,
-    ) = _resolve_default_postprocess(
-        enable_luminance,
-        enable_opencv,
-        enable_hdr_plus,
-        luminance_tmo,
-    )
+    ) = _resolve_default_postprocess(hdr_merge_mode, luminance_tmo)
     if not post_gamma_set:
         post_gamma = backend_post_gamma
     if not brightness_set:
@@ -3103,6 +3134,10 @@ def _parse_run_options(args):
     hdrplus_options = _parse_hdrplus_options(hdrplus_raw_values)
     if hdrplus_options is None:
         return None
+
+    enable_luminance = hdr_merge_mode == HDR_MERGE_MODE_LUMINANCE
+    enable_opencv = hdr_merge_mode == HDR_MERGE_MODE_OPENCV
+    enable_hdr_plus = hdr_merge_mode == HDR_MERGE_MODE_HDR_PLUS
 
     return (
         Path(positional[0]),
