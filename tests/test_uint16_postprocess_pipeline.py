@@ -592,6 +592,66 @@ def test_parse_run_options_defaults_enable_auto_adjust_mode() -> None:
     assert parsed[5].auto_adjust_mode == "OpenCV"
 
 
+def test_collect_missing_external_executables_reports_luminance_dependency(
+    monkeypatch,
+) -> None:
+    """Luminance backend preflight must report missing `luminance-hdr-cli`."""
+
+    monkeypatch.setattr(dng2jpg_module.shutil, "which", lambda _cmd: None)
+    missing = dng2jpg_module._collect_missing_external_executables(  # pylint: disable=protected-access
+        enable_luminance=True,
+        enable_opencv=False,
+        enable_hdr_plus=False,
+        auto_adjust_mode="OpenCV",
+    )
+    assert missing == ("luminance-hdr-cli",)
+
+
+def test_collect_missing_external_executables_reports_enfuse_dependency(
+    monkeypatch,
+) -> None:
+    """Enfuse backend preflight must report missing `enfuse`."""
+
+    monkeypatch.setattr(dng2jpg_module.shutil, "which", lambda _cmd: None)
+    missing = dng2jpg_module._collect_missing_external_executables(  # pylint: disable=protected-access
+        enable_luminance=False,
+        enable_opencv=False,
+        enable_hdr_plus=False,
+        auto_adjust_mode="OpenCV",
+    )
+    assert missing == ("enfuse",)
+
+
+def test_collect_missing_external_executables_reports_imagemagick_variants(
+    monkeypatch,
+) -> None:
+    """ImageMagick auto-adjust preflight must report both `magick` and `convert`."""
+
+    monkeypatch.setattr(dng2jpg_module.shutil, "which", lambda _cmd: None)
+    missing = dng2jpg_module._collect_missing_external_executables(  # pylint: disable=protected-access
+        enable_luminance=False,
+        enable_opencv=True,
+        enable_hdr_plus=False,
+        auto_adjust_mode="ImageMagick",
+    )
+    assert missing == ("magick", "convert")
+
+
+def test_collect_missing_external_executables_aggregates_backend_and_imagemagick(
+    monkeypatch,
+) -> None:
+    """Preflight must aggregate all missing tools selected by resolved options."""
+
+    monkeypatch.setattr(dng2jpg_module.shutil, "which", lambda _cmd: None)
+    missing = dng2jpg_module._collect_missing_external_executables(  # pylint: disable=protected-access
+        enable_luminance=True,
+        enable_opencv=False,
+        enable_hdr_plus=False,
+        auto_adjust_mode="ImageMagick",
+    )
+    assert missing == ("luminance-hdr-cli", "magick", "convert")
+
+
 def test_build_ev_times_from_ev_zero_and_delta_matches_bracket_sequence() -> None:
     """EV times helper must generate three deterministic stop-space samples."""
 

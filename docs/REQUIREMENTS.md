@@ -85,7 +85,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **CTN-002**: MUST parse `--hdr-merge <enfuse|Luminace-HDR|OpenCV|HDR-Plus>` and MUST default to `OpenCV` when omitted.
 - **CTN-003**: MUST resolve exposure mode from `--ev` and `--auto-ev <enable|disable>`, and MUST let `--ev` override enabled auto exposure when both are specified.
 - **CTN-004**: MUST require `.dng` input extension, existing input file, and existing output parent directory.
-- **CTN-005**: MUST fail when required Python modules or required backend executables for enabled features are unavailable.
+- **CTN-005**: MUST preflight-check each external executable selected by resolved options (`enfuse`, `luminance-hdr-cli`, and ImageMagick `magick|convert`) and MUST fail before processing with explicit diagnostics naming every missing executable.
 - **CTN-006**: MUST reject launcher execution when resolved launcher base directory differs from repository git root.
 
 ## 3. Requirements
@@ -188,7 +188,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 ## 4. Test Requirements
 
 - **TST-001**: MUST verify `_parse_run_options` applies `--ev`/`--auto-ev` precedence, parses `--hdr-merge`, and rejects unknown `--hdr-merge` values with deterministic error output.
-- **TST-002**: MUST verify `run` returns `1` for unsupported runtime OS, missing external executables, and missing Python dependencies.
+- **TST-002**: MUST verify `run` returns `1` for unsupported runtime OS and for missing `enfuse`, `luminance-hdr-cli`, or ImageMagick (`magick|convert`) dependencies with deterministic diagnostics naming each missing executable.
 - **TST-003**: MUST verify successful `run` execution returns `0`, writes output JPG, and emits success message `HDR JPG created: <output>`.
 - **TST-004**: MUST verify `_resolve_ev_zero` enforces `SAFE_ZERO_MAX=((bits_per_color-8)/2)-1` and rejects out-of-range values.
 - **TST-005**: MUST verify `_resolve_ev_value` clamps adaptive EV to bit-derived selector bounds and rejects unsupported static EV for the detected bit depth.

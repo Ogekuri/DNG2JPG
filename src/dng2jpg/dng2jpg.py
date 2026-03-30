@@ -4826,6 +4826,39 @@ def _resolve_imagemagick_command():
     return None
 
 
+def _collect_missing_external_executables(
+    *,
+    enable_luminance,
+    enable_opencv,
+    enable_hdr_plus,
+    auto_adjust_mode,
+):
+    """@brief Collect missing external executables required by resolved runtime options.
+
+    @details Evaluates backend and auto-adjust mode selectors to derive the exact
+    external executable set needed by this invocation, then probes each command on
+    `PATH` and returns a deterministic missing-command tuple for preflight failure
+    reporting before processing starts.
+    @param enable_luminance {bool} `True` when luminance backend is selected.
+    @param enable_opencv {bool} `True` when OpenCV backend is selected.
+    @param enable_hdr_plus {bool} `True` when HDR+ backend is selected.
+    @param auto_adjust_mode {str|None} Resolved auto-adjust mode selector.
+    @return {tuple[str, ...]} Ordered tuple of missing executable labels.
+    @satisfies CTN-005
+    """
+
+    missing_dependencies = []
+    if enable_luminance and shutil.which("luminance-hdr-cli") is None:
+        missing_dependencies.append("luminance-hdr-cli")
+    if (not enable_luminance) and (not enable_opencv) and (not enable_hdr_plus):
+        if shutil.which("enfuse") is None:
+            missing_dependencies.append("enfuse")
+    if auto_adjust_mode == "ImageMagick":
+        if shutil.which("magick") is None and shutil.which("convert") is None:
+            missing_dependencies.extend(("magick", "convert"))
+    return tuple(missing_dependencies)
+
+
 def _resolve_auto_adjust_opencv_dependencies():
     """@brief Resolve OpenCV runtime dependencies for image-domain stages.
 
@@ -7242,14 +7275,16 @@ def run(args):
         print_error(f"Output directory does not exist: {output_parent}")
         return 1
 
-    if enable_luminance:
-        if shutil.which("luminance-hdr-cli") is None:
-            print_error("Missing required dependency: luminance-hdr-cli")
-            return 1
-    elif not enable_opencv and not enable_hdr_plus:
-        if shutil.which("enfuse") is None:
-            print_error("Missing required dependency: enfuse")
-            return 1
+    missing_external_executables = _collect_missing_external_executables(
+        enable_luminance=enable_luminance,
+        enable_opencv=enable_opencv,
+        enable_hdr_plus=enable_hdr_plus,
+        auto_adjust_mode=postprocess_options.auto_adjust_mode,
+    )
+    if missing_external_executables:
+        for executable in missing_external_executables:
+            print_error(f"Missing required dependency: {executable}")
+        return 1
     imagemagick_command = None
     auto_adjust_opencv_dependencies = None
     numpy_module = _resolve_numpy_dependency()
@@ -7262,9 +7297,8 @@ def run(args):
     if postprocess_options.auto_adjust_mode == "ImageMagick":
         imagemagick_command = _resolve_imagemagick_command()
         if imagemagick_command is None:
-            print_error(
-                "Missing required dependency: ImageMagick executable (magick or convert)"
-            )
+            print_error("Missing required dependency: magick")
+            print_error("Missing required dependency: convert")
             return 1
 
     dependencies = _load_image_dependencies()

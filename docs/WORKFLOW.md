@@ -137,6 +137,8 @@
             - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
           - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
         - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
+      - `_collect_missing_external_executables(...)`: preflight selected external executables from resolved backend and auto-adjust options [`src/dng2jpg/dng2jpg.py`]
+        - `print_error(...)`: emit missing-executable diagnostics [`src/shell_scripts/utils.py`]
       - `_resolve_auto_adjust_opencv_dependencies(...)`: import OpenCV/numpy dependencies for enabled modes [`src/dng2jpg/dng2jpg.py`]
         - `print_error(...)`: emit dependency diagnostics [`src/shell_scripts/utils.py`]
       - `_resolve_numpy_dependency(...)`: import numpy dependency for auto-brightness, auto-levels, and HDR+ merge stages [`src/dng2jpg/dng2jpg.py`]
