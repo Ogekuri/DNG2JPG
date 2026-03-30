@@ -69,26 +69,6 @@ class _FakeImageIoModule:
         self.writes.append((path, np.array(image, copy=True)))
 
 
-class _FakePathImageIoModule:
-    """Minimal imageio shim with per-path deterministic image payloads."""
-
-    def __init__(self) -> None:
-        self._images_by_path: dict[str, np.ndarray] = {}
-        self.writes: list[tuple[str, np.ndarray]] = []
-
-    def register_image(self, path: Path, image: np.ndarray) -> None:
-        self._images_by_path[str(path)] = np.array(image, copy=True)
-
-    def imread(self, path: str) -> np.ndarray:
-        image = self._images_by_path.get(path)
-        if image is None:
-            raise AssertionError(f"Unexpected imageio read path: {path}")
-        return np.array(image, copy=True)
-
-    def imwrite(self, path: str, image: np.ndarray) -> None:
-        self.writes.append((path, np.array(image, copy=True)))
-
-
 class _FakeMergeMertens:
     """Minimal OpenCV MergeMertens shim for HDR backend tests."""
 
@@ -171,7 +151,7 @@ def _build_postprocess_options():
         jpg_compression=25,
         auto_brightness_enabled=False,
         auto_levels_enabled=False,
-        auto_adjust_mode=None,
+        auto_adjust_enabled=False,
     )
 
 
@@ -407,65 +387,6 @@ def test_encode_jpg_quantizes_once_at_final_boundary(monkeypatch, tmp_path) -> N
     assert call_trace.index("to_uint8") > call_trace.index("static")
 
 
-def test_encode_jpg_imagemagick_auto_adjust_runs_in_temp_workspace(
-    monkeypatch,
-    tmp_path,
-) -> None:
-    """ImageMagick auto-adjust subprocess must execute inside step temp workspace."""
-
-    merged_rgb_float = np.array(
-        [
-            [[0.05, 0.15, 0.25], [0.35, 0.45, 0.55]],
-            [[0.65, 0.75, 0.85], [0.95, 0.60, 0.40]],
-        ],
-        dtype=np.float32,
-    )
-    imageio_module = _FakePathImageIoModule()
-    pil_module = _FakePilModule()
-    postprocess_options = dng2jpg_module.PostprocessOptions(
-        post_gamma=1.0,
-        brightness=1.0,
-        contrast=1.0,
-        saturation=1.0,
-        jpg_compression=25,
-        auto_brightness_enabled=False,
-        auto_levels_enabled=False,
-        auto_adjust_mode="ImageMagick",
-    )
-    subprocess_cwd: dict[str, str | None] = {}
-
-    def _fake_subprocess_run(command, check, **kwargs):
-        del check  # Deterministic fake execution.
-        subprocess_cwd["cwd"] = kwargs.get("cwd")
-        imageio_module.register_image(
-            Path(command[-1]),
-            (merged_rgb_float * 65535.0).astype(np.uint16),
-        )
-        sidecar_root = (
-            Path(kwargs["cwd"])
-            if kwargs.get("cwd") is not None
-            else Path.cwd()
-        )
-        (sidecar_root / "output.jpg.pp3").write_text("sidecar", encoding="utf-8")
-        return None
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(dng2jpg_module.subprocess, "run", _fake_subprocess_run)
-
-    dng2jpg_module._encode_jpg(  # pylint: disable=protected-access
-        imageio_module=imageio_module,
-        pil_image_module=pil_module,
-        merged_image_float=merged_rgb_float,
-        output_jpg=tmp_path / "output.jpg",
-        postprocess_options=postprocess_options,
-        imagemagick_command="convert",
-        numpy_module=np,
-    )
-
-    assert subprocess_cwd["cwd"] is not None
-    assert not (tmp_path / "output.jpg.pp3").exists()
-
-
 def test_parse_run_options_accepts_remaining_auto_brightness_controls() -> None:
     """Parser must expose the surviving float-domain auto-brightness controls."""
 
@@ -501,14 +422,14 @@ def test_parse_run_options_accepts_remaining_auto_brightness_controls() -> None:
 
 
 def test_parse_run_options_accepts_auto_adjust_clahe_controls() -> None:
-    """Parser must expose OpenCV auto-adjust CLAHE-luma controls."""
+    """Parser must expose enabled auto-adjust CLAHE-luma controls."""
 
     parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         [
             "input.dng",
             "output.jpg",
             "--ev=1",
-            "--auto-adjust=OpenCV",
+            "--auto-adjust=enable",
             "--aa-enable-local-contrast=false",
             "--aa-local-contrast-strength=0.35",
             "--aa-clahe-clip-limit=1.7",
@@ -519,7 +440,7 @@ def test_parse_run_options_accepts_auto_adjust_clahe_controls() -> None:
 
     assert parsed is not None
     postprocess = parsed[5]
-    assert postprocess.auto_adjust_mode == "OpenCV"
+    assert postprocess.auto_adjust_enabled is True
     assert postprocess.auto_adjust_options == dng2jpg_module.AutoAdjustOptions(
         enable_local_contrast=False,
         local_contrast_strength=0.35,
@@ -658,10 +579,10 @@ def test_apply_auto_brightness_rgb_float_executes_original_stage_order(
     ]
 
 
-def test_apply_validated_auto_adjust_pipeline_opencv_executes_clahe_stage_order(
+def test_apply_validated_auto_adjust_pipeline_executes_clahe_stage_order(
     monkeypatch,
 ) -> None:
-    """OpenCV auto-adjust must insert float-domain CLAHE-luma after level."""
+    """Auto-adjust must insert float-domain CLAHE-luma after level."""
 
     call_trace: list[str] = []
     image_rgb_float = np.array([[[0.25, 0.5, 0.75]]], dtype=np.float32)
@@ -713,7 +634,7 @@ def test_apply_validated_auto_adjust_pipeline_opencv_executes_clahe_stage_order(
     monkeypatch.setattr(dng2jpg_module, "_high_pass_math_gray", _fake_high_pass)
     monkeypatch.setattr(dng2jpg_module, "_overlay_composite", _fake_overlay)
 
-    output = dng2jpg_module._apply_validated_auto_adjust_pipeline_opencv(  # pylint: disable=protected-access
+    output = dng2jpg_module._apply_validated_auto_adjust_pipeline(  # pylint: disable=protected-access
         image_rgb_float=image_rgb_float,
         cv2_module=object(),
         np_module=np,
@@ -916,14 +837,34 @@ def test_parse_run_options_requires_explicit_auto_levels_value() -> None:
     assert parsed is None
 
 
-def test_parse_run_options_defaults_enable_auto_adjust_mode() -> None:
-    """Auto-adjust mode must default to OpenCV when omitted."""
+def test_parse_run_options_defaults_enable_auto_adjust() -> None:
+    """Auto-adjust must default to enabled when omitted."""
 
     parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         ["input.dng", "output.jpg"]
     )
     assert parsed is not None
-    assert parsed[5].auto_adjust_mode == "OpenCV"
+    assert parsed[5].auto_adjust_enabled is True
+
+
+def test_parse_run_options_disables_auto_adjust_and_rejects_knobs() -> None:
+    """Disabled auto-adjust must reject any `--aa-*` knob overrides."""
+
+    parsed_disabled = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--auto-adjust=disable"]
+    )
+    assert parsed_disabled is not None
+    assert parsed_disabled[5].auto_adjust_enabled is False
+
+    parsed_with_knob = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        [
+            "input.dng",
+            "output.jpg",
+            "--auto-adjust=disable",
+            "--aa-clahe-clip-limit=1.7",
+        ]
+    )
+    assert parsed_with_knob is None
 
 
 def test_collect_missing_external_executables_reports_luminance_dependency(
@@ -934,56 +875,8 @@ def test_collect_missing_external_executables_reports_luminance_dependency(
     monkeypatch.setattr(dng2jpg_module.shutil, "which", lambda _cmd: None)
     missing = dng2jpg_module._collect_missing_external_executables(  # pylint: disable=protected-access
         enable_luminance=True,
-        enable_opencv=False,
-        enable_hdr_plus=False,
-        auto_adjust_mode="OpenCV",
     )
     assert missing == ("luminance-hdr-cli",)
-
-
-def test_collect_missing_external_executables_reports_enfuse_dependency(
-    monkeypatch,
-) -> None:
-    """Enfuse backend preflight must report missing `enfuse`."""
-
-    monkeypatch.setattr(dng2jpg_module.shutil, "which", lambda _cmd: None)
-    missing = dng2jpg_module._collect_missing_external_executables(  # pylint: disable=protected-access
-        enable_luminance=False,
-        enable_opencv=False,
-        enable_hdr_plus=False,
-        auto_adjust_mode="OpenCV",
-    )
-    assert missing == ("enfuse",)
-
-
-def test_collect_missing_external_executables_reports_imagemagick_variants(
-    monkeypatch,
-) -> None:
-    """ImageMagick auto-adjust preflight must report both `magick` and `convert`."""
-
-    monkeypatch.setattr(dng2jpg_module.shutil, "which", lambda _cmd: None)
-    missing = dng2jpg_module._collect_missing_external_executables(  # pylint: disable=protected-access
-        enable_luminance=False,
-        enable_opencv=True,
-        enable_hdr_plus=False,
-        auto_adjust_mode="ImageMagick",
-    )
-    assert missing == ("magick", "convert")
-
-
-def test_collect_missing_external_executables_aggregates_backend_and_imagemagick(
-    monkeypatch,
-) -> None:
-    """Preflight must aggregate all missing tools selected by resolved options."""
-
-    monkeypatch.setattr(dng2jpg_module.shutil, "which", lambda _cmd: None)
-    missing = dng2jpg_module._collect_missing_external_executables(  # pylint: disable=protected-access
-        enable_luminance=True,
-        enable_opencv=False,
-        enable_hdr_plus=False,
-        auto_adjust_mode="ImageMagick",
-    )
-    assert missing == ("luminance-hdr-cli", "magick", "convert")
 
 
 def test_build_ev_times_from_ev_zero_and_delta_matches_bracket_sequence() -> None:
@@ -1020,7 +913,7 @@ def test_run_opencv_hdr_merge_normalizes_mertens_inputs_to_unit_float32() -> Non
         ev_value=1.0,
         ev_zero=0.0,
         opencv_merge_options=dng2jpg_module.OpenCvMergeOptions(),
-        auto_adjust_opencv_dependencies=(fake_cv2, np),
+        auto_adjust_dependencies=(fake_cv2, np),
     )
 
     assert fake_cv2.merge_mertens.last_inputs is not None

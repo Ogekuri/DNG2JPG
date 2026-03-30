@@ -2,7 +2,7 @@
 """@brief Convert one DNG file into one HDR-merged JPG output.
 
 @details Implements bracketed RAW extraction with three synthetic exposures
-(`ev_zero-ev`, `ev_zero`, `ev_zero+ev`), merges them through selected `enfuse`, selected
+(`ev_zero-ev`, `ev_zero`, `ev_zero+ev`), merges them through selected
 `luminance-hdr-cli`, selected OpenCV (`Mertens+Debevec`), or selected HDR+
 tile-based flow with deterministic parameters, then writes final JPG to
 user-selected output path. Temporary artifacts are isolated in a temporary
@@ -29,7 +29,9 @@ from shell_scripts.utils import (
 )
 
 PROGRAM = "dng2jpg"
-DESCRIPTION = "Convert DNG to HDR-merged JPG with enfuse, luminance-hdr-cli, OpenCV, or HDR+ backend."
+DESCRIPTION = (
+    "Convert DNG to HDR-merged JPG with luminance-hdr-cli, OpenCV, or HDR+ backend."
+)
 DEFAULT_GAMMA = (2.222, 4.5)
 DEFAULT_POST_GAMMA = 1.0
 DEFAULT_BRIGHTNESS = 1.0
@@ -75,8 +77,7 @@ DEFAULT_LUMINANCE_HDR_MODEL = "debevec"
 DEFAULT_LUMINANCE_HDR_WEIGHT = "flat"
 DEFAULT_LUMINANCE_HDR_RESPONSE_CURVE = "srgb"
 DEFAULT_LUMINANCE_TMO = "mantiuk08"
-DEFAULT_AUTO_ADJUST_MODE = "OpenCV"
-HDR_MERGE_MODE_ENFUSE = "enfuse"
+DEFAULT_AUTO_ADJUST_ENABLED = True
 HDR_MERGE_MODE_LUMINANCE = "Luminace-HDR"
 HDR_MERGE_MODE_OPENCV = "OpenCV"
 HDR_MERGE_MODE_HDR_PLUS = "HDR-Plus"
@@ -163,7 +164,6 @@ _HDRPLUS_KNOB_OPTIONS = (
     "--hdrplus-temporal-max-dist",
 )
 _HDR_MERGE_MODES = (
-    HDR_MERGE_MODE_ENFUSE,
     HDR_MERGE_MODE_LUMINANCE,
     HDR_MERGE_MODE_OPENCV,
     HDR_MERGE_MODE_HDR_PLUS,
@@ -325,17 +325,16 @@ _LUMINANCE_CONTROL_TABLE_ROWS = (
 
 @dataclass(frozen=True)
 class AutoAdjustOptions:
-    """@brief Hold shared auto-adjust knob values used by ImageMagick and OpenCV.
+    """@brief Hold validated knob values for the sole auto-adjust pipeline.
 
-    @details Encapsulates validated shared blur/level/sigmoid/vibrance/high-pass
-    controls plus OpenCV-only CLAHE-luma controls so both auto-adjust
-    implementations share one parser contract while the OpenCV path can insert
-    local-contrast processing without quantized intermediates.
+    @details Encapsulates selective-blur, adaptive-level, CLAHE-luma,
+    sigmoidal-contrast, vibrance, and high-pass controls consumed by the single
+    float-domain auto-adjust implementation.
     @param blur_sigma {float} Selective blur Gaussian sigma (`> 0`).
     @param blur_threshold_pct {float} Selective blur threshold percentage in `[0, 100]`.
     @param level_low_pct {float} Low percentile for level normalization in `[0, 100]`.
     @param level_high_pct {float} High percentile for level normalization in `[0, 100]`.
-    @param enable_local_contrast {bool} `True` enables CLAHE-luma stage in the OpenCV auto-adjust pipeline.
+    @param enable_local_contrast {bool} `True` enables CLAHE-luma stage in the auto-adjust pipeline.
     @param local_contrast_strength {float} CLAHE-luma blend factor in `[0, 1]`.
     @param clahe_clip_limit {float} CLAHE clip limit in `(0, +inf)`.
     @param clahe_tile_grid_size {tuple[int, int]} CLAHE tile grid size `(rows, cols)`, each `>=1`.
@@ -431,8 +430,8 @@ class PostprocessOptions:
     @param auto_brightness_options {AutoBrightnessOptions} Auto-brightness stage knobs.
     @param auto_levels_enabled {bool} `True` when auto-levels stage is enabled.
     @param auto_levels_options {AutoLevelsOptions} Auto-levels stage knobs.
-    @param auto_adjust_mode {str|None} Optional auto-adjust implementation selector (`ImageMagick` or `OpenCV`).
-    @param auto_adjust_options {AutoAdjustOptions} Shared auto-adjust knobs for `ImageMagick` and `OpenCV` implementations.
+    @param auto_adjust_enabled {bool} `True` when the auto-adjust stage is enabled.
+    @param auto_adjust_options {AutoAdjustOptions} Knobs for the sole auto-adjust implementation.
     @return {None} Immutable dataclass container.
     @satisfies REQ-050, REQ-065, REQ-066, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-088, REQ-089, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105
     """
@@ -448,7 +447,7 @@ class PostprocessOptions:
     )
     auto_levels_enabled: bool = False
     auto_levels_options: AutoLevelsOptions = field(default_factory=AutoLevelsOptions)
-    auto_adjust_mode: str | None = None
+    auto_adjust_enabled: bool = DEFAULT_AUTO_ADJUST_ENABLED
     auto_adjust_options: AutoAdjustOptions = field(default_factory=AutoAdjustOptions)
 
 
@@ -649,7 +648,7 @@ def print_help(version):
         "[--al-clip-out-of-gamut[=<0|1|false|true|no|yes|off|on>]] "
         "[--al-highlight-reconstruction-method <Luminance Recovery|CIELab Blending|Blend|Color Propagation|Inpaint Opposed>] "
         "[--al-gain-threshold=<value>] "
-        f"[--jpg-compression=<0..100>] [--auto-adjust <ImageMagick|OpenCV>] "
+        "[--jpg-compression=<0..100>] [--auto-adjust <enable|disable>] "
         "[--aa-blur-sigma=<value>] [--aa-blur-threshold-pct=<0..100>] "
         "[--aa-level-low-pct=<0..100>] [--aa-level-high-pct=<0..100>] "
         "[--aa-enable-local-contrast[=<0|1|false|true|no|yes|off|on>]] "
@@ -658,7 +657,7 @@ def print_help(version):
         "[--aa-clahe-tile-grid-size=<rows>x<cols>] "
         "[--aa-sigmoid-contrast=<value>] [--aa-sigmoid-midpoint=<0..1>] "
         "[--aa-saturation-gamma=<value>] [--aa-highpass-blur-sigma=<value>] "
-        f"[--hdr-merge <{HDR_MERGE_MODE_ENFUSE}|{HDR_MERGE_MODE_LUMINANCE}|{HDR_MERGE_MODE_OPENCV}|{HDR_MERGE_MODE_HDR_PLUS}>] "
+        f"[--hdr-merge <{HDR_MERGE_MODE_LUMINANCE}|{HDR_MERGE_MODE_OPENCV}|{HDR_MERGE_MODE_HDR_PLUS}>] "
         "[--hdrplus-proxy-mode=<rggb|bt709|mean>] "
         "[--hdrplus-search-radius=<value>] "
         "[--hdrplus-temporal-factor=<value>] "
@@ -766,10 +765,10 @@ def print_help(version):
         f"  --jpg-compression=<0..100> - JPEG compression level (default: {DEFAULT_JPG_COMPRESSION})."
     )
     print(
-        f"  --auto-adjust <name>     - Select auto-adjust stage implementation (`ImageMagick` or `OpenCV`, default: {DEFAULT_AUTO_ADJUST_MODE})."
+        "  --auto-adjust <enable|disable> - Enable/disable the auto-adjust stage (default: enable)."
     )
     print(
-        "  [auto-adjust knobs]      - Effective only when --auto-adjust is set; shared by ImageMagick and OpenCV."
+        "  [auto-adjust knobs]      - Effective only when --auto-adjust resolves to enable."
     )
     print(
         f"  --aa-blur-sigma=<value>  - Selective blur sigma > 0 (default: {DEFAULT_AA_BLUR_SIGMA:g})."
@@ -784,16 +783,16 @@ def print_help(version):
         f"  --aa-level-high-pct=<0..100> - Level high percentile; must be > --aa-level-low-pct (default: {DEFAULT_AA_LEVEL_HIGH_PCT:g})."
     )
     print(
-        f"  --aa-enable-local-contrast[=<bool>] - Enable float-domain CLAHE-luma stage in OpenCV auto-adjust (default: {'true' if DEFAULT_AA_ENABLE_LOCAL_CONTRAST else 'false'})."
+        f"  --aa-enable-local-contrast[=<bool>] - Enable float-domain CLAHE-luma stage in auto-adjust (default: {'true' if DEFAULT_AA_ENABLE_LOCAL_CONTRAST else 'false'})."
     )
     print(
-        f"  --aa-local-contrast-strength=<0..1> - CLAHE-luma blend factor for OpenCV auto-adjust (default: {DEFAULT_AA_LOCAL_CONTRAST_STRENGTH:g})."
+        f"  --aa-local-contrast-strength=<0..1> - CLAHE-luma blend factor for auto-adjust (default: {DEFAULT_AA_LOCAL_CONTRAST_STRENGTH:g})."
     )
     print(
-        f"  --aa-clahe-clip-limit=<value> - CLAHE clip limit for OpenCV auto-adjust local contrast (>0, default: {DEFAULT_AA_CLAHE_CLIP_LIMIT:g})."
+        f"  --aa-clahe-clip-limit=<value> - CLAHE clip limit for auto-adjust local contrast (>0, default: {DEFAULT_AA_CLAHE_CLIP_LIMIT:g})."
     )
     print(
-        "  --aa-clahe-tile-grid-size=<rows>x<cols> - CLAHE tile grid size for OpenCV auto-adjust local contrast"
+        "  --aa-clahe-tile-grid-size=<rows>x<cols> - CLAHE tile grid size for auto-adjust local contrast"
         f" (default: {DEFAULT_AA_CLAHE_TILE_GRID_SIZE[0]}x{DEFAULT_AA_CLAHE_TILE_GRID_SIZE[1]})."
     )
     print(
@@ -809,7 +808,7 @@ def print_help(version):
         f"  --aa-highpass-blur-sigma=<value> - High-pass blur sigma > 0 (default: {DEFAULT_AA_HIGHPASS_BLUR_SIGMA:g})."
     )
     print(
-        f"  --hdr-merge <name> - Select HDR merge backend ({HDR_MERGE_MODE_ENFUSE}, {HDR_MERGE_MODE_LUMINANCE}, {HDR_MERGE_MODE_OPENCV}, {HDR_MERGE_MODE_HDR_PLUS}; default: {HDR_MERGE_MODE_OPENCV})."
+        f"  --hdr-merge <name> - Select HDR merge backend ({HDR_MERGE_MODE_LUMINANCE}, {HDR_MERGE_MODE_OPENCV}, {HDR_MERGE_MODE_HDR_PLUS}; default: {HDR_MERGE_MODE_OPENCV})."
     )
     print(
         f"  [HDR+ knobs]      - Effective only when --hdr-merge {HDR_MERGE_MODE_HDR_PLUS} is selected."
@@ -832,7 +831,7 @@ def print_help(version):
     )
     print(
         "  [postprocess defaults]"
-        f" - --hdr-merge {HDR_MERGE_MODE_ENFUSE}: post-gamma={DEFAULT_POST_GAMMA}, brightness={DEFAULT_BRIGHTNESS},"
+        f" - --hdr-merge {HDR_MERGE_MODE_LUMINANCE} (generic): post-gamma={DEFAULT_POST_GAMMA}, brightness={DEFAULT_BRIGHTNESS},"
         f" contrast={DEFAULT_CONTRAST}, saturation={DEFAULT_SATURATION}."
     )
     print(
@@ -2072,11 +2071,11 @@ def _parse_auto_levels_options(auto_levels_raw_values):
 
 
 def _parse_auto_adjust_options(auto_adjust_raw_values):
-    """@brief Parse and validate shared auto-adjust knobs for both implementations.
+    """@brief Parse and validate auto-adjust knobs.
 
     @details Applies defaults for omitted knobs, validates scalar/range
-    constraints, validates OpenCV-only CLAHE-luma controls, and enforces level
-    percentile ordering contract.
+    constraints, validates CLAHE-luma controls, and enforces level percentile
+    ordering contract.
     @param auto_adjust_raw_values {dict[str, str]} Raw `--aa-*` option values keyed by long option name.
     @return {AutoAdjustOptions|None} Parsed shared auto-adjust options or `None` on validation error.
     @satisfies REQ-051, REQ-082, REQ-083, REQ-084, REQ-123, REQ-125
@@ -2317,13 +2316,13 @@ def _parse_hdrplus_options(hdrplus_raw_values):
     )
 
 
-def _parse_auto_adjust_mode_option(auto_adjust_raw):
-    """@brief Parse auto-adjust implementation selector option value.
+def _parse_auto_adjust_option(auto_adjust_raw):
+    """@brief Parse auto-adjust enable selector option value.
 
-    @details Accepts case-insensitive auto-adjust implementation names and normalizes
-    to canonical values for runtime dispatch.
-    @param auto_adjust_raw {str} Raw auto-adjust implementation token.
-    @return {str|None} Canonical auto-adjust mode (`ImageMagick` or `OpenCV`) or `None` on parse failure.
+    @details Accepts case-insensitive `enable` and `disable` tokens and maps
+    them to the resolved auto-adjust stage state.
+    @param auto_adjust_raw {str} Raw auto-adjust enable token.
+    @return {bool|None} `True` when auto-adjust is enabled; `False` when disabled; `None` on parse failure.
     @satisfies REQ-065, REQ-073, REQ-075
     """
 
@@ -2332,12 +2331,12 @@ def _parse_auto_adjust_mode_option(auto_adjust_raw):
         print_error("Invalid --auto-adjust value: empty value")
         return None
     auto_adjust_text_lower = auto_adjust_text.lower()
-    if auto_adjust_text_lower == "imagemagick":
-        return "ImageMagick"
-    if auto_adjust_text_lower == "opencv":
-        return "OpenCV"
+    if auto_adjust_text_lower == "enable":
+        return True
+    if auto_adjust_text_lower == "disable":
+        return False
     print_error(f"Invalid --auto-adjust value: {auto_adjust_raw}")
-    print_error("Allowed values: ImageMagick, OpenCV")
+    print_error("Allowed values: enable, disable")
     return None
 
 
@@ -2357,7 +2356,6 @@ def _parse_hdr_merge_option(hdr_merge_raw):
         return None
     normalized = hdr_merge_text.lower()
     mapping = {
-        HDR_MERGE_MODE_ENFUSE.lower(): HDR_MERGE_MODE_ENFUSE,
         HDR_MERGE_MODE_LUMINANCE.lower(): HDR_MERGE_MODE_LUMINANCE,
         HDR_MERGE_MODE_OPENCV.lower(): HDR_MERGE_MODE_OPENCV,
         HDR_MERGE_MODE_HDR_PLUS.lower(): HDR_MERGE_MODE_HDR_PLUS,
@@ -2367,7 +2365,7 @@ def _parse_hdr_merge_option(hdr_merge_raw):
         return resolved
     print_error(f"Invalid --hdr-merge value: {hdr_merge_raw}")
     print_error(
-        f"Allowed values: {HDR_MERGE_MODE_ENFUSE}, {HDR_MERGE_MODE_LUMINANCE}, {HDR_MERGE_MODE_OPENCV}, {HDR_MERGE_MODE_HDR_PLUS}"
+        f"Allowed values: {HDR_MERGE_MODE_LUMINANCE}, {HDR_MERGE_MODE_OPENCV}, {HDR_MERGE_MODE_HDR_PLUS}"
     )
     return None
 
@@ -2380,8 +2378,8 @@ def _resolve_default_postprocess(
 
     @details Selects backend-specific defaults. Uses tuned static postprocess
     factors for `OpenCV`, luminance-operator-specific defaults for
-    `Luminace-HDR`, and neutral defaults for `enfuse`, `HDR-Plus`, and
-    untuned luminance operators.
+    `Luminace-HDR`, and neutral defaults for `HDR-Plus` and untuned luminance
+    operators.
     @param hdr_merge_mode {str} Canonical HDR merge mode selector.
     @param luminance_tmo {str} Selected luminance tone-mapping operator.
     @return {tuple[float, float, float, float]} Defaults in `(post_gamma, brightness, contrast, saturation)` order.
@@ -2440,11 +2438,11 @@ def _parse_run_options(args):
     optional postprocess controls, optional auto-brightness stage and
     `--ab-*` knobs, optional auto-levels stage and `--al-*` knobs,
     optional shared auto-adjust knobs, optional backend selector
-    (`--hdr-merge=<enfuse|Luminace-HDR|OpenCV|HDR-Plus>` default `OpenCV`),
+    (`--hdr-merge=<Luminace-HDR|OpenCV|HDR-Plus>` default `OpenCV`),
     HDR+ backend controls, and luminance backend controls
     including explicit `--tmo*` passthrough options and optional
-    auto-adjust implementation selector (`--auto-adjust <ImageMagick|OpenCV>`);
-    rejects unknown options and invalid arity.
+    auto-adjust enable selector (`--auto-adjust <enable|disable>`); rejects
+    unknown options and invalid arity.
     @param args {list[str]} Raw command argument vector.
     @return {tuple[Path, Path, float|None, bool, tuple[float, float], PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, bool, float, float]|None} Parsed `(input, output, ev, auto_ev, gamma, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, auto_zero_enabled, auto_zero_pct, auto_ev_pct)` tuple; `None` on parse failure.
     @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135
@@ -2472,7 +2470,7 @@ def _parse_run_options(args):
     auto_brightness_raw_values = {}
     auto_levels_enabled = True
     auto_levels_raw_values = {}
-    auto_adjust_mode = None
+    auto_adjust_enabled = DEFAULT_AUTO_ADJUST_ENABLED
     auto_adjust_raw_values = {}
     hdr_merge_mode = HDR_MERGE_MODE_OPENCV
     hdrplus_raw_values = {}
@@ -2533,27 +2531,23 @@ def _parse_run_options(args):
             continue
 
         if token == "--auto-adjust":
-            if idx + 1 < len(args) and not args[idx + 1].startswith("--"):
-                parsed_auto_adjust_mode = _parse_auto_adjust_mode_option(args[idx + 1])
-                if parsed_auto_adjust_mode is None:
-                    return None
-                auto_adjust_mode = parsed_auto_adjust_mode
-                idx += 2
-                continue
-            auto_adjust_mode = DEFAULT_AUTO_ADJUST_MODE
-            idx += 1
+            if idx + 1 >= len(args) or args[idx + 1].startswith("--"):
+                print_error("Missing value for --auto-adjust")
+                return None
+            parsed_auto_adjust_enabled = _parse_auto_adjust_option(args[idx + 1])
+            if parsed_auto_adjust_enabled is None:
+                return None
+            auto_adjust_enabled = parsed_auto_adjust_enabled
+            idx += 2
             continue
 
         if token.startswith("--auto-adjust="):
-            auto_adjust_value = token.split("=", 1)[1]
-            if auto_adjust_value == "":
-                auto_adjust_mode = DEFAULT_AUTO_ADJUST_MODE
-                idx += 1
-                continue
-            parsed_auto_adjust_mode = _parse_auto_adjust_mode_option(auto_adjust_value)
-            if parsed_auto_adjust_mode is None:
+            parsed_auto_adjust_enabled = _parse_auto_adjust_option(
+                token.split("=", 1)[1]
+            )
+            if parsed_auto_adjust_enabled is None:
                 return None
-            auto_adjust_mode = parsed_auto_adjust_mode
+            auto_adjust_enabled = parsed_auto_adjust_enabled
             idx += 1
             continue
 
@@ -3117,14 +3111,12 @@ def _parse_run_options(args):
         print_error(f"Luminance options require --hdr-merge {HDR_MERGE_MODE_LUMINANCE}")
         return None
 
-    if auto_adjust_mode is None and auto_adjust_raw_values:
+    if not auto_adjust_enabled and auto_adjust_raw_values:
         invalid_knob = next(iter(auto_adjust_raw_values))
         print_error(
-            f"Auto-adjust knob {invalid_knob} requires --auto-adjust <ImageMagick|OpenCV>"
+            f"Auto-adjust knob {invalid_knob} requires --auto-adjust enable"
         )
         return None
-    if auto_adjust_mode is None:
-        auto_adjust_mode = DEFAULT_AUTO_ADJUST_MODE
     if not auto_brightness_enabled and auto_brightness_raw_values:
         invalid_knob = next(iter(auto_brightness_raw_values))
         print_error(
@@ -3187,7 +3179,7 @@ def _parse_run_options(args):
             auto_brightness_options=auto_brightness_options,
             auto_levels_enabled=auto_levels_enabled,
             auto_levels_options=auto_levels_options,
-            auto_adjust_mode=auto_adjust_mode,
+            auto_adjust_enabled=auto_adjust_enabled,
             auto_adjust_options=auto_adjust_options,
         ),
         enable_luminance,
@@ -3784,44 +3776,6 @@ def _order_hdr_plus_reference_paths(bracket_paths):
     return [ordered_paths[1], ordered_paths[0], ordered_paths[2]]
 
 
-def _run_enfuse(bracket_images_float, temp_dir, imageio_module, np_module):
-    """@brief Merge bracket float images into one RGB float image via `enfuse`.
-
-    @details Serializes the three ordered float brackets as local 16-bit TIFF
-    artifacts, invokes `enfuse` with LZW compression, then re-loads the merged
-    TIFF and normalizes it to RGB float `[0,1]` before returning from the
-    backend step.
-    @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors.
-    @param temp_dir {Path} Temporary workspace root.
-    @param imageio_module {ModuleType} Imported imageio module with `imread` and `imwrite`.
-    @param np_module {ModuleType} Imported numpy module.
-    @return {object} Normalized RGB float merged image.
-    @exception subprocess.CalledProcessError Raised when `enfuse` returns non-zero exit status.
-    @satisfies REQ-011, REQ-058
-    """
-
-    backend_dir = temp_dir / "enfuse"
-    backend_dir.mkdir(parents=True, exist_ok=True)
-    bracket_paths = _materialize_bracket_tiffs_from_float(
-        imageio_module=imageio_module,
-        np_module=np_module,
-        bracket_images_float=bracket_images_float,
-        temp_dir=backend_dir,
-    )
-    merged_tiff = backend_dir / "merged_hdr.tif"
-    command = [
-        "enfuse",
-        f"--output={merged_tiff}",
-        "--compression=lzw",
-        *[str(path) for path in bracket_paths],
-    ]
-    subprocess.run(command, check=True)
-    return _normalize_float_rgb_image(
-        np_module=np_module,
-        image_data=imageio_module.imread(str(merged_tiff)),
-    )
-
-
 def _run_luminance_hdr_cli(
     bracket_images_float,
     temp_dir,
@@ -3961,7 +3915,7 @@ def _run_opencv_hdr_merge(
     ev_value,
     ev_zero,
     opencv_merge_options,
-    auto_adjust_opencv_dependencies,
+    auto_adjust_dependencies,
 ):
     """@brief Merge bracket float images into one RGB float image via OpenCV.
 
@@ -3974,16 +3928,16 @@ def _run_opencv_hdr_merge(
     @param ev_value {float} EV bracket delta used to generate exposure files.
     @param ev_zero {float} Central EV used to generate exposure files.
     @param opencv_merge_options {OpenCvMergeOptions} OpenCV merge backend controls.
-    @param auto_adjust_opencv_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
+    @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
     @return {object} Normalized RGB float merged image.
     @exception RuntimeError Raised when OpenCV/numpy dependencies are missing or bracket payloads are invalid.
     @satisfies REQ-107, REQ-108, REQ-109, REQ-110
     """
 
-    if auto_adjust_opencv_dependencies is not None:
-        cv2_module, np_module = auto_adjust_opencv_dependencies
+    if auto_adjust_dependencies is not None:
+        cv2_module, np_module = auto_adjust_dependencies
     else:
-        resolved_dependencies = _resolve_auto_adjust_opencv_dependencies()
+        resolved_dependencies = _resolve_auto_adjust_dependencies()
         if resolved_dependencies is None:
             raise RuntimeError("Missing required dependencies: opencv-python and numpy")
         cv2_module, np_module = resolved_dependencies
@@ -4871,43 +4825,17 @@ def _convert_compression_to_quality(jpg_compression):
     """
 
     return max(1, min(100, 100 - jpg_compression))
-
-
-def _resolve_imagemagick_command():
-    """@brief Resolve ImageMagick executable name for current runtime.
-
-    @details Probes `magick` first (ImageMagick 7+ preferred CLI), then
-    `convert` (legacy-compatible CLI alias) to preserve auto-adjust-stage compatibility
-    across distributions that package ImageMagick under different executable
-    names.
-    @return {str|None} Resolved executable token (`magick` or `convert`) or
-      `None` when no supported executable is available.
-    @satisfies REQ-059, REQ-073
-    """
-
-    for executable in ("magick", "convert"):
-        if shutil.which(executable) is not None:
-            return executable
-    return None
-
-
 def _collect_missing_external_executables(
     *,
     enable_luminance,
-    enable_opencv,
-    enable_hdr_plus,
-    auto_adjust_mode,
 ):
     """@brief Collect missing external executables required by resolved runtime options.
 
-    @details Evaluates backend and auto-adjust mode selectors to derive the exact
-    external executable set needed by this invocation, then probes each command on
-    `PATH` and returns a deterministic missing-command tuple for preflight failure
-    reporting before processing starts.
+    @details Evaluates the selected backend to derive the exact external
+    executable set needed by this invocation, then probes each command on
+    `PATH` and returns a deterministic missing-command tuple for preflight
+    failure reporting before processing starts.
     @param enable_luminance {bool} `True` when luminance backend is selected.
-    @param enable_opencv {bool} `True` when OpenCV backend is selected.
-    @param enable_hdr_plus {bool} `True` when HDR+ backend is selected.
-    @param auto_adjust_mode {str|None} Resolved auto-adjust mode selector.
     @return {tuple[str, ...]} Ordered tuple of missing executable labels.
     @satisfies CTN-005
     """
@@ -4915,19 +4843,13 @@ def _collect_missing_external_executables(
     missing_dependencies = []
     if enable_luminance and shutil.which("luminance-hdr-cli") is None:
         missing_dependencies.append("luminance-hdr-cli")
-    if (not enable_luminance) and (not enable_opencv) and (not enable_hdr_plus):
-        if shutil.which("enfuse") is None:
-            missing_dependencies.append("enfuse")
-    if auto_adjust_mode == "ImageMagick":
-        if shutil.which("magick") is None and shutil.which("convert") is None:
-            missing_dependencies.extend(("magick", "convert"))
     return tuple(missing_dependencies)
 
 
-def _resolve_auto_adjust_opencv_dependencies():
-    """@brief Resolve OpenCV runtime dependencies for image-domain stages.
+def _resolve_auto_adjust_dependencies():
+    """@brief Resolve auto-adjust runtime dependencies for image-domain stages.
 
-    @details Imports `cv2` and `numpy` modules required by OpenCV auto-adjust
+    @details Imports `cv2` and `numpy` modules required by the auto-adjust
     pipeline and returns `None` with deterministic error output when
     dependencies are missing.
     @return {tuple[ModuleType, ModuleType]|None} `(cv2_module, numpy_module)` when available; `None` on dependency failure.
@@ -5540,7 +5462,7 @@ def _apply_mild_local_contrast_bgr_uint16(cv2_module, np_module, image_bgr_uint1
     @param cv2_module {ModuleType} Imported cv2 module.
     @param np_module {ModuleType} Imported numpy module.
     @param image_bgr_uint16 {object} BGR uint16 image tensor.
-    @param options {AutoAdjustOptions} Parsed OpenCV auto-adjust CLAHE options.
+    @param options {AutoAdjustOptions} Parsed auto-adjust CLAHE options.
     @return {object} BGR uint16 image tensor after optional local contrast.
     @satisfies REQ-125, REQ-137
     """
@@ -5579,7 +5501,7 @@ def _apply_clahe_luma_rgb_float(cv2_module, np_module, image_rgb_float, auto_adj
     @param cv2_module {ModuleType} Imported cv2 module.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} RGB float tensor in `[0,1]`.
-    @param auto_adjust_options {AutoAdjustOptions} Parsed OpenCV auto-adjust CLAHE controls.
+    @param auto_adjust_options {AutoAdjustOptions} Parsed auto-adjust CLAHE controls.
     @return {object} RGB float tensor after optional CLAHE-luma stage.
     @satisfies REQ-123, REQ-125, REQ-136, REQ-137
     """
@@ -6515,100 +6437,11 @@ def _apply_auto_brightness_rgb_float(
 
 
 
-def _apply_validated_auto_adjust_pipeline(
-    image_rgb_float,
-    imageio_module,
-    np_module,
-    temp_dir,
-    imagemagick_command,
-    auto_adjust_options,
-):
-    """@brief Execute validated ImageMagick auto-adjust pipeline on RGB float input.
-
-    @details Serializes the normalized RGB float input to one local 16-bit TIFF,
-    applies deterministic ImageMagick denoise/level/sigmoidal/vibrance/
-    high-pass overlay stages parameterized by the shared knobs, executes the
-    subprocess in `temp_dir` so any sidecar files remain isolated, and re-loads
-    the produced TIFF as normalized RGB float output.
-    @param image_rgb_float {object} RGB float tensor.
-    @param imageio_module {ModuleType} Imported imageio module with `imread` and `imwrite`.
-    @param np_module {ModuleType} Imported numpy module.
-    @param temp_dir {Path} Temporary workspace for auto-adjust artifacts.
-    @param imagemagick_command {str} Resolved ImageMagick executable token.
-    @param auto_adjust_options {AutoAdjustOptions} Shared auto-adjust knob values.
-    @return {object} RGB float tensor after ImageMagick auto-adjust.
-    @exception subprocess.CalledProcessError Raised when ImageMagick returns non-zero.
-    @satisfies DES-004, REQ-051, REQ-106
-    """
-
-    auto_adjust_input_16 = temp_dir / "auto_adjust_input_16.tif"
-    auto_adjust_output = temp_dir / "auto_adjust_output.tif"
-    _write_rgb_float_tiff16(
-        imageio_module=imageio_module,
-        np_module=np_module,
-        output_path=auto_adjust_input_16,
-        image_rgb_float=image_rgb_float,
-    )
-
-    auto_adjust_command = [
-        imagemagick_command,
-        str(auto_adjust_input_16),
-        "-depth",
-        "16",
-        "-selective-blur",
-        f"0x{auto_adjust_options.blur_sigma:g}+{auto_adjust_options.blur_threshold_pct:g}%",
-        "-channel",
-        "RGB",
-        "-level",
-        f"{auto_adjust_options.level_low_pct:g}%,{auto_adjust_options.level_high_pct:g}%",
-        "+channel",
-        "-sigmoidal-contrast",
-        f"{auto_adjust_options.sigmoid_contrast:g}x{(auto_adjust_options.sigmoid_midpoint * 100.0):g}%",
-        "-colorspace",
-        "HSL",
-        "-channel",
-        "G",
-        "-gamma",
-        f"{auto_adjust_options.saturation_gamma:g}",
-        "+channel",
-        "-colorspace",
-        "sRGB",
-        "(",
-        "-clone",
-        "0",
-        "-clone",
-        "0",
-        "-blur",
-        f"0x{auto_adjust_options.highpass_blur_sigma:g}",
-        "-compose",
-        "mathematics",
-        "-define",
-        "compose:args=0,1,-1,0.5",
-        "-composite",
-        "-colorspace",
-        "gray",
-        ")",
-        "-compose",
-        "Overlay",
-        "-composite",
-        "-depth",
-        "16",
-        "-compress",
-        "LZW",
-        str(auto_adjust_output),
-    ]
-    subprocess.run(auto_adjust_command, check=True, cwd=str(temp_dir))
-    return _normalize_float_rgb_image(
-        np_module=np_module,
-        image_data=imageio_module.imread(str(auto_adjust_output)),
-    )
-
-
 def _clamp01(np_module, values):
     """@brief Clamp numeric image tensor values into `[0.0, 1.0]` interval.
 
     @details Applies vectorized clipping to ensure deterministic bounded values
-    for OpenCV auto-adjust pipeline float-domain operations.
+    for auto-adjust float-domain operations.
     @param np_module {ModuleType} Imported numpy module.
     @param values {object} Numeric tensor-like payload.
     @return {object} Clipped tensor payload.
@@ -6644,7 +6477,7 @@ def _gaussian_kernel_2d(np_module, sigma, radius=None):
 def _rgb_to_hsl(np_module, rgb):
     """@brief Convert RGB float tensor to HSL channels.
 
-    @details Implements explicit HSL conversion for OpenCV auto-adjust saturation-gamma
+    @details Implements explicit HSL conversion for auto-adjust saturation-gamma
     stage without delegating to external color-space helpers.
     @param np_module {ModuleType} Imported numpy module.
     @param rgb {object} RGB tensor in `[0.0, 1.0]`.
@@ -6679,7 +6512,7 @@ def _hue_to_rgb(np_module, p_values, q_values, t_values):
     """@brief Convert one hue-shift channel to RGB component.
 
     @details Evaluates piecewise hue interpolation branch used by HSL-to-RGB
-    conversion in OpenCV auto-adjust pipeline.
+    conversion in the auto-adjust pipeline.
     @param np_module {ModuleType} Imported numpy module.
     @param p_values {object} Lower chroma interpolation boundary.
     @param q_values {object} Upper chroma interpolation boundary.
@@ -6710,7 +6543,7 @@ def _hsl_to_rgb(np_module, hue, saturation, lightness):
     """@brief Convert HSL channels to RGB float tensor.
 
     @details Reconstructs RGB tensor with explicit achromatic/chromatic branches
-    for OpenCV auto-adjust saturation-gamma stage.
+    for the auto-adjust saturation-gamma stage.
     @param np_module {ModuleType} Imported numpy module.
     @param hue {object} Hue channel tensor.
     @param saturation {object} Saturation channel tensor.
@@ -6933,13 +6766,13 @@ def _overlay_composite(np_module, base_rgb, overlay_gray):
     return _clamp01(np_module, output)
 
 
-def _apply_validated_auto_adjust_pipeline_opencv(
+def _apply_validated_auto_adjust_pipeline(
     image_rgb_float,
     cv2_module,
     np_module,
     auto_adjust_options,
 ):
-    """@brief Execute validated auto-adjust pipeline using OpenCV and numpy.
+    """@brief Execute the validated auto-adjust pipeline.
 
     @details Accepts one normalized RGB float image, executes selective blur,
     adaptive levels, float-domain CLAHE-luma, sigmoidal contrast, HSL
@@ -6949,7 +6782,7 @@ def _apply_validated_auto_adjust_pipeline_opencv(
     @param cv2_module {ModuleType} Imported cv2 module.
     @param np_module {ModuleType} Imported numpy module.
     @param auto_adjust_options {AutoAdjustOptions} Shared auto-adjust knob values.
-    @return {object} RGB float tensor after OpenCV auto-adjust.
+    @return {object} RGB float tensor after auto-adjust.
     @satisfies REQ-051, REQ-075, REQ-106, REQ-123, REQ-136, REQ-137
     """
 
@@ -7018,8 +6851,7 @@ def _encode_jpg(
     merged_image_float,
     output_jpg,
     postprocess_options,
-    imagemagick_command=None,
-    auto_adjust_opencv_dependencies=None,
+    auto_adjust_dependencies=None,
     numpy_module=None,
     piexif_module=None,
     source_exif_payload=None,
@@ -7037,21 +6869,20 @@ def _encode_jpg(
     @param merged_image_float {object} Merged RGB float image produced by selected backend.
     @param output_jpg {Path} Final JPG output path.
     @param postprocess_options {PostprocessOptions} Shared TIFF-to-JPG correction settings.
-    @param imagemagick_command {str|None} Optional pre-resolved ImageMagick executable.
-    @param auto_adjust_opencv_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` modules for OpenCV auto-adjust implementations.
+    @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` modules for the auto-adjust implementation.
     @param numpy_module {ModuleType|None} Optional numpy module for float-domain stages.
     @param piexif_module {ModuleType|None} Optional piexif module for EXIF thumbnail refresh.
     @param source_exif_payload {bytes|None} Serialized EXIF payload copied from input DNG.
     @param source_orientation {int} Source EXIF orientation value in range `1..8`.
     @return {None} Side effects only.
-    @exception RuntimeError Raised when numpy or auto-adjust mode dependencies are missing or auto-adjust mode value is unsupported.
+    @exception RuntimeError Raised when numpy or auto-adjust dependencies are missing.
     @satisfies REQ-012, REQ-013, REQ-050, REQ-069, REQ-073, REQ-074, REQ-075, REQ-078, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-106, REQ-123, REQ-132, REQ-133, REQ-134
     """
 
     if numpy_module is not None:
         np_module = numpy_module
-    elif auto_adjust_opencv_dependencies is not None:
-        _cv2_module, np_module = auto_adjust_opencv_dependencies
+    elif auto_adjust_dependencies is not None:
+        _cv2_module, np_module = auto_adjust_dependencies
         del _cv2_module
     else:
         try:
@@ -7082,42 +6913,16 @@ def _encode_jpg(
         postprocess_options=postprocess_options,
     )
 
-    if postprocess_options.auto_adjust_mode is not None:
-        with tempfile.TemporaryDirectory(
-            prefix="dng2jpg-auto-adjust-"
-        ) as auto_adjust_temp_dir_raw:
-            auto_adjust_temp_dir = Path(auto_adjust_temp_dir_raw)
-            if postprocess_options.auto_adjust_mode == "ImageMagick":
-                if imagemagick_command is None:
-                    imagemagick_command = _resolve_imagemagick_command()
-                if imagemagick_command is None:
-                    raise RuntimeError(
-                        "Missing required dependency: ImageMagick executable (magick or convert)"
-                    )
-                image_rgb_float = _apply_validated_auto_adjust_pipeline(
-                    image_rgb_float=image_rgb_float,
-                    imageio_module=imageio_module,
-                    np_module=np_module,
-                    temp_dir=auto_adjust_temp_dir,
-                    imagemagick_command=imagemagick_command,
-                    auto_adjust_options=postprocess_options.auto_adjust_options,
-                )
-            elif postprocess_options.auto_adjust_mode == "OpenCV":
-                if auto_adjust_opencv_dependencies is None:
-                    raise RuntimeError(
-                        "Missing required dependencies: opencv-python and numpy"
-                    )
-                cv2_module, np_module = auto_adjust_opencv_dependencies
-                image_rgb_float = _apply_validated_auto_adjust_pipeline_opencv(
-                    image_rgb_float=image_rgb_float,
-                    cv2_module=cv2_module,
-                    np_module=np_module,
-                    auto_adjust_options=postprocess_options.auto_adjust_options,
-                )
-            else:
-                raise RuntimeError(
-                    f"Unsupported auto-adjust mode: {postprocess_options.auto_adjust_mode}"
-                )
+    if postprocess_options.auto_adjust_enabled:
+        if auto_adjust_dependencies is None:
+            raise RuntimeError("Missing required dependencies: opencv-python and numpy")
+        cv2_module, np_module = auto_adjust_dependencies
+        image_rgb_float = _apply_validated_auto_adjust_pipeline(
+            image_rgb_float=image_rgb_float,
+            cv2_module=cv2_module,
+            np_module=np_module,
+            auto_adjust_options=postprocess_options.auto_adjust_options,
+        )
 
     image_rgb_uint8 = _to_uint8_image_array(np_module=np_module, image_data=image_rgb_float)
     pil_image = pil_image_module.fromarray(image_rgb_uint8)
@@ -7250,28 +7055,18 @@ def run(args):
 
     missing_external_executables = _collect_missing_external_executables(
         enable_luminance=enable_luminance,
-        enable_opencv=enable_opencv,
-        enable_hdr_plus=enable_hdr_plus,
-        auto_adjust_mode=postprocess_options.auto_adjust_mode,
     )
     if missing_external_executables:
         for executable in missing_external_executables:
             print_error(f"Missing required dependency: {executable}")
         return 1
-    imagemagick_command = None
-    auto_adjust_opencv_dependencies = None
+    auto_adjust_dependencies = None
     numpy_module = _resolve_numpy_dependency()
     if numpy_module is None:
         return 1
-    if postprocess_options.auto_adjust_mode == "OpenCV" or enable_opencv:
-        auto_adjust_opencv_dependencies = _resolve_auto_adjust_opencv_dependencies()
-        if auto_adjust_opencv_dependencies is None:
-            return 1
-    if postprocess_options.auto_adjust_mode == "ImageMagick":
-        imagemagick_command = _resolve_imagemagick_command()
-        if imagemagick_command is None:
-            print_error("Missing required dependency: magick")
-            print_error("Missing required dependency: convert")
+    if postprocess_options.auto_adjust_enabled or enable_opencv:
+        auto_adjust_dependencies = _resolve_auto_adjust_dependencies()
+        if auto_adjust_dependencies is None:
             return 1
 
     dependencies = _load_image_dependencies()
@@ -7301,7 +7096,7 @@ def run(args):
         f"jpg-compression={postprocess_options.jpg_compression}, "
         f"auto-brightness={'enabled' if postprocess_options.auto_brightness_enabled else 'disabled'}, "
         f"auto-levels={'enabled' if postprocess_options.auto_levels_enabled else 'disabled'}, "
-        f"auto-adjust={postprocess_options.auto_adjust_mode or 'disabled'}"
+        f"auto-adjust={'enabled' if postprocess_options.auto_adjust_enabled else 'disabled'}"
     )
     if postprocess_options.auto_brightness_enabled:
         resolved_ab_key = postprocess_options.auto_brightness_options.key_value
@@ -7318,7 +7113,7 @@ def run(args):
             f"{'enabled' if postprocess_options.auto_brightness_options.enable_luminance_preserving_desat else 'disabled'}, "
             f"eps={postprocess_options.auto_brightness_options.eps:g}"
         )
-    if postprocess_options.auto_adjust_mode is not None:
+    if postprocess_options.auto_adjust_enabled:
         print_info(
             "Auto-adjust knobs: "
             f"blur-sigma={postprocess_options.auto_adjust_options.blur_sigma:g}, "
@@ -7377,9 +7172,6 @@ def run(args):
             f"temporalMaxDist={hdrplus_options.temporal_max_dist:g}, "
             "reference=ev_zero, temporal=tile L1 inverse-distance, spatial=raised-cosine)"
         )
-    else:
-        print_info("HDR backend: enfuse")
-
     processing_errors = _collect_processing_errors(rawpy_module)
 
     with tempfile.TemporaryDirectory(prefix="dng2jpg-") as temp_dir_raw:
@@ -7466,7 +7258,7 @@ def run(args):
                     ev_value=effective_ev_value,
                     ev_zero=resolved_ev_zero,
                     opencv_merge_options=opencv_merge_options,
-                    auto_adjust_opencv_dependencies=auto_adjust_opencv_dependencies,
+                    auto_adjust_dependencies=auto_adjust_dependencies,
                 )
             elif enable_hdr_plus:
                 merged_image_float = _run_hdr_plus_merge(
@@ -7475,20 +7267,14 @@ def run(args):
                     hdrplus_options=hdrplus_options,
                 )
             else:
-                merged_image_float = _run_enfuse(
-                    bracket_images_float=bracket_images_float,
-                    temp_dir=temp_dir,
-                    imageio_module=imageio_module,
-                    np_module=numpy_module,
-                )
+                raise RuntimeError("No HDR merge backend enabled")
             _encode_jpg(
                 imageio_module=imageio_module,
                 pil_image_module=pil_image_module,
                 merged_image_float=merged_image_float,
                 output_jpg=output_jpg,
                 postprocess_options=postprocess_options,
-                imagemagick_command=imagemagick_command,
-                auto_adjust_opencv_dependencies=auto_adjust_opencv_dependencies,
+                auto_adjust_dependencies=auto_adjust_dependencies,
                 numpy_module=numpy_module,
                 piexif_module=piexif_module,
                 source_exif_payload=source_exif_payload,
