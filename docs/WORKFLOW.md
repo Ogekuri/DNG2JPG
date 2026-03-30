@@ -168,6 +168,8 @@
         - `_order_bracket_paths(...)`: enforce deterministic bracket order [`src/dng2jpg/dng2jpg.py`]
       - `_run_opencv_hdr_merge(...)`: merge bracket images through OpenCV Mertens+Debevec backend [`src/dng2jpg/dng2jpg.py`]
         - `_order_bracket_paths(...)`: enforce deterministic bracket order [`src/dng2jpg/dng2jpg.py`]
+        - `cv2.createMergeMertens().process(...)`: run Mertens fusion on normalized float32 RGB bracket tensors in `[0,1]` (external boundary)
+        - `cv2.createMergeDebevec().process(...)`: run Debevec HDR radiance merge on uint16 RGB bracket tensors with EV-derived exposure times (external boundary)
         - `_build_ev_times_from_ev_zero_and_delta(...)`: derive exposure-time vector from EV center and EV delta [`src/dng2jpg/dng2jpg.py`]
         - `_normalize_debevec_hdr_to_unit_range(...)`: normalize Debevec radiance to blend-ready unit range [`src/dng2jpg/dng2jpg.py`]
       - `_run_hdr_plus_merge(...)`: merge bracket images through HDR+ temporal/spatial tile backend [`src/dng2jpg/dng2jpg.py`]

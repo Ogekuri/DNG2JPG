@@ -68,6 +68,70 @@ class _FakeImageIoModule:
         self.writes.append((path, np.array(image, copy=True)))
 
 
+class _FakeMergeMertens:
+    """Minimal OpenCV MergeMertens shim for HDR backend tests."""
+
+    def __init__(self) -> None:
+        self.last_inputs: list[np.ndarray] | None = None
+
+    def process(self, images: list[np.ndarray]) -> np.ndarray:
+        self.last_inputs = [np.array(image, copy=True) for image in images]
+        output_shape = self.last_inputs[0].shape
+        return np.full(output_shape, 0.35, dtype=np.float32)
+
+
+class _FakeMergeDebevec:
+    """Minimal OpenCV MergeDebevec shim for HDR backend tests."""
+
+    def __init__(self) -> None:
+        self.last_inputs: list[np.ndarray] | None = None
+        self.last_times: np.ndarray | None = None
+
+    def process(self, images: list[np.ndarray], times: np.ndarray) -> np.ndarray:
+        self.last_inputs = [np.array(image, copy=True) for image in images]
+        self.last_times = np.array(times, copy=True)
+        hdr_base = self.last_inputs[1].astype(np.float32)
+        return (hdr_base * 4.0) + 1.0
+
+
+class _FakeOpenCvModule:
+    """Minimal cv2 shim for deterministic `_run_opencv_hdr_merge` tests."""
+
+    IMREAD_UNCHANGED = -1
+    COLOR_BGR2RGB = 1
+    COLOR_RGB2BGR = 2
+
+    def __init__(self) -> None:
+        self._images_by_path: dict[str, np.ndarray] = {}
+        self.merge_mertens = _FakeMergeMertens()
+        self.merge_debevec = _FakeMergeDebevec()
+        self.written_image: np.ndarray | None = None
+
+    def register_image(self, path: Path, image: np.ndarray) -> None:
+        self._images_by_path[str(path)] = np.array(image, copy=True)
+
+    def imread(self, path: str, _flags: int) -> np.ndarray | None:
+        image = self._images_by_path.get(path)
+        if image is None:
+            return None
+        return np.array(image, copy=True)
+
+    def cvtColor(self, image: np.ndarray, color_code: int) -> np.ndarray:
+        if color_code not in (self.COLOR_BGR2RGB, self.COLOR_RGB2BGR):
+            raise AssertionError(f"Unsupported color conversion code: {color_code}")
+        return np.array(image[..., ::-1], copy=True)
+
+    def createMergeMertens(self) -> _FakeMergeMertens:
+        return self.merge_mertens
+
+    def createMergeDebevec(self) -> _FakeMergeDebevec:
+        return self.merge_debevec
+
+    def imwrite(self, _path: str, image: np.ndarray) -> bool:
+        self.written_image = np.array(image, copy=True)
+        return True
+
+
 def _build_postprocess_options():
     return dng2jpg_module.PostprocessOptions(
         post_gamma=1.07,
@@ -226,6 +290,56 @@ def test_build_ev_times_from_ev_zero_and_delta_matches_bracket_sequence() -> Non
         rtol=1e-6,
         atol=1e-6,
     )
+
+
+def test_run_opencv_hdr_merge_normalizes_mertens_inputs_to_unit_float32(tmp_path) -> None:
+    """OpenCV merge must feed Mertens with [0,1] float32 images from uint16 brackets."""
+
+    fake_cv2 = _FakeOpenCvModule()
+    bracket_paths = [
+        tmp_path / "ev_minus.tif",
+        tmp_path / "ev_zero.tif",
+        tmp_path / "ev_plus.tif",
+    ]
+    minus_bgr = np.array(
+        [[[0, 1024, 2048], [3072, 4096, 8192]]],
+        dtype=np.uint16,
+    )
+    zero_bgr = np.array(
+        [[[12000, 24000, 36000], [1000, 2000, 3000]]],
+        dtype=np.uint16,
+    )
+    plus_bgr = np.array(
+        [[[65535, 60000, 50000], [40000, 30000, 20000]]],
+        dtype=np.uint16,
+    )
+    fake_cv2.register_image(bracket_paths[0], minus_bgr)
+    fake_cv2.register_image(bracket_paths[1], zero_bgr)
+    fake_cv2.register_image(bracket_paths[2], plus_bgr)
+
+    dng2jpg_module._run_opencv_hdr_merge(  # pylint: disable=protected-access
+        bracket_paths=bracket_paths,
+        output_hdr_tiff=tmp_path / "merged_hdr.tif",
+        ev_value=1.0,
+        ev_zero=0.0,
+        opencv_merge_options=dng2jpg_module.OpenCvMergeOptions(),
+        auto_adjust_opencv_dependencies=(fake_cv2, np),
+    )
+
+    assert fake_cv2.merge_mertens.last_inputs is not None
+    assert fake_cv2.merge_debevec.last_inputs is not None
+    assert all(
+        frame.dtype == np.float32 for frame in fake_cv2.merge_mertens.last_inputs
+    ), "Mertens input must be float32 to avoid uint16-scale artifacts"
+    assert all(
+        float(np.min(frame)) >= 0.0 and float(np.max(frame)) <= 1.0
+        for frame in fake_cv2.merge_mertens.last_inputs
+    ), "Mertens input must be normalized to [0,1]"
+    assert all(
+        frame.dtype == np.uint16 for frame in fake_cv2.merge_debevec.last_inputs
+    ), "Debevec input must remain uint16 for HDR radiance estimation"
+    assert fake_cv2.written_image is not None
+    assert fake_cv2.written_image.dtype == np.uint16
 
 
 def test_normalize_debevec_hdr_to_unit_range_clamps_to_valid_interval() -> None:

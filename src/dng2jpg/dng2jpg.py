@@ -3460,10 +3460,12 @@ def _run_opencv_hdr_merge(
 ):
     """@brief Merge bracket TIFF files into one HDR TIFF via OpenCV Mertens+Debevec.
 
-    @details Loads deterministic bracket order, executes `MergeMertens` exposure
-    fusion and `MergeDebevec` radiance merge using EV-derived exposure times,
-    normalizes Debevec HDR with percentile robust white-point luminance scaling,
-    averages both outputs in float domain, then writes one RGB uint16 TIFF.
+    @details Loads deterministic bracket order, preserves one uint16 RGB tensor
+    list for Debevec radiance merge, derives one normalized float32 RGB tensor
+    list in `[0,1]` for Mertens exposure fusion, executes both merges with the
+    EV-derived exposure-time vector, normalizes Debevec HDR with percentile
+    robust white-point luminance scaling, averages both outputs in float domain,
+    then writes one RGB uint16 TIFF.
     @param bracket_paths {list[Path]} Ordered intermediate exposure TIFF paths.
     @param output_hdr_tiff {Path} Output HDR TIFF target path.
     @param ev_value {float} EV bracket delta used to generate exposure files.
@@ -3485,6 +3487,7 @@ def _run_opencv_hdr_merge(
 
     ordered_paths = _order_bracket_paths(bracket_paths)
     exposures_uint16 = []
+    exposures_unit_float32 = []
     for path in ordered_paths:
         image_bgr = cv2_module.imread(str(path), cv2_module.IMREAD_UNCHANGED)
         if image_bgr is None:
@@ -3497,11 +3500,15 @@ def _run_opencv_hdr_merge(
         elif dtype_name != "uint16":
             raise RuntimeError(f"OpenCV bracket image must be uint16 or uint8: {path}")
         image_rgb_uint16 = cv2_module.cvtColor(image_bgr, cv2_module.COLOR_BGR2RGB)
-        exposures_uint16.append(image_rgb_uint16.astype(np_module.uint16))
+        image_rgb_uint16 = image_rgb_uint16.astype(np_module.uint16)
+        exposures_uint16.append(image_rgb_uint16)
+        exposures_unit_float32.append(
+            (image_rgb_uint16.astype(np_module.float32) / 65535.0).astype(np_module.float32)
+        )
 
     exposure_times = _build_ev_times_from_ev_zero_and_delta(ev_zero=ev_zero, ev_delta=ev_value)
     merge_mertens = cv2_module.createMergeMertens()
-    fusion_rgb_float32 = merge_mertens.process(exposures_uint16)
+    fusion_rgb_float32 = merge_mertens.process(exposures_unit_float32)
     merge_debevec = cv2_module.createMergeDebevec()
     debevec_hdr_float32 = merge_debevec.process(exposures_uint16, times=exposure_times)
     debevec_rgb_unit = _normalize_debevec_hdr_to_unit_range(
