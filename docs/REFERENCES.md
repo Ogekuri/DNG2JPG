@@ -96,7 +96,7 @@ import subprocess
 - @param idle_delay_seconds {int} Idle-delay in seconds added to the current epoch to derive the next `idle_time_epoch`.
 - @return {None} No return value.
 - @throws {OSError} Directory creation or cache-file write failure.
-- @satisfies REQ-016, REQ-107, REQ-108
+- @satisfies REQ-016, REQ-141, REQ-142
 - @post `_VERSION_CACHE_FILE` stores the latest check epoch and derived idle-time metadata.
 
 ### fn `def _should_skip_version_check(force: bool) -> bool` `priv` (L73-100)
@@ -115,7 +115,7 @@ import subprocess
 - @throws {OSError} Cache-file rewrite failure after a completed API attempt.
 - @see _should_skip_version_check
 - @see _write_version_cache
-- @satisfies REQ-016, REQ-107, REQ-108
+- @satisfies REQ-016, REQ-141, REQ-142
 
 ### fn `def _run_management(command: list[str]) -> int` `priv` (L174-187)
 

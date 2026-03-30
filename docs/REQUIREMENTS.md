@@ -118,8 +118,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-014**: MUST synchronize output file timestamps from EXIF datetime when EXIF datetime metadata is available.
 - **REQ-015**: MUST return `1` on parse, validation, dependency, and processing errors, and return `0` on successful processing.
 - **REQ-016**: MUST execute GitHub latest-release version checks with an idle-time cache JSON file and print version status or check errors.
-- **REQ-107**: MUST use idle-delay `3600` seconds after successful latest-release checks and idle-delay `86400` seconds after any latest-release check error.
-- **REQ-108**: MUST recalculate idle-time and rewrite the version-check cache JSON after every latest-release API attempt, regardless of success or error outcome.
+- **REQ-141**: MUST use idle-delay `3600` seconds after successful latest-release checks and idle-delay `86400` seconds after any latest-release check error.
+- **REQ-142**: MUST recalculate idle-time and rewrite the version-check cache JSON after every latest-release API attempt, regardless of success or error outcome.
 - **REQ-017**: MUST render conversion usage with canonical executable name `dng2jpg` and MUST NOT prepend alternative launcher labels.
 - **REQ-018**: MUST parse `--auto-zero <enable|disable>`, default it to `enable` without `--ev-zero` and `disable` with `--ev-zero`, and MUST let `--ev-zero` override enabled auto-zero with an explicit ignored-parameter output.
 - **REQ-019**: MUST enforce `--auto-zero-pct` and `--auto-ev-pct` values in inclusive range `0..100`.
@@ -270,8 +270,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-014 | `src/dng2jpg/dng2jpg.py::_sync_output_file_timestamps_from_exif`; excerpt: applies `os.utime` when EXIF timestamp exists. |
 | REQ-015 | `src/dng2jpg/dng2jpg.py::run`; excerpt: parse/dependency/processing failures return `1`, success returns `0`. |
 | REQ-016 | `src/dng2jpg/core.py::_check_online_version`, `_write_version_cache`; excerpt: GitHub latest-release check uses idle-time cache JSON and prints status or error output. |
-| REQ-107 | `src/dng2jpg/core.py::_check_online_version`; excerpt: success path uses `3600` seconds and error paths use `86400` seconds when calculating idle-delay. |
-| REQ-108 | `src/dng2jpg/core.py::_check_online_version`, `_write_version_cache`; excerpt: cache JSON is rewritten after every latest-release API attempt on both success and error outcomes. |
+| REQ-141 | `src/dng2jpg/core.py::_check_online_version`; excerpt: success path uses `3600` seconds and error paths use `86400` seconds when calculating idle-delay. |
+| REQ-142 | `src/dng2jpg/core.py::_check_online_version`, `_write_version_cache`; excerpt: cache JSON is rewritten after every latest-release API attempt on both success and error outcomes. |
 | REQ-017 | `src/dng2jpg/dng2jpg.py`; excerpt: `PROGRAM = "dng2jpg"` and help usage renders canonical command label without duplicated command token. |
 | REQ-018 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: resolves `--ev-zero` and `--auto-zero <enable|disable>` defaults with explicit ignored-parameter output on override. |
 | REQ-019 | `src/dng2jpg/dng2jpg.py::_parse_percentage_option`; excerpt: enforces inclusive `0..100` bounds. |
