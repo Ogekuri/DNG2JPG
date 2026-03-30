@@ -490,8 +490,8 @@ def test_apply_auto_levels_clip_out_of_gamut_normalizes_triplet(monkeypatch) -> 
     np.testing.assert_array_equal(enabled, np.array([[[65535, 49151, 32768]]], dtype=np.uint16))
 
 
-def test_apply_auto_levels_dispatches_new_color_methods(monkeypatch) -> None:
-    """New method selectors must dispatch deterministically through the auto-levels stage."""
+def test_apply_auto_levels_color_methods_preserve_uint16_pipeline(monkeypatch) -> None:
+    """New method selectors must dispatch on float internals and preserve uint16 output."""
 
     image_rgb_uint16 = np.array(
         [[[1000, 2000, 3000], [4000, 5000, 6000]]],
@@ -512,11 +512,13 @@ def test_apply_auto_levels_dispatches_new_color_methods(monkeypatch) -> None:
 
     def _fake_color_propagation(*, np_module, image_rgb, maxval):
         del np_module, maxval  # Unused by fake dispatcher.
+        assert image_rgb.dtype.kind == "f"
         call_trace.append(("Color Propagation", None))
         return image_rgb + 100.0
 
     def _fake_inpaint_opposed(*, np_module, image_rgb, gain_threshold, maxval):
         del np_module, maxval  # Unused by fake dispatcher.
+        assert image_rgb.dtype.kind == "f"
         call_trace.append(("Inpaint Opposed", gain_threshold))
         return image_rgb + 200.0
 
