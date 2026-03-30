@@ -109,11 +109,11 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-007**: MUST require `--auto-adjust` before accepting any `--aa-*` option and require `--auto-brightness` before accepting any `--ab-*` option.
 - **REQ-008**: MUST compute automatic EV center from preview luminance when `--auto-zero` is enabled and clamp it to safe bit-derived bounds.
 - **REQ-009**: MUST compute adaptive EV from preview luminance statistics when `--auto-ev` is enabled and clamp it to supported selectors.
-- **REQ-010**: MUST write bracket TIFFs named `ev_minus.tif`, `ev_zero.tif`, and `ev_plus.tif` using `rawpy.postprocess` at `output_bps=16`.
-- **REQ-011**: MUST run `enfuse` with LZW compression for enfuse backend and `luminance-hdr-cli` with deterministic HDR/TMO arguments for luminance backend.
-- **REQ-012**: MUST execute post-gamma, brightness, contrast, and saturation in RGB uint16 precision and perform exactly one uint16-to-uint8 quantization immediately before final JPEG save.
-- **REQ-013**: MUST execute optional auto-brightness, optional auto-levels, post-gamma, brightness, contrast, and saturation in this exact order before any optional auto-adjust stage.
-- **REQ-106**: MUST execute optional auto-adjust stage after static postprocess and before final JPEG quantization/write while preserving uint16 processing buffers.
+- **REQ-010**: MUST extract brackets `ev_minus`, `ev_zero`, and `ev_plus` with `rawpy.postprocess output_bps=16`, convert each bracket to normalized OpenCV-compatible RGB float `[0,1]`, and expose only that float triplet to downstream merge stages.
+- **REQ-011**: MUST run `enfuse` with LZW compression for enfuse backend and `luminance-hdr-cli` with deterministic HDR/TMO arguments for luminance backend, confining any required 16-bit TIFF intermediates to the backend step and returning normalized RGB float output.
+- **REQ-012**: MUST exchange normalized OpenCV-compatible RGB float tensors `[0,1]` between merge, auto-brightness, auto-levels, static postprocess, auto-adjust, and final-save preparation stages, and MUST perform exactly one float-to-uint8 quantization immediately before final JPEG save.
+- **REQ-013**: MUST execute optional auto-brightness, optional auto-levels, post-gamma, brightness, contrast, and saturation in this exact order on RGB float stage interfaces before any optional auto-adjust stage.
+- **REQ-106**: MUST execute optional auto-adjust stage after static postprocess and before final JPEG quantization/write, preserve RGB float input/output interfaces, and confine any required float-to-uint16 or TIFF16 conversions to the auto-adjust step itself.
 - **REQ-014**: MUST synchronize output file timestamps from EXIF datetime when EXIF datetime metadata is available.
 - **REQ-015**: MUST return `1` on parse, validation, dependency, and processing errors, and return `0` on successful processing.
 - **REQ-016**: MUST execute GitHub latest-release version checks with an idle-time cache file and print version status or check errors.
@@ -150,13 +150,13 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-047**: MUST publish release assets from `dist/**/*` using `softprops/action-gh-release@v2` with `fail_on_unmatched_files: true`.
 - **REQ-048**: MUST include project script entrypoints `dng2jpg` and `d2j` mapped to `dng2jpg.core:main`.
 - **REQ-049**: SHOULD provide both `dng2jpg` and `d2j` as equivalent user-invokable CLI aliases.
-- **REQ-050**: MUST implement `/tmp/auto-brightness.py` auto-brightness step order on RGB uint16 input/output with float internals: normalize sRGB, linearize, compute BT.709 luminance, tonemap luminance, rescale RGB, re-encode sRGB, then optional local contrast.
+- **REQ-050**: MUST implement `/tmp/auto-brightness.py` auto-brightness step order on normalized RGB float input/output: normalize sRGB, linearize, compute BT.709 luminance, tonemap luminance, rescale RGB, re-encode sRGB, then optional local contrast.
 - **REQ-051**: MUST support both ImageMagick and OpenCV auto-adjust pipelines with shared validated knob parameters.
 - **REQ-052**: MUST print deterministic runtime diagnostics for input path, gamma, postprocess factors, backend, EV selections, and EV triplet.
 - **REQ-103**: MUST classify normalized BT.709 luminance as `low-key` when `median<0.35 && p95<0.85`, `high-key` when `median>0.65 && p05>0.15`, else `normal-key`.
 - **REQ-104**: MUST map luminance with `L=(a/Lw_bar)*Y`, percentile-derived robust `Lwhite`, and burn-out compression `Ld=(L*(1+L/Lwhite^2))/(1+L)` before linear-domain chromaticity-preserving RGB scaling.
 - **REQ-105**: MUST desaturate only overflowing linear RGB pixels by blending toward `(Ld,Ld,Ld)` with the minimal factor that restores `max(R,G,B)<=1` while preserving luminance.
-- **REQ-100**: MUST execute `--auto-levels` after optional `--auto-brightness` and before static postprocess while preserving RGB `uint16` input/output buffers and float internal calculations.
+- **REQ-100**: MUST execute `--auto-levels` after optional `--auto-brightness` and before static postprocess while preserving RGB float input/output buffers and float internal calculations.
 - **REQ-101**: MUST parse `--auto-levels`, `--al-clip-pct`, `--al-clip-out-of-gamut`, `--al-highlight-reconstruction-method`, and `--al-gain-threshold`, requiring `--auto-levels` before any `--al-*` option.
 - **REQ-102**: MUST accept highlight reconstruction methods `Luminance Recovery`, `CIELab Blending`, `Blend`, `Color Propagation`, and `Inpaint Opposed`.
 - **REQ-116**: MUST default auto-levels knobs to `clip_pct=0.02`, `clip_out_of_gamut=true`, `highlight_reconstruction=disabled`, `highlight_reconstruction_method=Inpaint Opposed`, and `gain_threshold=1.0`.
@@ -170,18 +170,18 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-124**: MUST expose auto-brightness CLI knobs for `key_value`, `white_point_percentile`, `a_min`, `a_max`, `max_auto_boost_factor`, and `eps`.
 - **REQ-125**: MUST expose auto-brightness CLI knobs for local-contrast enable, local-contrast strength, CLAHE clip limit, CLAHE tile grid size, and luminance-preserving desaturation enable.
 - **REQ-107**: MUST accept `--enable-opencv` as HDR backend selector and enforce backend exclusivity across `--enable-enfuse`, `--enable-luminance`, `--enable-opencv`, and `--enable-hdr-plus`.
-- **REQ-108**: MUST execute OpenCV backend merge using `MergeMertens` and `MergeDebevec` over bracket TIFFs ordered as `ev_minus`, `ev_zero`, `ev_plus` with EV-derived exposure times.
-- **REQ-109**: MUST normalize Debevec HDR radiance in float domain using robust luminance white-point percentile and blend it with Mertens fusion before writing merged TIFF.
-- **REQ-110**: MUST preserve 16-bit-per-channel processing in OpenCV backend by executing merge/blend in float domain and converting to `uint16` once when writing merged TIFF.
+- **REQ-108**: MUST execute OpenCV backend merge from three in-memory RGB float brackets ordered as `ev_minus`, `ev_zero`, `ev_plus`, using `MergeMertens`, `MergeDebevec`, and EV-derived exposure times.
+- **REQ-109**: MUST normalize Debevec HDR radiance in float domain using robust luminance white-point percentile, blend it with Mertens fusion in float domain, and return one normalized RGB float image.
+- **REQ-110**: MUST confine any OpenCV-backend float-to-uint16 adaptation required by `MergeDebevec` to the merge step itself and MUST preserve RGB float input/output interfaces for the merge step.
 - **REQ-111**: MUST accept `--enable-hdr-plus` as HDR backend selector and enforce backend exclusivity across `--enable-enfuse`, `--enable-luminance`, `--enable-opencv`, and `--enable-hdr-plus`.
 - **REQ-112**: MUST execute HDR+ backend in source step order `scalar proxy -> hierarchical alignment -> box_down2 -> temporal merge -> spatial merge`, using `ev_zero` as reference frame.
 - **REQ-113**: MUST compute three-level HDR+ alignment on the scalar proxy with `box_down2`, two `gauss_down4` levels, per-tile L1 minimization over offsets `[-4,+3]`, and final full-resolution offset lift by `2`.
 - **REQ-114**: MUST compute HDR+ temporal alternate-frame weights from aligned 16x16 downsampled tiles with `factor=8`, `min_dist=10`, `max_dist=300`, hard cutoff, and reference-inclusive normalization.
-- **REQ-115**: MUST execute HDR+ spatial blending over aligned half-overlapped 32x32 tiles using raised-cosine weights and write one RGB `uint16` merged TIFF without intermediate `uint8` quantization.
-- **REQ-126**: MUST adapt RGB bracket TIFFs to the single-channel HDR+ source domain by deriving one deterministic scalar proxy with default mode `rggb`.
+- **REQ-115**: MUST execute HDR+ spatial blending over aligned half-overlapped 32x32 tiles using raised-cosine weights and return one normalized RGB float image without intermediate `uint8` quantization.
+- **REQ-126**: MUST adapt RGB float bracket images to the single-channel HDR+ source domain by deriving one deterministic scalar proxy with default mode `rggb`.
 - **REQ-127**: MUST expose HDR+ CLI knobs `--hdrplus-proxy-mode`, `--hdrplus-search-radius`, `--hdrplus-temporal-factor`, `--hdrplus-temporal-min-dist`, and `--hdrplus-temporal-max-dist`.
 - **REQ-128**: MUST default HDR+ CLI knobs to `proxy_mode=rggb`, `search_radius=4`, `temporal_factor=8`, `temporal_min_dist=10`, and `temporal_max_dist=300`.
-- **REQ-129**: MUST execute HDR+ alignment and merge arithmetic in float domain while preserving `uint16` bracket loads and `uint16` merged TIFF output.
+- **REQ-129**: MUST execute HDR+ alignment and merge arithmetic in float domain and confine any required uint16 adaptation to the HDR+ step while preserving RGB float input/output interfaces.
 - **REQ-130**: MUST reject HDR+ knob values when `search_radius<1`, `temporal_factor<=0`, `temporal_min_dist<0`, or `temporal_max_dist<=temporal_min_dist`.
 - **REQ-131**: MUST print resolved HDR+ proxy, alignment, and temporal knob values in deterministic runtime diagnostics.
 
@@ -197,21 +197,21 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-008**: MUST verify `_refresh_output_jpg_exif_thumbnail_after_save` preserves source orientation in `0th` IFD and sets `1st` IFD orientation to `1`.
 - **TST-009**: MUST verify release workflow gates `build-release` execution on `needs.check-branch.outputs.is_master == "true"`.
 - **TST-010**: MUST verify `_parse_run_options` enforces `--auto-levels`/`--al-*` coupling and validates `Clip out-of-gamut colors`, `Clip %`, method, and gain-threshold knobs.
-- **TST-011**: MUST verify `_apply_auto_brightness_rgb_uint16` preserves uint16 I/O and executes the original step order, key-analysis thresholds, Reinhard mapping, optional desaturation, and optional CLAHE local-contrast blending.
-- **TST-012**: MUST verify `_encode_jpg` keeps uint16 static postprocess buffers and applies a single uint16-to-uint8 conversion immediately before JPEG save.
+- **TST-011**: MUST verify `_apply_auto_brightness_rgb_float` preserves float I/O and executes the original step order, key-analysis thresholds, Reinhard mapping, optional desaturation, and optional local-contrast blending.
+- **TST-012**: MUST verify `_encode_jpg` keeps float stage buffers and applies a single float-to-uint8 conversion immediately before JPEG save.
 - **TST-013**: MUST verify `_parse_run_options` accepts `--enable-opencv` and rejects simultaneous backend selectors.
 - **TST-014**: MUST verify OpenCV EV-time derivation returns deterministic three-element stop-space sequence mapped to bracket order.
-- **TST-015**: MUST verify Debevec normalization clamps blended radiance contribution to `[0,1]` float range before uint16 conversion.
+- **TST-015**: MUST verify Debevec normalization clamps blended radiance contribution to `[0,1]` float range before merge-step float return.
 - **TST-016**: MUST verify auto-levels parser defaults `clip_pct=0.02`, `clip_out_of_gamut=true`, `highlight_reconstruction_method=Inpaint Opposed`, and `gain_threshold=1.0`.
 - **TST-017**: MUST verify auto-levels histogram calibration reproduces RawTherapee-compatible `expcomp`, `black`, `brightness`, `contrast`, `hlcompr`, and `hlcomprthresh` for deterministic synthetic histograms.
-- **TST-018**: MUST verify `Color Propagation` and `Inpaint Opposed` selectors produce deterministic RGB `uint16` outputs and preserve float-only internal math within the auto-levels stage.
+- **TST-018**: MUST verify `Color Propagation` and `Inpaint Opposed` selectors produce deterministic RGB float outputs and preserve float-only internal math within the auto-levels stage.
 - **TST-019**: MUST verify auto-brightness CLI parsing exposes every control from the original `TonemapParams` with deterministic defaults and validation.
 - **TST-020**: MUST verify auto-brightness clipping proxies use normalized thresholds `1/255` and `254/255` and key auto-selection uses the original base values and boost rules.
 - **TST-021**: MUST verify `_parse_run_options` accepts HDR+ knob overrides and rejects invalid HDR+ knob combinations with deterministic parse errors.
-- **TST-022**: MUST verify HDR+ scalar proxy mode `rggb` produces deterministic green-weighted scalar conversion from RGB `uint16` input.
+- **TST-022**: MUST verify HDR+ scalar proxy mode `rggb` produces deterministic green-weighted scalar conversion from RGB float input.
 - **TST-023**: MUST verify HDR+ hierarchical alignment resolves non-zero alternate-frame tile offsets for translated inputs and keeps reference offsets at zero.
 - **TST-024**: MUST verify HDR+ temporal weighting and RGB accumulation apply resolved alignment offsets before distance evaluation and tile merge.
-- **TST-025**: MUST verify HDR+ merge preserves float internal arithmetic and `uint16` input/output boundaries.
+- **TST-025**: MUST verify HDR+ merge preserves float internal arithmetic and float input/output boundaries.
 
 ## 5. Evidence Matrix
 

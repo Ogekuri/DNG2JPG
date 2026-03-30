@@ -3638,29 +3638,25 @@ def _build_exposure_multipliers(ev_value, ev_zero=0.0):
     )
 
 
-def _write_bracket_images(
-    raw_handle, imageio_module, multipliers, gamma_value, temp_dir
-):
-    """@brief Materialize three bracket TIFF files from one RAW handle.
+def _extract_bracket_images_float(raw_handle, np_module, multipliers, gamma_value):
+    """@brief Extract three normalized RGB float brackets from one RAW handle.
 
     @details Invokes `raw.postprocess` with `output_bps=16`,
-    `use_camera_wb=True`, `no_auto_bright=True`, explicit `user_flip=0` to
-    disable implicit RAW orientation mutation, and configurable gamma pair for
-    deterministic HDR-oriented bracket extraction before merge.
+    `use_camera_wb=True`, `no_auto_bright=True`, explicit `user_flip=0`, and
+    the configured gamma pair, then converts each extracted bracket to
+    normalized OpenCV-compatible RGB float `[0,1]` without exposing TIFF
+    artifacts outside this step.
     @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
-    @param imageio_module {ModuleType} Imported imageio module with `imwrite`.
+    @param np_module {ModuleType} Imported numpy module.
     @param multipliers {tuple[float, float, float]} Ordered exposure multipliers.
     @param gamma_value {tuple[float, float]} Gamma pair forwarded to RAW postprocess.
-    @param temp_dir {Path} Directory for intermediate TIFF artifacts.
-    @return {list[Path]} Ordered temporary TIFF file paths.
-    @satisfies REQ-057, REQ-077, REQ-079, REQ-080
+    @return {list[object]} Ordered RGB float bracket tensors.
+    @satisfies REQ-010, REQ-057, REQ-079, REQ-080
     """
 
     labels = ("ev_minus", "ev_zero", "ev_plus")
-    bracket_paths = []
-
+    bracket_images_float = []
     for label, multiplier in zip(labels, multipliers):
-        temp_path = temp_dir / f"{label}.tif"
         print_info(f"Extracting bracket {label}: brightness={multiplier:.4f}x")
         rgb_data = raw_handle.postprocess(
             bright=multiplier,
@@ -3670,10 +3666,13 @@ def _write_bracket_images(
             gamma=gamma_value,
             user_flip=0,
         )
-        imageio_module.imwrite(str(temp_path), rgb_data)
-        bracket_paths.append(temp_path)
-
-    return bracket_paths
+        bracket_images_float.append(
+            _normalize_float_rgb_image(
+                np_module=np_module,
+                image_data=rgb_data,
+            )
+        )
+    return bracket_images_float
 
 
 def _order_bracket_paths(bracket_paths):
@@ -3718,18 +3717,31 @@ def _order_hdr_plus_reference_paths(bracket_paths):
     return [ordered_paths[1], ordered_paths[0], ordered_paths[2]]
 
 
-def _run_enfuse(bracket_paths, merged_tiff):
-    """@brief Merge bracket TIFF files into one HDR TIFF via `enfuse`.
+def _run_enfuse(bracket_images_float, temp_dir, imageio_module, np_module):
+    """@brief Merge bracket float images into one RGB float image via `enfuse`.
 
-    @details Builds deterministic enfuse argv with LZW compression and executes
-    subprocess in checked mode to propagate command failures.
-    @param bracket_paths {list[Path]} Ordered intermediate exposure TIFF paths.
-    @param merged_tiff {Path} Output merged TIFF target path.
-    @return {None} Side effects only.
+    @details Serializes the three ordered float brackets as local 16-bit TIFF
+    artifacts, invokes `enfuse` with LZW compression, then re-loads the merged
+    TIFF and normalizes it to RGB float `[0,1]` before returning from the
+    backend step.
+    @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors.
+    @param temp_dir {Path} Temporary workspace root.
+    @param imageio_module {ModuleType} Imported imageio module with `imread` and `imwrite`.
+    @param np_module {ModuleType} Imported numpy module.
+    @return {object} Normalized RGB float merged image.
     @exception subprocess.CalledProcessError Raised when `enfuse` returns non-zero exit status.
-    @satisfies REQ-058, REQ-077
+    @satisfies REQ-011, REQ-058
     """
 
+    backend_dir = temp_dir / "enfuse"
+    backend_dir.mkdir(parents=True, exist_ok=True)
+    bracket_paths = _materialize_bracket_tiffs_from_float(
+        imageio_module=imageio_module,
+        np_module=np_module,
+        bracket_images_float=bracket_images_float,
+        temp_dir=backend_dir,
+    )
+    merged_tiff = backend_dir / "merged_hdr.tif"
     command = [
         "enfuse",
         f"--output={merged_tiff}",
@@ -3737,32 +3749,50 @@ def _run_enfuse(bracket_paths, merged_tiff):
         *[str(path) for path in bracket_paths],
     ]
     subprocess.run(command, check=True)
+    return _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=imageio_module.imread(str(merged_tiff)),
+    )
 
 
 def _run_luminance_hdr_cli(
-    bracket_paths, output_hdr_tiff, ev_value, ev_zero, luminance_options
+    bracket_images_float,
+    temp_dir,
+    imageio_module,
+    np_module,
+    ev_value,
+    ev_zero,
+    luminance_options,
 ):
-    """@brief Merge bracket TIFF files into one HDR TIFF via `luminance-hdr-cli`.
+    """@brief Merge bracket float images into one RGB float image via `luminance-hdr-cli`.
 
     @details Builds deterministic luminance-hdr-cli argv using EV sequence
     centered around zero-reference (`-ev_value,0,+ev_value`) even when extraction
-    uses non-zero `ev_zero`,
-    HDR model controls, tone-mapper controls, mandatory `--ldrTiff 16b`,
-    optional explicit `--tmo*` passthrough arguments, and ordered exposure
-    inputs (`ev_minus`, `ev_zero`, `ev_plus`), then writes to TIFF output path
-    used by shared postprocess conversion. Executes subprocess in output-TIFF
-    parent directory to isolate backend-generated sidecar artifacts (e.g. `.pp3`)
-    inside command temporary workspace lifecycle.
-    @param bracket_paths {list[Path]} Ordered intermediate exposure TIFF paths.
-    @param output_hdr_tiff {Path} Output HDR TIFF target path.
+    uses non-zero `ev_zero`, serializes float inputs to local 16-bit TIFFs,
+    forwards deterministic HDR/TMO arguments, isolates sidecar artifacts in a
+    backend-specific temporary directory, then reloads the produced TIFF as
+    normalized RGB float `[0,1]`.
+    @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors.
+    @param temp_dir {Path} Temporary workspace root.
+    @param imageio_module {ModuleType} Imported imageio module with `imread` and `imwrite`.
+    @param np_module {ModuleType} Imported numpy module.
     @param ev_value {float} EV bracket delta used to generate exposure files.
     @param ev_zero {float} Central EV used to generate exposure files.
     @param luminance_options {LuminanceOptions} Luminance backend command controls.
-    @return {None} Side effects only.
+    @return {object} Normalized RGB float merged image.
     @exception subprocess.CalledProcessError Raised when `luminance-hdr-cli` returns non-zero exit status.
-    @satisfies REQ-060, REQ-061, REQ-062, REQ-067, REQ-068, REQ-077, REQ-080, REQ-095
+    @satisfies REQ-011, REQ-060, REQ-061, REQ-067, REQ-068, REQ-095
     """
 
+    backend_dir = temp_dir / "luminance"
+    backend_dir.mkdir(parents=True, exist_ok=True)
+    bracket_paths = _materialize_bracket_tiffs_from_float(
+        imageio_module=imageio_module,
+        np_module=np_module,
+        bracket_images_float=bracket_images_float,
+        temp_dir=backend_dir,
+    )
+    output_hdr_tiff = backend_dir / "merged_hdr.tif"
     ordered_paths = _order_bracket_paths(bracket_paths)
     command = [
         "luminance-hdr-cli",
@@ -3790,6 +3820,10 @@ def _run_luminance_hdr_cli(
         subprocess.run(command, check=True)
     finally:
         os.chdir(original_working_directory)
+    return _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=imageio_module.imread(str(output_hdr_tiff)),
+    )
 
 
 def _build_ev_times_from_ev_zero_and_delta(ev_zero, ev_delta):
@@ -3856,30 +3890,27 @@ def _normalize_debevec_hdr_to_unit_range(np_module, hdr_rgb_float32, white_point
 
 
 def _run_opencv_hdr_merge(
-    bracket_paths,
-    output_hdr_tiff,
+    bracket_images_float,
     ev_value,
     ev_zero,
     opencv_merge_options,
     auto_adjust_opencv_dependencies,
 ):
-    """@brief Merge bracket TIFF files into one HDR TIFF via OpenCV Mertens+Debevec.
+    """@brief Merge bracket float images into one RGB float image via OpenCV.
 
-    @details Loads deterministic bracket order, preserves one uint16 RGB tensor
-    list for Debevec radiance merge, derives one normalized float32 RGB tensor
-    list in `[0,1]` for Mertens exposure fusion, executes both merges with the
-    EV-derived exposure-time vector, normalizes Debevec HDR with percentile
-    robust white-point luminance scaling, averages both outputs in float domain,
-    then writes one RGB uint16 TIFF.
-    @param bracket_paths {list[Path]} Ordered intermediate exposure TIFF paths.
-    @param output_hdr_tiff {Path} Output HDR TIFF target path.
+    @details Accepts the three bracket images as normalized RGB float tensors,
+    converts them to float32 `[0,1]` for `MergeMertens`, converts them to
+    `uint16` only for `MergeDebevec`, normalizes Debevec output with robust
+    luminance white-point scaling, blends both outputs in float domain, and
+    returns one normalized RGB float image.
+    @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors.
     @param ev_value {float} EV bracket delta used to generate exposure files.
     @param ev_zero {float} Central EV used to generate exposure files.
     @param opencv_merge_options {OpenCvMergeOptions} OpenCV merge backend controls.
     @param auto_adjust_opencv_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
-    @return {None} Side effects only.
+    @return {object} Normalized RGB float merged image.
     @exception RuntimeError Raised when OpenCV/numpy dependencies are missing or bracket payloads are invalid.
-    @satisfies REQ-077, REQ-107, REQ-108, REQ-109, REQ-110
+    @satisfies REQ-107, REQ-108, REQ-109, REQ-110
     """
 
     if auto_adjust_opencv_dependencies is not None:
@@ -3890,25 +3921,19 @@ def _run_opencv_hdr_merge(
             raise RuntimeError("Missing required dependencies: opencv-python and numpy")
         cv2_module, np_module = resolved_dependencies
 
-    ordered_paths = _order_bracket_paths(bracket_paths)
     exposures_uint16 = []
     exposures_unit_float32 = []
-    for path in ordered_paths:
-        image_bgr = cv2_module.imread(str(path), cv2_module.IMREAD_UNCHANGED)
-        if image_bgr is None:
-            raise RuntimeError(f"OpenCV failed to read bracket image: {path}")
-        if len(image_bgr.shape) != 3 or image_bgr.shape[2] != 3:
-            raise RuntimeError(f"OpenCV bracket image must be RGB 3-channel: {path}")
-        dtype_name = str(getattr(image_bgr, "dtype", ""))
-        if dtype_name == "uint8":
-            image_bgr = (image_bgr.astype(np_module.uint16) * 257).astype(np_module.uint16)
-        elif dtype_name != "uint16":
-            raise RuntimeError(f"OpenCV bracket image must be uint16 or uint8: {path}")
-        image_rgb_uint16 = cv2_module.cvtColor(image_bgr, cv2_module.COLOR_BGR2RGB)
-        image_rgb_uint16 = image_rgb_uint16.astype(np_module.uint16)
-        exposures_uint16.append(image_rgb_uint16)
-        exposures_unit_float32.append(
-            (image_rgb_uint16.astype(np_module.float32) / 65535.0).astype(np_module.float32)
+    for image_rgb_float in bracket_images_float:
+        normalized_image = _normalize_float_rgb_image(
+            np_module=np_module,
+            image_data=image_rgb_float,
+        )
+        exposures_unit_float32.append(normalized_image.astype(np_module.float32, copy=False))
+        exposures_uint16.append(
+            _to_uint16_image_array(
+                np_module=np_module,
+                image_data=normalized_image,
+            )
         )
 
     exposure_times = _build_ev_times_from_ev_zero_and_delta(ev_zero=ev_zero, ev_delta=ev_value)
@@ -3927,14 +3952,11 @@ def _run_opencv_hdr_merge(
         1.0,
     )
     blended_rgb_float32 = (fusion_rgb_float32 + debevec_rgb_unit) * 0.5
-    blended_rgb_u16 = np_module.clip(
-        np_module.round(blended_rgb_float32 * 65535.0),
+    return np_module.clip(
+        np_module.array(blended_rgb_float32, dtype=np_module.float32),
         0.0,
-        65535.0,
-    ).astype(np_module.uint16)
-    output_bgr_u16 = cv2_module.cvtColor(blended_rgb_u16, cv2_module.COLOR_RGB2BGR)
-    if not cv2_module.imwrite(str(output_hdr_tiff), output_bgr_u16):
-        raise RuntimeError(f"OpenCV failed to write merged HDR TIFF: {output_hdr_tiff}")
+        1.0,
+    )
 
 
 def _hdrplus_box_down2_float32(np_module, frames_float32):
@@ -4656,40 +4678,44 @@ def _hdrplus_merge_spatial_rgb(np_module, temporal_tiles, width, height):
 
 
 def _run_hdr_plus_merge(
-    bracket_paths,
-    output_hdr_tiff,
-    imageio_module,
+    bracket_images_float,
     np_module,
     hdrplus_options,
 ):
-    """@brief Merge bracket TIFF files into one RGB uint16 TIFF via HDR+.
+    """@brief Merge bracket float images into one RGB float image via HDR+.
 
     @details Ports the source HDR+ merge pipeline from `align.cpp`, `merge.cpp`,
-    and `util.cpp` onto repository RGB TIFF brackets: reorders inputs into
-    reference-first frame order `(ev_zero, ev_minus, ev_plus)`, derives the
-    configured scalar proxy, executes hierarchical alignment, executes source
-    `box_down2`, computes aligned temporal weights, accumulates aligned RGB
-    tiles in float domain, performs source raised-cosine spatial blending, and
-    writes one merged RGB `uint16` TIFF.
-    @param bracket_paths {list[Path]} Temporary bracket TIFF paths generated from RAW.
-    @param output_hdr_tiff {Path} Output HDR TIFF target path.
-    @param imageio_module {ModuleType} Imported imageio module with `imread` and `imwrite`.
+    and `util.cpp` onto repository RGB float brackets: reorders inputs into
+    reference-first frame order `(ev_zero, ev_minus, ev_plus)`, converts them
+    to `uint16` only inside the HDR+ step, executes scalar proxy generation,
+    hierarchical alignment, source `box_down2`, temporal weighting, temporal
+    RGB merge, raised-cosine spatial blending, and returns one normalized RGB
+    float image.
+    @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors.
     @param np_module {ModuleType} Imported numpy module.
     @param hdrplus_options {HdrPlusOptions} HDR+ proxy/alignment/temporal controls.
-    @return {None} Side effects only.
+    @return {object} Normalized RGB float merged image.
     @exception RuntimeError Raised when bracket payloads are invalid.
-    @satisfies REQ-077, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-129
+    @satisfies REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-129
     """
 
-    ordered_paths = _order_hdr_plus_reference_paths(bracket_paths)
+    ordered_images = [
+        bracket_images_float[1],
+        bracket_images_float[0],
+        bracket_images_float[2],
+    ]
     frames_rgb_uint16 = []
-    for path in ordered_paths:
-        frame_data = imageio_module.imread(str(path))
-        normalized_frame = _normalize_uint16_rgb_image(
+    for frame_data in ordered_images:
+        normalized_frame = _normalize_float_rgb_image(
             np_module=np_module,
             image_data=frame_data,
         )
-        frames_rgb_uint16.append(normalized_frame.astype(np_module.uint16))
+        frames_rgb_uint16.append(
+            _to_uint16_image_array(
+                np_module=np_module,
+                image_data=normalized_frame,
+            )
+        )
     frames_rgb_uint16 = np_module.stack(frames_rgb_uint16, axis=0)
     if frames_rgb_uint16.shape[0] < 2:
         raise RuntimeError("HDR+ merge requires at least two aligned frames")
@@ -4728,7 +4754,10 @@ def _run_hdr_plus_merge(
         width=int(frames_rgb_uint16.shape[2]),
         height=int(frames_rgb_uint16.shape[1]),
     )
-    imageio_module.imwrite(str(output_hdr_tiff), merged_rgb_uint16)
+    return _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=merged_rgb_uint16,
+    )
 
 
 def _convert_compression_to_quality(jpg_compression):
@@ -4788,12 +4817,14 @@ def _resolve_auto_adjust_opencv_dependencies():
 
 
 def _resolve_numpy_dependency():
-    """@brief Resolve numpy runtime dependency for auto-levels and auto-brightness.
+    """@brief Resolve numpy runtime dependency for float-interface image stages.
 
-    @details Imports `numpy` required by uint16-domain post-merge pre-stages and
-    returns `None` with deterministic error output when dependency is missing.
+    @details Imports `numpy` required by bracket float normalization, in-memory
+    merge orchestration, float-domain post-merge stages, and TIFF16 adaptation
+    helpers, and returns `None` with deterministic error output when the
+    dependency is missing.
     @return {ModuleType|None} Imported numpy module; `None` on dependency failure.
-    @satisfies REQ-059, REQ-090, REQ-100
+    @satisfies REQ-010, REQ-012, REQ-059, REQ-100
     """
 
     try:
@@ -4803,6 +4834,124 @@ def _resolve_numpy_dependency():
         print_error("Install dependencies with: uv pip install numpy")
         return None
     return numpy_module
+
+
+def _to_float32_image_array(np_module, image_data):
+    """@brief Convert image tensor to normalized `float32` range `[0,1]`.
+
+    @details Normalizes integer or float image payloads into OpenCV-compatible
+    `float32` tensors. `uint16` uses `/65535`, `uint8` uses `/255`, floating
+    inputs outside `[0,1]` are interpreted on the closest integer image scale
+    (`255` or `65535`) and then clamped.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_data {object} Numeric image tensor.
+    @return {object} Normalized `float32` image tensor.
+    @satisfies REQ-010, REQ-012, REQ-106
+    """
+
+    dtype_name = str(getattr(image_data, "dtype", ""))
+    if dtype_name == "float32":
+        numeric_data = np_module.array(image_data, dtype=np_module.float32, copy=False)
+    elif dtype_name == "uint16":
+        numeric_data = image_data.astype(np_module.float32) / 65535.0
+    elif dtype_name == "uint8":
+        numeric_data = image_data.astype(np_module.float32) / 255.0
+    else:
+        numeric_data = np_module.array(image_data, dtype=np_module.float32)
+        minimum_value = float(np_module.min(numeric_data)) if numeric_data.size else 0.0
+        maximum_value = float(np_module.max(numeric_data)) if numeric_data.size else 0.0
+        if minimum_value >= 0.0 and maximum_value > 1.0:
+            if maximum_value <= 255.0:
+                numeric_data = numeric_data / 255.0
+            elif maximum_value <= 65535.0:
+                numeric_data = numeric_data / 65535.0
+    return np_module.clip(numeric_data, 0.0, 1.0).astype(np_module.float32)
+
+
+def _normalize_float_rgb_image(np_module, image_data):
+    """@brief Normalize image payload into RGB `float32` tensor.
+
+    @details Converts input image payload to normalized `float32`, expands
+    grayscale to one channel, replicates single-channel input to RGB, drops
+    alpha from RGBA input, and returns exactly three channels for deterministic
+    float-stage processing.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_data {object} Numeric image tensor.
+    @return {object} RGB `float32` tensor with shape `(H,W,3)` and range `[0,1]`.
+    @exception ValueError Raised when normalized image has unsupported shape.
+    @satisfies REQ-010, REQ-012, REQ-106
+    """
+
+    normalized = _to_float32_image_array(np_module=np_module, image_data=image_data)
+    if len(normalized.shape) == 2:
+        normalized = normalized[:, :, None]
+    if len(normalized.shape) == 3 and normalized.shape[2] == 1:
+        normalized = np_module.repeat(normalized, 3, axis=2)
+    if len(normalized.shape) == 3 and normalized.shape[2] == 4:
+        normalized = normalized[:, :, :3]
+    if len(normalized.shape) != 3 or normalized.shape[2] < 3:
+        raise ValueError("Float stage input image has unsupported shape")
+    if normalized.shape[2] > 3:
+        normalized = normalized[:, :, :3]
+    return normalized.astype(np_module.float32, copy=False)
+
+
+def _write_rgb_float_tiff16(imageio_module, np_module, output_path, image_rgb_float):
+    """@brief Serialize one RGB float tensor as 16-bit TIFF payload.
+
+    @details Normalizes the source image to RGB float `[0,1]`, converts it to
+    `uint16`, and writes the result through `imageio`. This helper localizes
+    float-to-TIFF16 adaptation inside steps that depend on file-based tools.
+    @param imageio_module {ModuleType} Imported imageio module with `imwrite`.
+    @param np_module {ModuleType} Imported numpy module.
+    @param output_path {Path} Output TIFF path.
+    @param image_rgb_float {object} RGB float tensor in `[0,1]`.
+    @return {None} Side effects only.
+    @satisfies REQ-011, REQ-106
+    """
+
+    normalized = _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=image_rgb_float,
+    )
+    imageio_module.imwrite(
+        str(output_path),
+        _to_uint16_image_array(np_module=np_module, image_data=normalized),
+    )
+
+
+def _materialize_bracket_tiffs_from_float(
+    imageio_module,
+    np_module,
+    bracket_images_float,
+    temp_dir,
+):
+    """@brief Write canonical bracket TIFF files from RGB float images.
+
+    @details Emits `ev_minus.tif`, `ev_zero.tif`, and `ev_plus.tif` into the
+    provided temporary directory using 16-bit TIFF encoding derived from
+    normalized RGB float images. The helper is used only by file-oriented merge
+    backends.
+    @param imageio_module {ModuleType} Imported imageio module with `imwrite`.
+    @param np_module {ModuleType} Imported numpy module.
+    @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors.
+    @param temp_dir {Path} Temporary directory for TIFF artifacts.
+    @return {list[Path]} Ordered canonical TIFF paths.
+    @satisfies REQ-011, REQ-034
+    """
+
+    labels = ("ev_minus", "ev_zero", "ev_plus")
+    bracket_paths = []
+    for label, image_rgb_float in zip(labels, bracket_images_float):
+        output_path = temp_dir / f"{label}.tif"
+        _write_rgb_float_tiff16(
+            imageio_module=imageio_module,
+            np_module=np_module,
+            output_path=output_path,
+            image_rgb_float=image_rgb_float,
+        )
+        bracket_paths.append(output_path)
+    return bracket_paths
 
 
 def _to_uint8_image_array(np_module, image_data):
@@ -5100,23 +5249,31 @@ def _apply_saturation_uint16(np_module, image_rgb_uint16, saturation_factor):
     )
 
 
-def _apply_static_postprocess_uint16(np_module, image_rgb_uint16, postprocess_options):
-    """@brief Execute static postprocess chain fully in uint16 precision.
+def _apply_static_postprocess_float(np_module, image_rgb_float, postprocess_options):
+    """@brief Execute static postprocess chain with float stage interfaces.
 
-    @details Applies post-gamma, brightness, contrast, and saturation in fixed
-    order over RGB uint16 tensor and preserves uint16 output for downstream
-    auto-adjust/final quantization stages.
+    @details Accepts one normalized RGB float tensor, converts it to `uint16`
+    only inside this step to preserve the original post-gamma, brightness,
+    contrast, and saturation algorithm, then converts the result back to
+    normalized RGB float `[0,1]`.
     @param np_module {ModuleType} Imported numpy module.
-    @param image_rgb_uint16 {object} RGB uint16 image tensor.
+    @param image_rgb_float {object} RGB float tensor.
     @param postprocess_options {PostprocessOptions} Parsed postprocess controls.
-    @return {object} RGB uint16 tensor after static postprocess chain.
-    @satisfies REQ-012, REQ-013, REQ-106
+    @return {object} RGB float tensor after static postprocess chain.
+    @satisfies REQ-012, REQ-013
     """
 
+    image_rgb_uint16 = _to_uint16_image_array(
+        np_module=np_module,
+        image_data=_normalize_float_rgb_image(
+            np_module=np_module,
+            image_data=image_rgb_float,
+        ),
+    )
     processed = _validate_uint16_rgb_stage_image(
         np_module=np_module,
         image_rgb_uint16=image_rgb_uint16,
-        stage_label="_apply_static_postprocess_uint16.input",
+        stage_label="_apply_static_postprocess_float.input",
     )
     processed = _apply_post_gamma_uint16(
         np_module=np_module,
@@ -5138,7 +5295,10 @@ def _apply_static_postprocess_uint16(np_module, image_rgb_uint16, postprocess_op
         image_rgb_uint16=processed,
         saturation_factor=postprocess_options.saturation,
     )
-    return processed
+    return _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=processed,
+    )
 
 
 def _to_linear_srgb(np_module, image_srgb):
@@ -5427,6 +5587,40 @@ def _rt_igamma2(np_module, values):
     )
 
 
+def _build_autoexp_histogram_rgb_float(np_module, image_rgb_float, histcompr):
+    """@brief Build RGB auto-levels histogram from normalized float image tensor.
+
+    @details Builds one RawTherapee-compatible luminance histogram from the
+    post-merge RGB float tensor by mapping normalized values to the repository
+    16-bit working scale, applying BT.709 luminance, compressing bins with
+    `hist_size = 65536 >> histcompr`, and clipping indices deterministically.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_float {object} RGB float tensor in `[0,1]`.
+    @param histcompr {int} Histogram compression shift in `[0, 15]`.
+    @return {object} Histogram tensor.
+    @satisfies REQ-100, REQ-117
+    """
+
+    hist_size = 65536 >> histcompr
+    scale = 1.0 / float(1 << histcompr)
+    normalized = _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=image_rgb_float,
+    ).astype(np_module.float64)
+    working_rgb = normalized * 65535.0
+    luminance = (
+        0.2126729 * working_rgb[..., 0]
+        + 0.7151521 * working_rgb[..., 1]
+        + 0.0721750 * working_rgb[..., 2]
+    )
+    histogram_index = np_module.clip(
+        (luminance * scale).astype(np_module.int64), 0, hist_size - 1
+    )
+    return np_module.bincount(
+        histogram_index.ravel(), minlength=hist_size
+    ).astype(np_module.uint64)
+
+
 def _build_autoexp_histogram_rgb_uint16(np_module, image_rgb_uint16, histcompr):
     """@brief Build RGB auto-levels histogram from uint16 image tensor.
 
@@ -5709,28 +5903,28 @@ def _compute_auto_levels_from_histogram(np_module, histogram, histcompr, clip_pe
     }
 
 
-def _apply_auto_levels_uint16(np_module, image_rgb_uint16, auto_levels_options):
-    """@brief Apply auto-levels stage on RGB uint16 tensor.
+def _apply_auto_levels_float(np_module, image_rgb_float, auto_levels_options):
+    """@brief Apply auto-levels stage on RGB float tensor.
 
-    @details Executes auto-levels histogram analysis ported from attached source,
-    applies gain derived from exposure compensation, conditionally runs
-    highlight reconstruction, and optionally normalizes overflowing RGB triplets
-    back into uint16 gamut.
+    @details Executes the RawTherapee-compatible histogram analysis on a
+    float-backed 16-bit working scale, applies gain derived from exposure
+    compensation, conditionally runs highlight reconstruction, optionally
+    normalizes overflowing RGB triplets back into gamut, and returns normalized
+    RGB float output.
     @param np_module {ModuleType} Imported numpy module.
-    @param image_rgb_uint16 {object} RGB uint16 image tensor.
+    @param image_rgb_float {object} RGB float tensor.
     @param auto_levels_options {AutoLevelsOptions} Parsed auto-levels options.
-    @return {object} RGB uint16 tensor after auto-levels stage.
-    @exception ValueError Raised when input tensor is not uint16 RGB.
+    @return {object} RGB float tensor after auto-levels stage.
     @satisfies REQ-100, REQ-101, REQ-102, REQ-119, REQ-120
     """
 
-    if str(getattr(image_rgb_uint16, "dtype", "")) != "uint16":
-        raise ValueError("Auto-levels input image must be uint16")
-    if len(image_rgb_uint16.shape) != 3 or image_rgb_uint16.shape[2] != 3:
-        raise ValueError("Auto-levels input image must be RGB uint16")
-    histogram = _build_autoexp_histogram_rgb_uint16(
+    normalized_input = _normalize_float_rgb_image(
         np_module=np_module,
-        image_rgb_uint16=image_rgb_uint16,
+        image_data=image_rgb_float,
+    )
+    histogram = _build_autoexp_histogram_rgb_float(
+        np_module=np_module,
+        image_rgb_float=normalized_input,
         histcompr=auto_levels_options.histcompr,
     )
     auto_levels_metrics = _compute_auto_levels_from_histogram(
@@ -5740,7 +5934,7 @@ def _apply_auto_levels_uint16(np_module, image_rgb_uint16, auto_levels_options):
         clip_percent=auto_levels_options.clip_percent,
     )
     gain = float(auto_levels_metrics["gain"])
-    image_float = image_rgb_uint16.astype(np_module.float64) * gain
+    image_float = normalized_input.astype(np_module.float64) * 65535.0 * gain
     if auto_levels_options.highlight_reconstruction_enabled:
         method = auto_levels_options.highlight_reconstruction_method
         if method == "Luminance Recovery":
@@ -5784,9 +5978,11 @@ def _apply_auto_levels_uint16(np_module, image_rgb_uint16, auto_levels_options):
             image_rgb=image_float,
             maxval=65535.0,
         )
-    return np_module.clip(np_module.round(image_float), 0.0, 65535.0).astype(
-        np_module.uint16
-    )
+    return np_module.clip(
+        image_float / 65535.0,
+        0.0,
+        1.0,
+    ).astype(np_module.float32)
 
 
 def _clip_auto_levels_out_of_gamut_uint16(np_module, image_rgb, maxval=65535.0):
@@ -6187,34 +6383,34 @@ def _hlrecovery_inpaint_opposed_uint16(
     return output
 
 
-def _apply_auto_brightness_rgb_uint16(
-    np_module, image_rgb_uint16, auto_brightness_options, cv2_module=None
+def _apply_auto_brightness_rgb_float(
+    np_module,
+    image_rgb_float,
+    auto_brightness_options,
+    cv2_module=None,
 ):
-    """@brief Apply original photographic auto-brightness flow on uint16 RGB tensor.
+    """@brief Apply original photographic auto-brightness flow on RGB float tensor.
 
-    @details Executes `/tmp/auto-brightness.py` step order in a 16-bit-adapted
-    form: normalize RGB uint16 to float `[0,1]`, linearize sRGB, derive BT.709
-    luminance, classify key using normalized distribution thresholds, choose or
-    override key value `a`, apply Reinhard global tonemap with robust
-    percentile white-point, preserve chromaticity by luminance scaling,
-    optionally desaturate only overflowing linear RGB pixels, re-encode to
-    sRGB uint16, then optionally apply CLAHE-based YCrCb local contrast.
+    @details Executes `/tmp/auto-brightness.py` step order over normalized RGB
+    float input: linearize sRGB, derive BT.709 luminance, classify key using
+    normalized distribution thresholds, choose or override key value `a`,
+    apply Reinhard global tonemap with robust percentile white-point, preserve
+    chromaticity by luminance scaling, optionally desaturate only overflowing
+    linear RGB pixels, re-encode to sRGB, and optionally run the CLAHE local
+    contrast substep behind a step-local 16-bit boundary required by OpenCV.
     @param np_module {ModuleType} Imported numpy module.
-    @param image_rgb_uint16 {object} RGB uint16 image tensor.
+    @param image_rgb_float {object} RGB float tensor.
     @param auto_brightness_options {AutoBrightnessOptions} Parsed auto-brightness parameters.
     @param cv2_module {ModuleType|None} Optional imported cv2 module used only when local contrast is enabled.
-    @return {object} RGB uint16 image tensor after BT.709 auto-brightness.
-    @exception ValueError Raised when input tensor is not uint16 RGB.
+    @return {object} RGB float tensor after BT.709 auto-brightness.
     @exception RuntimeError Raised when local contrast is enabled and `cv2` dependency cannot be imported.
-    @satisfies REQ-050, REQ-066, REQ-090, REQ-099, REQ-103, REQ-104, REQ-105, REQ-121, REQ-122, REQ-123
+    @satisfies REQ-050, REQ-103, REQ-104, REQ-105, REQ-121, REQ-122, REQ-123
     """
 
-    if str(getattr(image_rgb_uint16, "dtype", "")) != "uint16":
-        raise ValueError("Auto-brightness input image must be uint16")
-    if len(image_rgb_uint16.shape) != 3 or image_rgb_uint16.shape[2] != 3:
-        raise ValueError("Auto-brightness input image must be RGB uint16")
-
-    image_srgb = image_rgb_uint16.astype(np_module.float64) / 65535.0
+    image_srgb = _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=image_rgb_float,
+    ).astype(np_module.float64)
     image_linear = _to_linear_srgb(np_module=np_module, image_srgb=image_srgb)
     luminance = _compute_bt709_luminance(np_module=np_module, linear_rgb=image_linear)
     key_analysis = _analyze_luminance_key(
@@ -6247,18 +6443,19 @@ def _apply_auto_brightness_rgb_uint16(
             eps=auto_brightness_options.eps,
         )
     bright_srgb = _from_linear_srgb(np_module=np_module, image_linear=bright_linear)
-    bright_rgb_uint16 = np_module.clip(
-        np_module.round(bright_srgb * 65535.0), 0.0, 65535.0
-    ).astype(np_module.uint16)
     if not auto_brightness_options.enable_mild_local_contrast:
-        return bright_rgb_uint16
+        return np_module.clip(bright_srgb, 0.0, 1.0).astype(np_module.float32)
     if auto_brightness_options.local_contrast_strength <= 0.0:
-        return bright_rgb_uint16
+        return np_module.clip(bright_srgb, 0.0, 1.0).astype(np_module.float32)
     if cv2_module is None:
         try:
             import cv2 as cv2_module  # type: ignore
         except ModuleNotFoundError as exc:
             raise RuntimeError("Missing required dependency: opencv-python") from exc
+    bright_rgb_uint16 = _to_uint16_image_array(
+        np_module=np_module,
+        image_data=bright_srgb,
+    )
     bright_bgr_uint16 = cv2_module.cvtColor(bright_rgb_uint16, cv2_module.COLOR_RGB2BGR)
     bright_bgr_uint16 = _apply_mild_local_contrast_bgr_uint16(
         cv2_module=cv2_module,
@@ -6266,41 +6463,46 @@ def _apply_auto_brightness_rgb_uint16(
         image_bgr_uint16=bright_bgr_uint16,
         options=auto_brightness_options,
     )
-    return cv2_module.cvtColor(bright_bgr_uint16, cv2_module.COLOR_BGR2RGB)
+    return _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=cv2_module.cvtColor(bright_bgr_uint16, cv2_module.COLOR_BGR2RGB),
+    )
 
 
 
 def _apply_validated_auto_adjust_pipeline(
-    postprocessed_input, auto_adjust_output, imagemagick_command, auto_adjust_options
+    image_rgb_float,
+    imageio_module,
+    np_module,
+    temp_dir,
+    imagemagick_command,
+    auto_adjust_options,
 ):
-    """@brief Execute validated auto-adjust pipeline over temporary lossless 16-bit TIFF files.
+    """@brief Execute validated ImageMagick auto-adjust pipeline on RGB float input.
 
-    @details Uses ImageMagick to normalize source data to 16-bit-per-channel TIFF,
-    applies deterministic denoise/level/sigmoidal/vibrance/high-pass overlay
-    stages parameterized by shared auto-adjust knobs, and writes lossless
-    auto-adjust output artifact consumed by JPG encoder.
-    @param postprocessed_input {Path} Temporary postprocess image input path.
-    @param auto_adjust_output {Path} Temporary auto-adjust output TIFF path.
+    @details Serializes the normalized RGB float input to one local 16-bit TIFF,
+    applies deterministic ImageMagick denoise/level/sigmoidal/vibrance/
+    high-pass overlay stages parameterized by the shared knobs, and re-loads
+    the produced TIFF as normalized RGB float output.
+    @param image_rgb_float {object} RGB float tensor.
+    @param imageio_module {ModuleType} Imported imageio module with `imread` and `imwrite`.
+    @param np_module {ModuleType} Imported numpy module.
+    @param temp_dir {Path} Temporary workspace for auto-adjust artifacts.
     @param imagemagick_command {str} Resolved ImageMagick executable token.
     @param auto_adjust_options {AutoAdjustOptions} Shared auto-adjust knob values.
-    @return {None} Side effects only.
+    @return {object} RGB float tensor after ImageMagick auto-adjust.
     @exception subprocess.CalledProcessError Raised when ImageMagick returns non-zero.
-    @satisfies REQ-073, REQ-077, REQ-086
+    @satisfies REQ-051, REQ-106
     """
 
-    auto_adjust_input_16 = auto_adjust_output.parent / "auto_adjust_input_16.tif"
-    to_16_bit_command = [
-        imagemagick_command,
-        str(postprocessed_input),
-        "-colorspace",
-        "sRGB",
-        "-depth",
-        "16",
-        "-compress",
-        "LZW",
-        str(auto_adjust_input_16),
-    ]
-    subprocess.run(to_16_bit_command, check=True)
+    auto_adjust_input_16 = temp_dir / "auto_adjust_input_16.tif"
+    auto_adjust_output = temp_dir / "auto_adjust_output.tif"
+    _write_rgb_float_tiff16(
+        imageio_module=imageio_module,
+        np_module=np_module,
+        output_path=auto_adjust_input_16,
+        image_rgb_float=image_rgb_float,
+    )
 
     auto_adjust_command = [
         imagemagick_command,
@@ -6350,6 +6552,10 @@ def _apply_validated_auto_adjust_pipeline(
         str(auto_adjust_output),
     ]
     subprocess.run(auto_adjust_command, check=True)
+    return _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=imageio_module.imread(str(auto_adjust_output)),
+    )
 
 
 def _clamp01(np_module, values):
@@ -6682,49 +6888,29 @@ def _overlay_composite(np_module, base_rgb, overlay_gray):
 
 
 def _apply_validated_auto_adjust_pipeline_opencv(
-    input_file, output_file, cv2_module, np_module, auto_adjust_options
+    image_rgb_float,
+    cv2_module,
+    np_module,
+    auto_adjust_options,
 ):
     """@brief Execute validated auto-adjust pipeline using OpenCV and numpy.
 
-    @details Reads RGB image payload and enforces deterministic auto-adjust input
-    normalization: `uint8` inputs are promoted to `uint16` using `value*257`,
-    then explicit 16-bit-to-float normalization is applied. Executes selective
-    blur, adaptive levels, sigmoidal contrast, HSL saturation gamma,
-    high-pass/overlay stages, then restores float payload to 16-bit-per-channel
-    RGB TIFF output, parameterized by shared auto-adjust knobs.
-    @param input_file {Path} Source TIFF path.
-    @param output_file {Path} Output TIFF path.
+    @details Accepts one normalized RGB float image, executes selective blur,
+    adaptive levels, sigmoidal contrast, HSL saturation gamma, and
+    high-pass/overlay stages entirely in float domain, and returns normalized
+    RGB float output without any file round-trip.
+    @param image_rgb_float {object} RGB float tensor.
     @param cv2_module {ModuleType} Imported cv2 module.
     @param np_module {ModuleType} Imported numpy module.
     @param auto_adjust_options {AutoAdjustOptions} Shared auto-adjust knob values.
-    @return {None} Side effects only.
-    @exception OSError Raised when source file is missing.
-    @exception RuntimeError Raised when OpenCV read/write fails or input dtype is unsupported.
-    @satisfies REQ-073, REQ-075, REQ-077, REQ-087
+    @return {object} RGB float tensor after OpenCV auto-adjust.
+    @satisfies REQ-051, REQ-075, REQ-106
     """
 
-    if not input_file.exists():
-        raise OSError(f"OpenCV auto-adjust input file not found: {input_file}")
-    image_bgr = cv2_module.imread(str(input_file), cv2_module.IMREAD_UNCHANGED)
-    if image_bgr is None:
-        raise RuntimeError(f"OpenCV failed to read auto-adjust input: {input_file}")
-    if len(image_bgr.shape) != 3 or image_bgr.shape[2] != 3:
-        raise RuntimeError(
-            f"OpenCV auto-adjust input must be 3-channel image: {input_file}"
-        )
-    dtype_name = str(getattr(image_bgr, "dtype", ""))
-    if dtype_name == "uint8":
-        image_bgr = (image_bgr.astype(np_module.uint16) * 257).astype(np_module.uint16)
-    elif dtype_name != "uint16":
-        raise RuntimeError(
-            f"OpenCV auto-adjust input must be uint16 image: {input_file}"
-        )
-    rgb_float = (
-        cv2_module.cvtColor(image_bgr, cv2_module.COLOR_BGR2RGB).astype(
-            np_module.float64
-        )
-        / 65535.0
-    )
+    rgb_float = _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=image_rgb_float,
+    ).astype(np_module.float64)
     rgb_float = _selective_blur_contrast_gated_vectorized(
         np_module,
         rgb_float,
@@ -6753,12 +6939,7 @@ def _apply_validated_auto_adjust_pipeline_opencv(
         blur_sigma=auto_adjust_options.highpass_blur_sigma,
     )
     rgb_float = _overlay_composite(np_module, rgb_float, high_pass_gray)
-    output_rgb_u16 = np_module.clip(
-        np_module.round(rgb_float * 65535.0), 0, 65535
-    ).astype(np_module.uint16)
-    output_bgr_u16 = cv2_module.cvtColor(output_rgb_u16, cv2_module.COLOR_RGB2BGR)
-    if not cv2_module.imwrite(str(output_file), output_bgr_u16):
-        raise RuntimeError(f"OpenCV failed to write auto-adjust output: {output_file}")
+    return np_module.clip(rgb_float, 0.0, 1.0).astype(np_module.float32)
 
 
 def _load_piexif_dependency():
@@ -6782,7 +6963,7 @@ def _load_piexif_dependency():
 def _encode_jpg(
     imageio_module,
     pil_image_module,
-    merged_tiff,
+    merged_image_float,
     output_jpg,
     postprocess_options,
     imagemagick_command=None,
@@ -6791,35 +6972,30 @@ def _encode_jpg(
     piexif_module=None,
     source_exif_payload=None,
     source_orientation=1,
-    ev_zero=0.0,
 ):
-    """@brief Encode merged HDR TIFF payload into final JPG output.
+    """@brief Encode merged HDR float payload into final JPG output.
 
-    @details Loads merged image payload, normalizes to RGB uint16 tensor, executes
-    optional original-order auto-brightness stage, optional auto-levels stage,
-    static post-gamma/brightness/contrast/saturation chain in uint16
-    precision, optional auto-adjust stage over temporary 16-bit TIFF
-    intermediates, then performs one final uint16-to-uint8 conversion
-    immediately before JPEG save.
+    @details Accepts one normalized RGB float image from the selected merge
+    backend, executes optional original-order auto-brightness stage, optional
+    auto-levels stage, static post-gamma/brightness/contrast/saturation stage,
+    optional auto-adjust stage, and then performs exactly one float-to-uint8
+    conversion immediately before JPEG save.
     @param imageio_module {ModuleType} Imported imageio module with `imread` and `imwrite`.
     @param pil_image_module {ModuleType} Imported Pillow image module.
-    @param merged_tiff {Path} Merged TIFF source path produced by selected backend.
+    @param merged_image_float {object} Merged RGB float image produced by selected backend.
     @param output_jpg {Path} Final JPG output path.
     @param postprocess_options {PostprocessOptions} Shared TIFF-to-JPG correction settings.
     @param imagemagick_command {str|None} Optional pre-resolved ImageMagick executable.
     @param auto_adjust_opencv_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` modules for OpenCV auto-adjust implementations.
-    @param numpy_module {ModuleType|None} Optional numpy module for uint16-domain stages.
+    @param numpy_module {ModuleType|None} Optional numpy module for float-domain stages.
     @param piexif_module {ModuleType|None} Optional piexif module for EXIF thumbnail refresh.
     @param source_exif_payload {bytes|None} Serialized EXIF payload copied from input DNG.
     @param source_orientation {int} Source EXIF orientation value in range `1..8`.
-    @param ev_zero {float} Selected EV center used for extraction and merge reference.
     @return {None} Side effects only.
     @exception RuntimeError Raised when numpy or auto-adjust mode dependencies are missing or auto-adjust mode value is unsupported.
-    @satisfies REQ-012, REQ-013, REQ-050, REQ-058, REQ-066, REQ-069, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-086, REQ-087, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-106, REQ-123
+    @satisfies REQ-012, REQ-013, REQ-050, REQ-069, REQ-073, REQ-074, REQ-075, REQ-078, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-106, REQ-123
     """
 
-    del ev_zero
-    merged_data = imageio_module.imread(str(merged_tiff))
     if numpy_module is not None:
         np_module = numpy_module
     elif auto_adjust_opencv_dependencies is not None:
@@ -6831,9 +7007,9 @@ def _encode_jpg(
         except ModuleNotFoundError as exc:
             raise RuntimeError("Missing required dependency: numpy") from exc
 
-    image_rgb_uint16 = _normalize_uint16_rgb_image(
+    image_rgb_float = _normalize_float_rgb_image(
         np_module=np_module,
-        image_data=merged_data,
+        image_data=merged_image_float,
     )
     if postprocess_options.auto_brightness_enabled:
         cv2_module = None
@@ -6846,22 +7022,22 @@ def _encode_jpg(
                     import cv2 as cv2_module  # type: ignore
                 except ModuleNotFoundError as exc:
                     raise RuntimeError("Missing required dependency: opencv-python") from exc
-        image_rgb_uint16 = _apply_auto_brightness_rgb_uint16(
+        image_rgb_float = _apply_auto_brightness_rgb_float(
             np_module=np_module,
-            image_rgb_uint16=image_rgb_uint16,
+            image_rgb_float=image_rgb_float,
             auto_brightness_options=postprocess_options.auto_brightness_options,
             cv2_module=cv2_module,
         )
     if postprocess_options.auto_levels_enabled:
-        image_rgb_uint16 = _apply_auto_levels_uint16(
+        image_rgb_float = _apply_auto_levels_float(
             np_module=np_module,
-            image_rgb_uint16=image_rgb_uint16,
+            image_rgb_float=image_rgb_float,
             auto_levels_options=postprocess_options.auto_levels_options,
         )
 
-    image_rgb_uint16 = _apply_static_postprocess_uint16(
+    image_rgb_float = _apply_static_postprocess_float(
         np_module=np_module,
-        image_rgb_uint16=image_rgb_uint16,
+        image_rgb_float=image_rgb_float,
         postprocess_options=postprocess_options,
     )
 
@@ -6870,9 +7046,6 @@ def _encode_jpg(
             prefix="dng2jpg-auto-adjust-"
         ) as auto_adjust_temp_dir_raw:
             auto_adjust_temp_dir = Path(auto_adjust_temp_dir_raw)
-            postprocessed_input = auto_adjust_temp_dir / "postprocessed_input.tif"
-            auto_adjust_output = auto_adjust_temp_dir / "auto_adjust_output.tif"
-            imageio_module.imwrite(str(postprocessed_input), image_rgb_uint16)
             if postprocess_options.auto_adjust_mode == "ImageMagick":
                 if imagemagick_command is None:
                     imagemagick_command = _resolve_imagemagick_command()
@@ -6880,9 +7053,11 @@ def _encode_jpg(
                     raise RuntimeError(
                         "Missing required dependency: ImageMagick executable (magick or convert)"
                     )
-                _apply_validated_auto_adjust_pipeline(
-                    postprocessed_input=postprocessed_input,
-                    auto_adjust_output=auto_adjust_output,
+                image_rgb_float = _apply_validated_auto_adjust_pipeline(
+                    image_rgb_float=image_rgb_float,
+                    imageio_module=imageio_module,
+                    np_module=np_module,
+                    temp_dir=auto_adjust_temp_dir,
                     imagemagick_command=imagemagick_command,
                     auto_adjust_options=postprocess_options.auto_adjust_options,
                 )
@@ -6892,9 +7067,8 @@ def _encode_jpg(
                         "Missing required dependencies: opencv-python and numpy"
                     )
                 cv2_module, np_module = auto_adjust_opencv_dependencies
-                _apply_validated_auto_adjust_pipeline_opencv(
-                    input_file=postprocessed_input,
-                    output_file=auto_adjust_output,
+                image_rgb_float = _apply_validated_auto_adjust_pipeline_opencv(
+                    image_rgb_float=image_rgb_float,
                     cv2_module=cv2_module,
                     np_module=np_module,
                     auto_adjust_options=postprocess_options.auto_adjust_options,
@@ -6903,12 +7077,8 @@ def _encode_jpg(
                 raise RuntimeError(
                     f"Unsupported auto-adjust mode: {postprocess_options.auto_adjust_mode}"
                 )
-            image_rgb_uint16 = _normalize_uint16_rgb_image(
-                np_module=np_module,
-                image_data=imageio_module.imread(str(auto_adjust_output)),
-            )
 
-    image_rgb_uint8 = _to_uint8_image_array(np_module=np_module, image_data=image_rgb_uint16)
+    image_rgb_uint8 = _to_uint8_image_array(np_module=np_module, image_data=image_rgb_float)
     pil_image = pil_image_module.fromarray(image_rgb_uint8)
     if getattr(pil_image, "mode", "") != "RGB":
         pil_image = pil_image.convert("RGB")
@@ -6988,13 +7158,14 @@ def run(args):
     @details Parses command options, validates dependencies, detects source DNG
     bits-per-color from RAW metadata, resolves manual or automatic EV-zero center,
     resolves static or adaptive EV selector around resolved center using
-    bit-derived EV ceilings, extracts three RAW brackets, executes selected
-    `enfuse`, selected luminance-hdr-cli, selected OpenCV Mertens+Debevec, or
-    selected HDR+ tile merge flow, writes JPG output, and guarantees temporary
-    artifact cleanup through isolated temporary directory lifecycle.
+    bit-derived EV ceilings, extracts three normalized RGB float brackets,
+    executes the selected HDR backend with float input/output interfaces,
+    executes the float-interface post-merge pipeline, writes the final JPG, and
+    guarantees temporary artifact cleanup through isolated temporary directory
+    lifecycle.
     @param args {list[str]} Command argument vector excluding command token.
     @return {int} `0` on success; `1` on parse/validation/dependency/processing failure.
-    @satisfies REQ-055, REQ-056, REQ-057, REQ-058, REQ-059, REQ-060, REQ-061, REQ-062, REQ-064, REQ-065, REQ-066, REQ-067, REQ-068, REQ-069, REQ-071, REQ-072, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-079, REQ-080, REQ-081, REQ-088, REQ-089, REQ-090, REQ-091, REQ-092, REQ-093, REQ-094, REQ-095, REQ-096, REQ-097, REQ-098, REQ-100, REQ-101, REQ-102, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-127, REQ-128, REQ-131
+    @satisfies PRJ-001, CTN-001, CTN-004, CTN-005, REQ-010, REQ-011, REQ-012, REQ-013, REQ-014, REQ-015, REQ-050, REQ-052, REQ-100, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-127, REQ-128, REQ-129, REQ-131
     """
 
     if not _is_supported_runtime_os():
@@ -7046,15 +7217,9 @@ def run(args):
             return 1
     imagemagick_command = None
     auto_adjust_opencv_dependencies = None
-    numpy_module = None
-    if (
-        postprocess_options.auto_brightness_enabled
-        or postprocess_options.auto_levels_enabled
-        or enable_hdr_plus
-    ):
-        numpy_module = _resolve_numpy_dependency()
-        if numpy_module is None:
-            return 1
+    numpy_module = _resolve_numpy_dependency()
+    if numpy_module is None:
+        return 1
     if postprocess_options.auto_adjust_mode == "OpenCV" or enable_opencv:
         auto_adjust_opencv_dependencies = _resolve_auto_adjust_opencv_dependencies()
         if auto_adjust_opencv_dependencies is None:
@@ -7165,7 +7330,6 @@ def run(args):
 
     with tempfile.TemporaryDirectory(prefix="dng2jpg-") as temp_dir_raw:
         temp_dir = Path(temp_dir_raw)
-        merged_tiff = temp_dir / "merged_hdr.tif"
 
         try:
             with rawpy_module.imread(str(input_dng)) as raw_handle:
@@ -7226,46 +7390,47 @@ def run(args):
                 multipliers = _build_exposure_multipliers(
                     effective_ev_value, ev_zero=resolved_ev_zero
                 )
-                bracket_paths = _write_bracket_images(
+                bracket_images_float = _extract_bracket_images_float(
                     raw_handle=raw_handle,
-                    imageio_module=imageio_module,
+                    np_module=numpy_module,
                     multipliers=multipliers,
                     gamma_value=gamma_value,
-                    temp_dir=temp_dir,
                 )
             if enable_luminance:
-                _run_luminance_hdr_cli(
-                    bracket_paths=bracket_paths,
-                    output_hdr_tiff=merged_tiff,
+                merged_image_float = _run_luminance_hdr_cli(
+                    bracket_images_float=bracket_images_float,
+                    temp_dir=temp_dir,
+                    imageio_module=imageio_module,
+                    np_module=numpy_module,
                     ev_value=effective_ev_value,
                     ev_zero=resolved_ev_zero,
                     luminance_options=luminance_options,
                 )
             elif enable_opencv:
-                _run_opencv_hdr_merge(
-                    bracket_paths=bracket_paths,
-                    output_hdr_tiff=merged_tiff,
+                merged_image_float = _run_opencv_hdr_merge(
+                    bracket_images_float=bracket_images_float,
                     ev_value=effective_ev_value,
                     ev_zero=resolved_ev_zero,
                     opencv_merge_options=opencv_merge_options,
                     auto_adjust_opencv_dependencies=auto_adjust_opencv_dependencies,
                 )
             elif enable_hdr_plus:
-                if numpy_module is None:
-                    raise RuntimeError("Missing required dependency: numpy")
-                _run_hdr_plus_merge(
-                    bracket_paths=bracket_paths,
-                    output_hdr_tiff=merged_tiff,
-                    imageio_module=imageio_module,
+                merged_image_float = _run_hdr_plus_merge(
+                    bracket_images_float=bracket_images_float,
                     np_module=numpy_module,
                     hdrplus_options=hdrplus_options,
                 )
             else:
-                _run_enfuse(bracket_paths=bracket_paths, merged_tiff=merged_tiff)
+                merged_image_float = _run_enfuse(
+                    bracket_images_float=bracket_images_float,
+                    temp_dir=temp_dir,
+                    imageio_module=imageio_module,
+                    np_module=numpy_module,
+                )
             _encode_jpg(
                 imageio_module=imageio_module,
                 pil_image_module=pil_image_module,
-                merged_tiff=merged_tiff,
+                merged_image_float=merged_image_float,
                 output_jpg=output_jpg,
                 postprocess_options=postprocess_options,
                 imagemagick_command=imagemagick_command,
@@ -7274,7 +7439,6 @@ def run(args):
                 piexif_module=piexif_module,
                 source_exif_payload=source_exif_payload,
                 source_orientation=source_orientation,
-                ev_zero=resolved_ev_zero,
             )
             _sync_output_file_timestamps_from_exif(
                 output_jpg=output_jpg,

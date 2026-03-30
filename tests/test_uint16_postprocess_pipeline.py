@@ -206,38 +206,40 @@ def test_apply_brightness_uint16_keeps_16bit_gradation_without_u8_lift() -> None
     assert np.any(output % 257 != 0), "Detected unexpected uint8->uint16 lift quantization"
 
 
-def test_apply_static_postprocess_uint16_does_not_call_uint8_conversion(monkeypatch) -> None:
-    """Static postprocess stages must stay fully in uint16 domain."""
+def test_apply_static_postprocess_float_does_not_call_uint8_conversion(monkeypatch) -> None:
+    """Static postprocess stage must keep float interfaces and avoid uint8 conversion."""
 
-    image_rgb_uint16 = np.array(
+    image_rgb_float = np.array(
         [[[4096, 8192, 16384], [11111, 22222, 33333]]],
-        dtype=np.uint16,
-    )
+        dtype=np.float32,
+    ) / 65535.0
 
     def _fail_uint8_conversion(**_kwargs):
         raise AssertionError("Static postprocess called _to_uint8_image_array unexpectedly")
 
     monkeypatch.setattr(dng2jpg_module, "_to_uint8_image_array", _fail_uint8_conversion)
-    output = dng2jpg_module._apply_static_postprocess_uint16(  # pylint: disable=protected-access
+    output = dng2jpg_module._apply_static_postprocess_float(  # pylint: disable=protected-access
         np_module=np,
-        image_rgb_uint16=image_rgb_uint16,
+        image_rgb_float=image_rgb_float,
         postprocess_options=_build_postprocess_options(),
     )
-    assert output.dtype == np.uint16
-    assert output.shape == image_rgb_uint16.shape
+    assert output.dtype == np.float32
+    assert output.shape == image_rgb_float.shape
 
 
 def test_encode_jpg_quantizes_once_at_final_boundary(monkeypatch, tmp_path) -> None:
-    """`_encode_jpg` must call uint16->uint8 conversion exactly once at JPEG boundary."""
+    """`_encode_jpg` must call float->uint8 conversion exactly once at JPEG boundary."""
 
-    merged_rgb_uint16 = np.array(
+    merged_rgb_float = np.array(
         [
             [[1000, 2000, 3000], [12000, 22000, 32000]],
             [[40000, 50000, 60000], [65535, 30000, 10000]],
         ],
-        dtype=np.uint16,
+        dtype=np.float32,
+    ) / 65535.0
+    imageio_module = _FakeImageIoModule(
+        merged_rgb_u16=(merged_rgb_float * 65535.0).astype(np.uint16)
     )
-    imageio_module = _FakeImageIoModule(merged_rgb_u16=merged_rgb_uint16)
     pil_module = _FakePilModule()
     call_trace: list[str] = []
 
@@ -245,27 +247,27 @@ def test_encode_jpg_quantizes_once_at_final_boundary(monkeypatch, tmp_path) -> N
 
     def _tracked_to_uint8(*, np_module, image_data):
         call_trace.append("to_uint8")
-        assert image_data.dtype == np.uint16
+        assert image_data.dtype == np.float32
         return original_to_uint8(np_module=np_module, image_data=image_data)
 
-    original_static = dng2jpg_module._apply_static_postprocess_uint16  # pylint: disable=protected-access
+    original_static = dng2jpg_module._apply_static_postprocess_float  # pylint: disable=protected-access
 
-    def _tracked_static(*, np_module, image_rgb_uint16, postprocess_options):
+    def _tracked_static(*, np_module, image_rgb_float, postprocess_options):
         call_trace.append("static")
-        assert image_rgb_uint16.dtype == np.uint16
+        assert image_rgb_float.dtype == np.float32
         return original_static(
             np_module=np_module,
-            image_rgb_uint16=image_rgb_uint16,
+            image_rgb_float=image_rgb_float,
             postprocess_options=postprocess_options,
         )
 
     monkeypatch.setattr(dng2jpg_module, "_to_uint8_image_array", _tracked_to_uint8)
-    monkeypatch.setattr(dng2jpg_module, "_apply_static_postprocess_uint16", _tracked_static)
+    monkeypatch.setattr(dng2jpg_module, "_apply_static_postprocess_float", _tracked_static)
 
     dng2jpg_module._encode_jpg(  # pylint: disable=protected-access
         imageio_module=imageio_module,
         pil_image_module=pil_module,
-        merged_tiff=tmp_path / "merged.tif",
+        merged_image_float=merged_rgb_float,
         output_jpg=tmp_path / "out.jpg",
         postprocess_options=_build_postprocess_options(),
         numpy_module=np,
@@ -364,13 +366,13 @@ def test_analyze_luminance_key_uses_original_thresholds_and_auto_boost_rules() -
     np.testing.assert_allclose(attenuated, 0.288, rtol=1e-12)
 
 
-def test_apply_auto_brightness_rgb_uint16_executes_original_stage_order(
+def test_apply_auto_brightness_rgb_float_executes_original_stage_order(
     monkeypatch,
 ) -> None:
-    """Auto-brightness must keep the original stage order inside the uint16 port."""
+    """Auto-brightness must keep the original stage order on float interfaces."""
 
     call_trace: list[str] = []
-    image_rgb_uint16 = np.array([[[1024, 2048, 4096]]], dtype=np.uint16)
+    image_rgb_float = np.array([[[1024, 2048, 4096]]], dtype=np.float32) / 65535.0
     fake_cv2 = _FakeOpenCvModule()
 
     def _fake_to_linear(*, np_module, image_srgb):
@@ -438,9 +440,9 @@ def test_apply_auto_brightness_rgb_uint16_executes_original_stage_order(
         _fake_local_contrast,
     )
 
-    output = dng2jpg_module._apply_auto_brightness_rgb_uint16(  # pylint: disable=protected-access
+    output = dng2jpg_module._apply_auto_brightness_rgb_float(  # pylint: disable=protected-access
         np_module=np,
-        image_rgb_uint16=image_rgb_uint16,
+        image_rgb_float=image_rgb_float,
         auto_brightness_options=dng2jpg_module.AutoBrightnessOptions(
             enable_mild_local_contrast=True,
             local_contrast_strength=0.2,
@@ -449,7 +451,7 @@ def test_apply_auto_brightness_rgb_uint16_executes_original_stage_order(
         cv2_module=fake_cv2,
     )
 
-    assert output.dtype == np.uint16
+    assert output.dtype == np.float32
     assert call_trace == [
         "to_linear",
         "compute_luminance",
@@ -523,34 +525,20 @@ def test_build_ev_times_from_ev_zero_and_delta_matches_bracket_sequence() -> Non
     )
 
 
-def test_run_opencv_hdr_merge_normalizes_mertens_inputs_to_unit_float32(tmp_path) -> None:
-    """OpenCV merge must feed Mertens with [0,1] float32 images from uint16 brackets."""
+def test_run_opencv_hdr_merge_normalizes_mertens_inputs_to_unit_float32() -> None:
+    """OpenCV merge must feed Mertens with [0,1] float32 images from float brackets."""
 
     fake_cv2 = _FakeOpenCvModule()
-    bracket_paths = [
-        tmp_path / "ev_minus.tif",
-        tmp_path / "ev_zero.tif",
-        tmp_path / "ev_plus.tif",
+    bracket_images_float = [
+        np.array([[[2048, 1024, 0], [8192, 4096, 3072]]], dtype=np.float32) / 65535.0,
+        np.array([[[36000, 24000, 12000], [3000, 2000, 1000]]], dtype=np.float32)
+        / 65535.0,
+        np.array([[[50000, 60000, 65535], [20000, 30000, 40000]]], dtype=np.float32)
+        / 65535.0,
     ]
-    minus_bgr = np.array(
-        [[[0, 1024, 2048], [3072, 4096, 8192]]],
-        dtype=np.uint16,
-    )
-    zero_bgr = np.array(
-        [[[12000, 24000, 36000], [1000, 2000, 3000]]],
-        dtype=np.uint16,
-    )
-    plus_bgr = np.array(
-        [[[65535, 60000, 50000], [40000, 30000, 20000]]],
-        dtype=np.uint16,
-    )
-    fake_cv2.register_image(bracket_paths[0], minus_bgr)
-    fake_cv2.register_image(bracket_paths[1], zero_bgr)
-    fake_cv2.register_image(bracket_paths[2], plus_bgr)
 
-    dng2jpg_module._run_opencv_hdr_merge(  # pylint: disable=protected-access
-        bracket_paths=bracket_paths,
-        output_hdr_tiff=tmp_path / "merged_hdr.tif",
+    output = dng2jpg_module._run_opencv_hdr_merge(  # pylint: disable=protected-access
+        bracket_images_float=bracket_images_float,
         ev_value=1.0,
         ev_zero=0.0,
         opencv_merge_options=dng2jpg_module.OpenCvMergeOptions(),
@@ -569,8 +557,9 @@ def test_run_opencv_hdr_merge_normalizes_mertens_inputs_to_unit_float32(tmp_path
     assert all(
         frame.dtype == np.uint16 for frame in fake_cv2.merge_debevec.last_inputs
     ), "Debevec input must remain uint16 for HDR radiance estimation"
-    assert fake_cv2.written_image is not None
-    assert fake_cv2.written_image.dtype == np.uint16
+    assert output.dtype == np.float32
+    assert float(np.min(output)) >= 0.0
+    assert float(np.max(output)) <= 1.0
 
 
 def test_normalize_debevec_hdr_to_unit_range_clamps_to_valid_interval() -> None:
@@ -689,11 +678,11 @@ def test_compute_auto_levels_from_histogram_matches_rawtherapee_reference() -> N
 def test_apply_auto_levels_clip_out_of_gamut_normalizes_triplet(monkeypatch) -> None:
     """Out-of-gamut clipping must preserve channel ratios instead of hard clipping."""
 
-    image_rgb_uint16 = np.array([[[40000, 30000, 20000]]], dtype=np.uint16)
+    image_rgb_float = np.array([[[40000, 30000, 20000]]], dtype=np.float32) / 65535.0
 
     monkeypatch.setattr(
         dng2jpg_module,
-        "_build_autoexp_histogram_rgb_uint16",
+        "_build_autoexp_histogram_rgb_float",
         lambda **_kwargs: np.zeros(1, dtype=np.uint64),
     )
     monkeypatch.setattr(
@@ -702,37 +691,47 @@ def test_apply_auto_levels_clip_out_of_gamut_normalizes_triplet(monkeypatch) -> 
         lambda **_kwargs: {"gain": 2.0},
     )
 
-    disabled = dng2jpg_module._apply_auto_levels_uint16(  # pylint: disable=protected-access
+    disabled = dng2jpg_module._apply_auto_levels_float(  # pylint: disable=protected-access
         np_module=np,
-        image_rgb_uint16=image_rgb_uint16,
+        image_rgb_float=image_rgb_float,
         auto_levels_options=dng2jpg_module.AutoLevelsOptions(
             clip_out_of_gamut=False,
         ),
     )
-    enabled = dng2jpg_module._apply_auto_levels_uint16(  # pylint: disable=protected-access
+    enabled = dng2jpg_module._apply_auto_levels_float(  # pylint: disable=protected-access
         np_module=np,
-        image_rgb_uint16=image_rgb_uint16,
+        image_rgb_float=image_rgb_float,
         auto_levels_options=dng2jpg_module.AutoLevelsOptions(
             clip_out_of_gamut=True,
         ),
     )
 
-    np.testing.assert_array_equal(disabled, np.array([[[65535, 60000, 40000]]], dtype=np.uint16))
-    np.testing.assert_array_equal(enabled, np.array([[[65535, 49151, 32768]]], dtype=np.uint16))
+    np.testing.assert_allclose(
+        disabled,
+        np.array([[[65535, 60000, 40000]]], dtype=np.float32) / 65535.0,
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        enabled,
+        np.array([[[1.0, 0.75, 0.5]]], dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
 
 
-def test_apply_auto_levels_color_methods_preserve_uint16_pipeline(monkeypatch) -> None:
-    """New method selectors must dispatch on float internals and preserve uint16 output."""
+def test_apply_auto_levels_color_methods_preserve_float_pipeline(monkeypatch) -> None:
+    """New method selectors must dispatch on float internals and preserve float output."""
 
-    image_rgb_uint16 = np.array(
-        [[[1000, 2000, 3000], [4000, 5000, 6000]]],
-        dtype=np.uint16,
+    image_rgb_float = (
+        np.array([[[1000, 2000, 3000], [4000, 5000, 6000]]], dtype=np.float32)
+        / 65535.0
     )
     call_trace: list[tuple[str, float | None]] = []
 
     monkeypatch.setattr(
         dng2jpg_module,
-        "_build_autoexp_histogram_rgb_uint16",
+        "_build_autoexp_histogram_rgb_float",
         lambda **_kwargs: np.zeros(1, dtype=np.uint64),
     )
     monkeypatch.setattr(
@@ -764,18 +763,18 @@ def test_apply_auto_levels_color_methods_preserve_uint16_pipeline(monkeypatch) -
         _fake_inpaint_opposed,
     )
 
-    color_output = dng2jpg_module._apply_auto_levels_uint16(  # pylint: disable=protected-access
+    color_output = dng2jpg_module._apply_auto_levels_float(  # pylint: disable=protected-access
         np_module=np,
-        image_rgb_uint16=image_rgb_uint16,
+        image_rgb_float=image_rgb_float,
         auto_levels_options=dng2jpg_module.AutoLevelsOptions(
             highlight_reconstruction_enabled=True,
             highlight_reconstruction_method="Color Propagation",
             clip_out_of_gamut=False,
         ),
     )
-    inpaint_output = dng2jpg_module._apply_auto_levels_uint16(  # pylint: disable=protected-access
+    inpaint_output = dng2jpg_module._apply_auto_levels_float(  # pylint: disable=protected-access
         np_module=np,
-        image_rgb_uint16=image_rgb_uint16,
+        image_rgb_float=image_rgb_float,
         auto_levels_options=dng2jpg_module.AutoLevelsOptions(
             highlight_reconstruction_enabled=True,
             highlight_reconstruction_method="Inpaint Opposed",
@@ -784,15 +783,21 @@ def test_apply_auto_levels_color_methods_preserve_uint16_pipeline(monkeypatch) -
         ),
     )
 
-    assert color_output.dtype == np.uint16
-    assert inpaint_output.dtype == np.uint16
-    np.testing.assert_array_equal(
+    assert color_output.dtype == np.float32
+    assert inpaint_output.dtype == np.float32
+    np.testing.assert_allclose(
         color_output,
-        np.array([[[1100, 2100, 3100], [4100, 5100, 6100]]], dtype=np.uint16),
+        np.array([[[1100, 2100, 3100], [4100, 5100, 6100]]], dtype=np.float32)
+        / 65535.0,
+        rtol=1e-6,
+        atol=1e-6,
     )
-    np.testing.assert_array_equal(
+    np.testing.assert_allclose(
         inpaint_output,
-        np.array([[[1200, 2200, 3200], [4200, 5200, 6200]]], dtype=np.uint16),
+        np.array([[[1200, 2200, 3200], [4200, 5200, 6200]]], dtype=np.float32)
+        / 65535.0,
+        rtol=1e-6,
+        atol=1e-6,
     )
     assert call_trace == [
         ("Color Propagation", None),
@@ -985,23 +990,13 @@ def test_hdrplus_temporal_merge_uses_alignment_offsets() -> None:
     assert aligned_error < zero_error
 
 
-def test_run_hdr_plus_merge_preserves_float_internal_and_uint16_io(
-    monkeypatch,
-    tmp_path,
-) -> None:
-    """HDR+ merge must keep float intermediates while preserving uint16 image boundaries."""
+def test_run_hdr_plus_merge_preserves_float_internal_and_float_io(monkeypatch) -> None:
+    """HDR+ merge must keep float intermediates while preserving float image boundaries."""
 
-    imageio_module = _FakePathImageIoModule()
-    bracket_paths = [
-        tmp_path / "ev_minus.tif",
-        tmp_path / "ev_zero.tif",
-        tmp_path / "ev_plus.tif",
+    bracket_images_float = [
+        np.full((32, 32, 3), 1000 + (offset * 500), dtype=np.float32) / 65535.0
+        for offset in range(3)
     ]
-    for offset, path in enumerate(bracket_paths):
-        imageio_module.register_image(
-            path,
-            np.full((32, 32, 3), 1000 + (offset * 500), dtype=np.uint16),
-        )
 
     call_trace: list[str] = []
 
@@ -1066,16 +1061,14 @@ def test_run_hdr_plus_merge_preserves_float_internal_and_uint16_io(
         _fake_merge_spatial_rgb,
     )
 
-    dng2jpg_module._run_hdr_plus_merge(  # pylint: disable=protected-access
-        bracket_paths=bracket_paths,
-        output_hdr_tiff=tmp_path / "merged_hdr.tif",
-        imageio_module=imageio_module,
+    output_image = dng2jpg_module._run_hdr_plus_merge(  # pylint: disable=protected-access
+        bracket_images_float=bracket_images_float,
         np_module=np,
         hdrplus_options=dng2jpg_module.HdrPlusOptions(),
     )
 
     assert call_trace == ["align", "weights", "merge_temporal", "merge_spatial"]
-    assert imageio_module.writes
-    output_image = imageio_module.writes[-1][1]
-    assert output_image.dtype == np.uint16
+    assert output_image.dtype == np.float32
     assert output_image.shape == (32, 32, 3)
+    assert float(np.min(output_image)) >= 0.0
+    assert float(np.max(output_image)) <= 1.0
