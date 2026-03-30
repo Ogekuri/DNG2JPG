@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 
 import numpy as np
+import pytest
 
 _SRC_PATH = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC_PATH) not in sys.path:
@@ -361,3 +362,219 @@ def test_normalize_debevec_hdr_to_unit_range_clamps_to_valid_interval() -> None:
     assert normalized.shape == hdr_rgb.shape
     assert float(np.min(normalized)) >= 0.0
     assert float(np.max(normalized)) <= 1.0
+
+
+def test_parse_run_options_accepts_auto_levels_boolean_knobs_and_default_method() -> None:
+    """@brief Verify parser handling for RawTherapee-style auto-levels knobs.
+
+    @details Covers the `--auto-levels` coupling rules for boolean knobs,
+    explicit `ClipOOG` disablement, explicit highlight-reconstruction enable,
+    and default method fallback to `Inpaint Opposed`.
+    @return {None} Asserts parser output contracts.
+    @satisfies TST-010
+    """
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        [
+            "input.dng",
+            "output.jpg",
+            "--ev=1",
+            "--enable-opencv",
+            "--auto-levels",
+            "--al-clip-out-of-gamut-colors=0",
+            "--al-highlight-reconstruction",
+        ]
+    )
+    assert parsed is not None
+    postprocess_options = parsed[5]
+    assert postprocess_options.auto_levels_enabled is True
+    assert postprocess_options.auto_levels_options.clip_out_of_gamut_colors is False
+    assert postprocess_options.auto_levels_options.highlight_reconstruction_enabled is True
+    assert (
+        postprocess_options.auto_levels_options.highlight_reconstruction_method
+        == "Inpaint Opposed"
+    )
+
+
+def test_parse_run_options_rejects_invalid_auto_levels_highlight_method() -> None:
+    """@brief Verify parser rejection for unsupported auto-levels methods.
+
+    @details Exercises the allowed-method contract for auto-levels highlight
+    reconstruction and ensures invalid method tokens fail parsing cleanly.
+    @return {None} Asserts parse failure.
+    @satisfies TST-010
+    """
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        [
+            "input.dng",
+            "output.jpg",
+            "--ev=1",
+            "--enable-opencv",
+            "--auto-levels",
+            "--al-highlight-reconstruction-method",
+            "Color propagation",
+        ]
+    )
+    assert parsed is None
+
+
+def test_compute_auto_levels_from_histogram_matches_rawtherapee_fixture() -> None:
+    """@brief Verify deterministic RawTherapee-derived histogram metrics.
+
+    @details Builds a deterministic synthetic histogram and asserts the
+    histogram solver returns stable exposure, black, brightness, contrast, and
+    highlight-compression metrics.
+    @return {None} Asserts exact metric values for the fixture histogram.
+    @satisfies TST-016
+    """
+
+    histogram = np.zeros(65536 >> 3, dtype=np.uint64)
+    histogram[4] = 32
+    histogram[32] = 64
+    histogram[128] = 96
+    histogram[256] = 128
+    histogram[512] = 64
+    histogram[1024] = 16
+    metrics = dng2jpg_module._compute_auto_levels_from_histogram(  # pylint: disable=protected-access
+        np_module=np,
+        histogram=histogram,
+        histcompr=3,
+        clip_percent=0.02,
+    )
+    assert metrics["black"] == 255
+    assert metrics["brightness"] == 0
+    assert metrics["contrast"] == 30
+    assert metrics["hlcompr"] == 100
+    assert metrics["hlcomprthresh"] == 0
+    assert metrics["gain"] == pytest.approx(36.96701470568742, rel=1e-12, abs=1e-12)
+    assert metrics["expcomp"] == pytest.approx(5.208166637379312, rel=1e-12, abs=1e-12)
+
+
+def test_apply_auto_levels_uint16_honors_clip_out_of_gamut_toggle(monkeypatch) -> None:
+    """@brief Verify film-like clipping control for auto-levels output.
+
+    @details Injects deterministic auto-levels metrics that force channel
+    overflow. The enabled path must preserve hue through film-like clipping,
+    while the disabled path falls back to per-channel clamp at the final uint16
+    boundary.
+    @param monkeypatch {pytest.MonkeyPatch} Pytest monkeypatch fixture.
+    @return {None} Asserts differing output behavior under the clipping toggle.
+    @satisfies TST-017
+    """
+
+    auto_levels_metrics = {
+        "expcomp": 1.0,
+        "gain": 2.0,
+        "black": 0,
+        "brightness": 0,
+        "contrast": 0,
+        "hlcompr": 0,
+        "hlcomprthresh": 0,
+        "whiteclip": 0,
+        "rawmax": 0,
+        "shc": 0,
+        "median": 0,
+        "average": 0.0,
+        "overex": 0,
+        "ospread": 0.0,
+    }
+
+    def _fake_compute_auto_levels_from_histogram(**_kwargs):
+        return dict(auto_levels_metrics)
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_compute_auto_levels_from_histogram",
+        _fake_compute_auto_levels_from_histogram,
+    )
+
+    image_rgb_uint16 = np.array(
+        [[[20000, 50000, 65000]]],
+        dtype=np.uint16,
+    )
+    clipped = dng2jpg_module._apply_auto_levels_uint16(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_uint16=image_rgb_uint16,
+        auto_levels_options=dng2jpg_module.AutoLevelsOptions(
+            clip_out_of_gamut_colors=True,
+        ),
+    )
+    unclipped = dng2jpg_module._apply_auto_levels_uint16(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_uint16=image_rgb_uint16,
+        auto_levels_options=dng2jpg_module.AutoLevelsOptions(
+            clip_out_of_gamut_colors=False,
+        ),
+    )
+    assert clipped.dtype == np.uint16
+    assert unclipped.dtype == np.uint16
+    np.testing.assert_array_equal(unclipped[0, 0], np.array([40000, 65535, 65535], dtype=np.uint16))
+    np.testing.assert_array_equal(clipped[0, 0], np.array([40000, 57023, 65535], dtype=np.uint16))
+
+
+def test_apply_auto_levels_uint16_accepts_inpaint_opposed(monkeypatch) -> None:
+    """@brief Verify `Inpaint Opposed` dispatch in the auto-levels stage.
+
+    @details Injects deterministic auto-levels metrics, enables highlight
+    reconstruction with the default RawTherapee-compatible method, and asserts
+    the stage completes with uint16 I/O while modifying the clipped highlight
+    pixel neighborhood.
+    @param monkeypatch {pytest.MonkeyPatch} Pytest monkeypatch fixture.
+    @return {None} Asserts method acceptance and uint16 output.
+    @satisfies TST-017
+    """
+
+    auto_levels_metrics = {
+        "expcomp": 0.0,
+        "gain": 1.0,
+        "black": 0,
+        "brightness": 0,
+        "contrast": 0,
+        "hlcompr": 0,
+        "hlcomprthresh": 0,
+        "whiteclip": 0,
+        "rawmax": 0,
+        "shc": 0,
+        "median": 0,
+        "average": 0.0,
+        "overex": 0,
+        "ospread": 0.0,
+    }
+
+    def _fake_compute_auto_levels_from_histogram(**_kwargs):
+        return dict(auto_levels_metrics)
+
+    def _fake_inpaint_opposed(**kwargs):
+        return kwargs["image_rgb"] + 1.0
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_compute_auto_levels_from_histogram",
+        _fake_compute_auto_levels_from_histogram,
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_hlrecovery_inpaint_opposed_uint16",
+        _fake_inpaint_opposed,
+    )
+
+    image_rgb_uint16 = np.array(
+        [
+            [[10000, 12000, 14000], [15000, 17000, 19000], [22000, 24000, 26000]],
+            [[18000, 20000, 22000], [64000, 62000, 61000], [26000, 28000, 30000]],
+            [[20000, 22000, 24000], [24000, 26000, 28000], [30000, 32000, 34000]],
+        ],
+        dtype=np.uint16,
+    )
+    output = dng2jpg_module._apply_auto_levels_uint16(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_uint16=image_rgb_uint16,
+        auto_levels_options=dng2jpg_module.AutoLevelsOptions(
+            highlight_reconstruction_enabled=True,
+            highlight_reconstruction_method="Inpaint Opposed",
+        ),
+    )
+    assert output.dtype == np.uint16
+    assert output.shape == image_rgb_uint16.shape
+    np.testing.assert_array_equal(output, image_rgb_uint16 + 1)
