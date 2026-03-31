@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """@brief Convert one DNG file into one HDR-merged JPG output.
 
-@details Implements bracketed RAW extraction with three synthetic exposures
-(`ev_zero-ev`, `ev_zero`, `ev_zero+ev`), merges them through selected
-`luminance-hdr-cli`, selected OpenCV (`Debevec`, `Robertson`, `Mertens`), or
-selected HDR+ tile-based flow with deterministic parameters, then writes final
-JPG to user-selected output path. Temporary workspace artifacts are isolated in
-a temporary directory and removed automatically on success and failure, while
-optional debug checkpoints persist in the output directory when `--debug` is
-enabled.
-    @satisfies PRJ-003, DES-008, DES-009, REQ-055, REQ-056, REQ-057, REQ-058, REQ-059, REQ-060, REQ-061, REQ-062, REQ-063, REQ-064, REQ-065, REQ-066, REQ-067, REQ-068, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-079, REQ-080, REQ-081, REQ-088, REQ-089, REQ-090, REQ-091, REQ-092, REQ-093, REQ-094, REQ-095, REQ-096, REQ-097, REQ-098, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-141, REQ-142, REQ-143, REQ-144, REQ-145, REQ-146, REQ-149, REQ-152, REQ-153, REQ-154
+@details Implements single-pass linear RAW extraction with one maximum-
+resolution camera-WB-aware RGB base image, derives three synthetic exposures
+(`ev_zero-ev`, `ev_zero`, `ev_zero+ev`) by NumPy EV scaling, merges them
+through selected `luminance-hdr-cli`, selected OpenCV (`Debevec`,
+`Robertson`, `Mertens`), or selected HDR+ tile-based flow with deterministic
+parameters, then writes final JPG to user-selected output path. Temporary
+workspace artifacts are isolated in a temporary directory and removed
+automatically on success and failure, while optional debug checkpoints persist
+in the output directory when `--debug` is enabled.
+    @satisfies PRJ-003, DES-008, DES-009, REQ-055, REQ-056, REQ-057, REQ-058, REQ-059, REQ-060, REQ-061, REQ-062, REQ-063, REQ-064, REQ-065, REQ-066, REQ-067, REQ-068, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-079, REQ-080, REQ-081, REQ-088, REQ-089, REQ-090, REQ-091, REQ-092, REQ-093, REQ-094, REQ-095, REQ-096, REQ-097, REQ-098, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-141, REQ-142, REQ-143, REQ-144, REQ-145, REQ-146, REQ-149, REQ-152, REQ-153, REQ-154, REQ-157, REQ-158, REQ-159, REQ-160
 """
 
 import os
@@ -843,8 +844,14 @@ def print_help(version):
     )
     _print_help_option(
         "--gamma=<a,b>",
-        f"RAW extraction gamma pair. Both values must be positive. Default: `{DEFAULT_GAMMA[0]},{DEFAULT_GAMMA[1]}`.",
-        ("Example: `--gamma=1,1` for linear extraction.",),
+        (
+            "Compatibility gamma pair option. Both values must be positive; "
+            "HDR bracket extraction remains linear and camera-WB-aware."
+        ),
+        (
+            f"Default: `{DEFAULT_GAMMA[0]},{DEFAULT_GAMMA[1]}`.",
+            "Accepted for CLI compatibility and runtime diagnostics only.",
+        ),
     )
 
     _print_help_section("Step 3 - HDR backend selection and backend-local configuration")
@@ -1627,6 +1634,35 @@ def _extract_normalized_preview_luminance_stats(raw_handle):
     return (p_low, p_median, p_high)
 
 
+def _extract_base_rgb_linear_float(raw_handle, np_module):
+    """@brief Extract one linear normalized RGB base image from one RAW handle.
+
+    @details Executes exactly one `rawpy.postprocess` call with deterministic
+    parameters `bright=1.0`, `output_bps=16`, `use_camera_wb=True`,
+    `no_auto_bright=True`, `gamma=(1.0,1.0)`, and `user_flip=0`, then
+    normalizes the demosaiced maximum-resolution RGB output to float `[0,1]`.
+    Complexity: O(H*W). Side effects: one RAW postprocess invocation.
+    @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
+    @param np_module {ModuleType} Imported numpy module.
+    @return {object} Normalized RGB float tensor in `[0,1]`.
+    @satisfies REQ-010, REQ-158
+    @see _extract_normalized_preview_luminance_stats
+    """
+
+    base_rgb = raw_handle.postprocess(
+        bright=1.0,
+        output_bps=16,
+        use_camera_wb=True,
+        no_auto_bright=True,
+        gamma=(1.0, 1.0),
+        user_flip=0,
+    )
+    return _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=base_rgb,
+    )
+
+
 def _coerce_positive_luminance(value, fallback):
     """@brief Coerce luminance scalar to positive range for logarithmic math.
 
@@ -1925,10 +1961,12 @@ def _parse_gamma_option(gamma_raw):
 
     @details Accepts comma-separated positive float pair in `a,b` format with
     optional surrounding parentheses, normalizes to `(a, b)` tuple, and rejects
-    malformed, non-numeric, or non-positive values.
+    malformed, non-numeric, or non-positive values. Parsed values are retained
+    for CLI compatibility diagnostics and do not alter linear HDR bracket
+    extraction.
     @param gamma_raw {str} Raw gamma token extracted from CLI args.
     @return {tuple[float, float]|None} Parsed gamma tuple when valid; `None` otherwise.
-    @satisfies REQ-064
+    @satisfies REQ-020, REQ-064, REQ-157
     """
 
     gamma_text = gamma_raw.strip()
@@ -2728,7 +2766,8 @@ def _parse_run_options(args):
     optional `--ev-zero=<value>` or `--ev-zero <value>`, optional
     `--auto-zero[=<enable|disable>]`,
     optional `--auto-zero-pct=<0..100>`, optional `--auto-ev-pct=<0..100>`,
-    optional `--gamma=<a,b>` or `--gamma <a,b>`,
+    optional `--gamma=<a,b>` or `--gamma <a,b>` retained for compatibility
+    diagnostics only,
     optional postprocess controls, optional auto-brightness stage and
     `--ab-*` knobs, optional auto-levels stage and `--al-*` knobs,
     optional shared auto-adjust knobs, optional backend selector
@@ -4023,12 +4062,12 @@ def _build_exposure_multipliers(ev_value, ev_zero=0.0):
     """@brief Compute bracketing brightness multipliers from EV delta and center.
 
     @details Produces exactly three multipliers mapped to exposure stops
-    `[ev_zero-ev, ev_zero, ev_zero+ev]` as powers of two for RAW postprocess
-    brightness control.
+    `[ev_zero-ev, ev_zero, ev_zero+ev]` as powers of two for float-domain HDR
+    base-image scaling.
     @param ev_value {float} Exposure bracket EV delta.
     @param ev_zero {float} Central bracket EV value.
     @return {tuple[float, float, float]} Multipliers in order `(under, base, over)`.
-    @satisfies REQ-057, REQ-077, REQ-079, REQ-080, REQ-092, REQ-093, REQ-095
+    @satisfies REQ-057, REQ-077, REQ-079, REQ-080, REQ-092, REQ-093, REQ-095, REQ-159
     """
 
     return (
@@ -4038,40 +4077,64 @@ def _build_exposure_multipliers(ev_value, ev_zero=0.0):
     )
 
 
+def _build_bracket_images_from_linear_base_float(np_module, base_rgb_float, multipliers):
+    """@brief Build normalized HDR brackets from one linear RGB base tensor.
+
+    @details Broadcast-multiplies one normalized linear RGB base tensor by the
+    ordered EV multiplier triplet `(ev_minus, ev_zero, ev_plus)`, clamps each
+    result into `[0,1]`, and returns float32 bracket tensors in canonical
+    downstream order. Complexity: O(3*H*W). Side effects: none.
+    @param np_module {ModuleType} Imported numpy module.
+    @param base_rgb_float {object} Linear normalized RGB float tensor in `[0,1]`.
+    @param multipliers {tuple[float, float, float]} Ordered EV multipliers.
+    @return {list[object]} Ordered RGB float32 bracket tensors.
+    @satisfies REQ-159, REQ-160
+    """
+
+    linear_base = _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=base_rgb_float,
+    ).astype(np_module.float32)
+    bracket_images_float = []
+    for multiplier in multipliers:
+        scaled = np_module.clip(
+            linear_base.astype(np_module.float64) * float(multiplier),
+            0.0,
+            1.0,
+        )
+        bracket_images_float.append(scaled.astype(np_module.float32))
+    return bracket_images_float
+
+
 def _extract_bracket_images_float(raw_handle, np_module, multipliers, gamma_value):
     """@brief Extract three normalized RGB float brackets from one RAW handle.
 
-    @details Invokes `raw.postprocess` with `output_bps=16`,
-    `use_camera_wb=True`, `no_auto_bright=True`, explicit `user_flip=0`, and
-    the configured gamma pair, then converts each extracted bracket to
-    normalized RGB float `[0,1]` without exposing TIFF artifacts outside this
-    step.
+    @details Ignores the parsed CLI gamma pair for HDR extraction, executes one
+    deterministic linear camera-WB-aware RAW postprocess call to obtain one
+    normalized base tensor, then derives canonical bracket tensors by NumPy EV
+    scaling and `[0,1]` clipping without exposing TIFF artifacts outside this
+    step. Complexity: O(H*W). Side effects: one RAW postprocess invocation.
     @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
     @param np_module {ModuleType} Imported numpy module.
     @param multipliers {tuple[float, float, float]} Ordered exposure multipliers.
-    @param gamma_value {tuple[float, float]} Gamma pair forwarded to RAW postprocess.
+    @param gamma_value {tuple[float, float]} Parsed CLI gamma pair retained for compatibility diagnostics only.
     @return {list[object]} Ordered RGB float bracket tensors.
-    @satisfies REQ-010, REQ-057, REQ-079, REQ-080
+    @satisfies REQ-010, REQ-057, REQ-079, REQ-080, REQ-157, REQ-158, REQ-159, REQ-160
     """
 
+    del gamma_value
     labels = ("ev_minus", "ev_zero", "ev_plus")
-    bracket_images_float = []
+    base_rgb_float = _extract_base_rgb_linear_float(
+        raw_handle=raw_handle,
+        np_module=np_module,
+    )
+    bracket_images_float = _build_bracket_images_from_linear_base_float(
+        np_module=np_module,
+        base_rgb_float=base_rgb_float,
+        multipliers=multipliers,
+    )
     for label, multiplier in zip(labels, multipliers):
-        print_info(f"Extracting bracket {label}: brightness={multiplier:.4f}x")
-        rgb_data = raw_handle.postprocess(
-            bright=multiplier,
-            output_bps=16,
-            use_camera_wb=True,
-            no_auto_bright=True,
-            gamma=gamma_value,
-            user_flip=0,
-        )
-        bracket_images_float.append(
-            _normalize_float_rgb_image(
-                np_module=np_module,
-                image_data=rgb_data,
-            )
-        )
+        print_info(f"Extracting bracket {label}: ev-scale={multiplier:.4f}x from linear base")
     return bracket_images_float
 
 
@@ -4218,66 +4281,6 @@ def _build_ev_times_from_ev_zero_and_delta(ev_zero, ev_delta):
     )
 
 
-def _invert_rawpy_gamma_rgb_float(np_module, image_rgb_float, rawpy_gamma):
-    """@brief Invert rawpy/libraw gamma encoding on one RGB float tensor.
-
-    @details Reconstructs the encoded-domain cutoff and offset used by
-    `LibRaw::gamma_curve` because rawpy forwards `gamma=(power,slope)` as
-    `(1/power,slope)`. Applies the inverse piecewise transfer
-    `linear=encoded/slope` below the encoded cutoff and
-    `linear=((encoded+offset)/(1+offset))^power` above the cutoff. Keeps the
-    entire transform on RGB float `[0,1]`.
-    @param np_module {ModuleType} Imported numpy module.
-    @param image_rgb_float {object} Gamma-encoded RGB float tensor in `[0,1]`.
-    @param rawpy_gamma {tuple[float, float]} rawpy gamma pair `(power, slope)`.
-    @return {object} Linearized RGB float tensor in `[0,1]`.
-    @satisfies REQ-110, REQ-152
-    """
-
-    encoded_rgb = _normalize_float_rgb_image(
-        np_module=np_module,
-        image_data=image_rgb_float,
-    ).astype(np_module.float64)
-    power = float(rawpy_gamma[0])
-    slope = float(rawpy_gamma[1])
-    if power == 1.0 and slope == 1.0:
-        return encoded_rgb.astype(np_module.float32)
-    if slope <= 1.0:
-        return np_module.clip(
-            np_module.power(encoded_rgb, power),
-            0.0,
-            1.0,
-        ).astype(np_module.float32)
-    libraw_power = 1.0 / power
-    encoded_cutoff = 0.0
-    offset = 0.0
-    if slope != 0.0 and (slope - 1.0) * (libraw_power - 1.0) <= 0.0:
-        bounds = [0.0, 0.0]
-        bounds[1 if slope >= 1.0 else 0] = 1.0
-        for _ in range(48):
-            encoded_cutoff = (bounds[0] + bounds[1]) / 2.0
-            if encoded_cutoff <= 0.0:
-                decision_metric = float("inf")
-            else:
-                decision_metric = (
-                    (math.pow(encoded_cutoff / slope, -libraw_power) - 1.0)
-                    / libraw_power
-                ) - (1.0 / encoded_cutoff)
-            bounds[1 if decision_metric > -1.0 else 0] = encoded_cutoff
-        offset = encoded_cutoff * (power - 1.0)
-    linear_rgb = encoded_rgb.copy()
-    if encoded_cutoff <= 0.0:
-        linear_rgb = np_module.power(linear_rgb, power)
-    else:
-        toe_mask = linear_rgb < encoded_cutoff
-        linear_rgb[toe_mask] = linear_rgb[toe_mask] / slope
-        linear_rgb[~toe_mask] = np_module.power(
-            (linear_rgb[~toe_mask] + offset) / (1.0 + offset),
-            power,
-        )
-    return np_module.clip(linear_rgb, 0.0, 1.0).astype(np_module.float32)
-
-
 def _normalize_opencv_hdr_to_unit_range(np_module, hdr_rgb_float32):
     """@brief Normalize OpenCV HDR tensor to unit range with deterministic bounds.
 
@@ -4409,20 +4412,21 @@ def _run_opencv_hdr_merge(
     `(ev_minus, ev_zero, ev_plus)`, derives zero-centered exposure times from
     the bracket span, dispatches one of `MergeDebevec`, `MergeRobertson`, or
     `MergeMertens`, and returns one congruent normalized RGB float image.
-    Debevec and Robertson first invert the configured rawpy gamma pair to
-    restore linearized float brackets, while Mertens stays on the extracted
-    gamma-encoded float brackets and compensates OpenCV float-path scaling.
+    Debevec and Robertson consume the shared linear HDR bracket contract
+    directly, while Mertens consumes the same normalized float brackets and
+    compensates OpenCV float-path scaling.
     @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors.
     @param ev_value {float} EV bracket delta used to generate exposure files.
     @param ev_zero {float} Central EV used to generate exposure files.
-    @param gamma_value {tuple[float, float]} rawpy gamma pair used during bracket extraction.
+    @param gamma_value {tuple[float, float]} Parsed CLI gamma pair retained for compatibility with existing call sites.
     @param opencv_merge_options {OpenCvMergeOptions} OpenCV merge backend controls.
     @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
     @return {object} Normalized RGB float merged image.
     @exception RuntimeError Raised when OpenCV/numpy dependencies are missing or bracket payloads are invalid.
-    @satisfies REQ-107, REQ-108, REQ-109, REQ-110, REQ-142, REQ-143, REQ-144, REQ-152, REQ-153, REQ-154
+    @satisfies REQ-107, REQ-108, REQ-109, REQ-110, REQ-142, REQ-143, REQ-144, REQ-152, REQ-153, REQ-154, REQ-160
     """
 
+    del gamma_value
     if auto_adjust_dependencies is not None:
         cv2_module, np_module = auto_adjust_dependencies
     else:
@@ -4449,18 +4453,10 @@ def _run_opencv_hdr_merge(
             np_module=np_module,
             exposures_float=exposures_float,
         )
-    linearized_exposures_float = [
-        _invert_rawpy_gamma_rgb_float(
-            np_module=np_module,
-            image_rgb_float=image_rgb_float,
-            rawpy_gamma=gamma_value,
-        )
-        for image_rgb_float in exposures_float
-    ]
     return _run_opencv_merge_radiance(
         cv2_module=cv2_module,
         np_module=np_module,
-        exposures_linear_float=linearized_exposures_float,
+        exposures_linear_float=exposures_float,
         exposure_times=exposure_times,
         merge_algorithm=opencv_merge_options.merge_algorithm,
         tonemap_enabled=opencv_merge_options.tonemap_enabled,
@@ -8481,15 +8477,16 @@ def run(args):
     @details Parses command options, validates dependencies, detects source DNG
     bits-per-color from RAW metadata, resolves manual or automatic EV-zero center,
     resolves static or adaptive EV selector around resolved center using
-    bit-derived EV ceilings, extracts three normalized RGB float brackets,
-    executes the selected HDR backend with float input/output interfaces,
+    bit-derived EV ceilings, extracts one linear HDR base image and derives
+    three normalized RGB float brackets, executes the selected HDR backend with
+    float input/output interfaces,
     executes the float-interface post-merge pipeline, optionally emits
     persistent debug TIFF checkpoints for executed stages, writes the final
     JPG, and guarantees temporary artifact cleanup through isolated temporary
     directory lifecycle.
     @param args {list[str]} Command argument vector excluding command token.
     @return {int} `0` on success; `1` on parse/validation/dependency/processing failure.
-    @satisfies PRJ-001, CTN-001, CTN-004, CTN-005, REQ-010, REQ-011, REQ-012, REQ-013, REQ-014, REQ-015, REQ-050, REQ-052, REQ-100, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-127, REQ-128, REQ-129, REQ-131, REQ-132, REQ-133, REQ-134, REQ-138, REQ-139, REQ-140, REQ-146, REQ-147, REQ-148, REQ-149
+    @satisfies PRJ-001, CTN-001, CTN-004, CTN-005, REQ-010, REQ-011, REQ-012, REQ-013, REQ-014, REQ-015, REQ-050, REQ-052, REQ-100, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-127, REQ-128, REQ-129, REQ-131, REQ-132, REQ-133, REQ-134, REQ-138, REQ-139, REQ-140, REQ-146, REQ-147, REQ-148, REQ-149, REQ-157, REQ-158, REQ-159, REQ-160
     """
 
     if not _is_supported_runtime_os():
@@ -8569,7 +8566,10 @@ def run(args):
         if piexif_module is None:
             return 1
     print_info(f"Reading DNG input: {input_dng}")
-    print_info(f"Using gamma pair: {gamma_value[0]:g},{gamma_value[1]:g}")
+    print_info(
+        "Parsed compatibility gamma pair: "
+        f"{gamma_value[0]:g},{gamma_value[1]:g} (ignored by linear HDR extraction)"
+    )
     print_info(
         "Postprocess factors: "
         f"gamma={postprocess_options.post_gamma:g}, "

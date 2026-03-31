@@ -1144,6 +1144,7 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
     assert "Effective only when `--hdr-merge HDR-Plus`." in output
     assert "Effective only when `--hdr-merge Luminace-HDR`." in output
     assert "Default: `OpenCV`." in output
+    assert "Accepted for CLI compatibility and runtime diagnostics only." in output
     assert "Default: `Robertson`." in output
     assert "Default: `enable`." in output
     assert "Static postprocess defaults when omitted:" in output
@@ -1433,7 +1434,7 @@ def test_parse_run_options_rejects_invalid_opencv_controls() -> None:
 
 
 def test_run_opencv_hdr_merge_dispatches_debevec_direct_float_path_with_tonemap() -> None:
-    """OpenCV merge must dispatch Debevec direct merge on linearized float data."""
+    """OpenCV merge must dispatch Debevec direct merge on linear float data."""
 
     fake_cv2 = _FakeOpenCvModule()
     bracket_images_float = [
@@ -1469,7 +1470,7 @@ def test_run_opencv_hdr_merge_dispatches_debevec_direct_float_path_with_tonemap(
     )
     np.testing.assert_allclose(
         fake_cv2.merge_debevec.last_inputs[1],
-        np.full((1, 2, 3), 0.25, dtype=np.float32),
+        np.full((1, 2, 3), 0.5, dtype=np.float32),
         rtol=1e-6,
         atol=1e-6,
     )
@@ -1549,23 +1550,115 @@ def test_run_opencv_hdr_merge_skips_tonemap_for_mertens() -> None:
     assert fake_cv2.merge_robertson.last_inputs is None
 
 
-def test_invert_rawpy_gamma_rgb_float_inverts_pure_power_gamma() -> None:
-    """rawpy gamma inversion must linearize float data without quantization."""
+def test_extract_bracket_images_float_uses_single_linear_base_pass() -> None:
+    """Bracket extraction must use one linear RAW base pass plus NumPy scaling."""
 
-    encoded = np.array(
-        [[[0.25, 0.5, 0.75], [1.0, 0.0, 0.125]]],
-        dtype=np.float32,
+    base_rgb_u16 = np.array(
+        [
+            [[1000, 2000, 4000], [8000, 12000, 16000]],
+            [[20000, 24000, 28000], [32000, 36000, 40000]],
+        ],
+        dtype=np.uint16,
     )
 
-    linearized = dng2jpg_module._invert_rawpy_gamma_rgb_float(  # pylint: disable=protected-access
+    class _FakeRawHandle:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def postprocess(
+            self,
+            *,
+            bright,
+            output_bps,
+            use_camera_wb,
+            no_auto_bright,
+            gamma,
+            user_flip,
+        ) -> np.ndarray:
+            self.calls.append(
+                {
+                    "bright": bright,
+                    "output_bps": output_bps,
+                    "use_camera_wb": use_camera_wb,
+                    "no_auto_bright": no_auto_bright,
+                    "gamma": gamma,
+                    "user_flip": user_flip,
+                }
+            )
+            return np.array(base_rgb_u16, copy=True)
+
+    fake_raw = _FakeRawHandle()
+    multipliers = (0.5, 1.0, 2.0)
+
+    bracket_images = dng2jpg_module._extract_bracket_images_float(  # pylint: disable=protected-access
+        raw_handle=fake_raw,
         np_module=np,
-        image_rgb_float=encoded,
-        rawpy_gamma=(2.0, 1.0),
+        multipliers=multipliers,
+        gamma_value=(9.9, 9.9),
     )
 
+    assert len(fake_raw.calls) == 1
+    assert fake_raw.calls[0] == {
+        "bright": 1.0,
+        "output_bps": 16,
+        "use_camera_wb": True,
+        "no_auto_bright": True,
+        "gamma": (1.0, 1.0),
+        "user_flip": 0,
+    }
+    base_rgb_float = base_rgb_u16.astype(np.float32) / 65535.0
+    for bracket_image, multiplier in zip(bracket_images, multipliers):
+        np.testing.assert_allclose(
+            bracket_image,
+            np.clip(base_rgb_float * multiplier, 0.0, 1.0).astype(np.float32),
+            rtol=1e-6,
+            atol=1e-6,
+        )
+
+
+def test_parse_run_options_accepts_gamma_for_compatibility() -> None:
+    """Parser must retain compatibility gamma parsing without changing CLI shape."""
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--gamma=1.7,3.4"]
+    )
+
+    assert parsed is not None
+    assert parsed[4] == (1.7, 3.4)
+
+
+def test_run_opencv_hdr_merge_ignores_gamma_value_for_linear_inputs() -> None:
+    """OpenCV radiance merge must ignore parsed RAW gamma once brackets are linear."""
+
+    fake_cv2 = _FakeOpenCvModule()
+    bracket_images_float = [
+        np.full((1, 1, 3), 0.2, dtype=np.float32),
+        np.full((1, 1, 3), 0.4, dtype=np.float32),
+        np.full((1, 1, 3), 0.8, dtype=np.float32),
+    ]
+
+    _ = dng2jpg_module._run_opencv_hdr_merge(  # pylint: disable=protected-access
+        bracket_images_float=bracket_images_float,
+        ev_value=0.5,
+        ev_zero=0.0,
+        gamma_value=(9.9, 9.9),
+        opencv_merge_options=dng2jpg_module.OpenCvMergeOptions(
+            merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_ROBERTSON,
+            tonemap_enabled=False,
+        ),
+        auto_adjust_dependencies=(fake_cv2, np),
+    )
+
+    assert fake_cv2.merge_robertson.last_inputs is not None
     np.testing.assert_allclose(
-        linearized,
-        np.square(encoded),
+        fake_cv2.merge_robertson.last_inputs[0],
+        bracket_images_float[0],
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        fake_cv2.merge_robertson.last_inputs[1],
+        bracket_images_float[1],
         rtol=1e-6,
         atol=1e-6,
     )

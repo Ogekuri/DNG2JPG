@@ -200,6 +200,9 @@
         - `_detect_dng_bits_per_color(...)`: detect source bit depth when selector set absent [`src/dng2jpg/dng2jpg.py`]
       - `_build_exposure_multipliers(...)`: derive three multiplier values from EV center/delta [`src/dng2jpg/dng2jpg.py`]
       - `_extract_bracket_images_float(...)`: extract `ev_minus`, `ev_zero`, `ev_plus` as normalized RGB float bracket tensors [`src/dng2jpg/dng2jpg.py`]
+        - `_extract_base_rgb_linear_float(...)`: extract one linear camera-WB-aware RGB base tensor from RAW [`src/dng2jpg/dng2jpg.py`]
+        - `_build_bracket_images_from_linear_base_float(...)`: derive canonical bracket tensors by NumPy EV scaling and clipping [`src/dng2jpg/dng2jpg.py`]
+          - `_normalize_float_rgb_image(...)`: normalize the shared HDR base tensor to RGB float `[0,1]` [`src/dng2jpg/dng2jpg.py`]
         - `print_info(...)`: emit extraction progress [`src/shell_scripts/utils.py`]
       - `_write_debug_rgb_float_tiff(...)`: persist extraction checkpoints as TIFF16 files in the output directory when debug mode is enabled [`src/dng2jpg/dng2jpg.py`]
         - `_write_rgb_float_tiff16(...)`: convert one RGB float tensor to TIFF16 artifact [`src/dng2jpg/dng2jpg.py`]
@@ -218,10 +221,9 @@
         - `_run_opencv_merge_mertens(...)`: execute OpenCV exposure fusion path on normalized float brackets [`src/dng2jpg/dng2jpg.py`]
           - `cv2.createMergeMertens().process(...)`: run Mertens fusion on normalized RGB float bracket tensors (external boundary)
           - `_normalize_opencv_hdr_to_unit_range(...)`: normalize OpenCV fusion output to repository RGB float contract [`src/dng2jpg/dng2jpg.py`]
-        - `_invert_rawpy_gamma_rgb_float(...)`: invert the configured rawpy/libraw gamma pair for radiance-merge inputs [`src/dng2jpg/dng2jpg.py`]
-        - `_run_opencv_merge_radiance(...)`: execute Debevec or Robertson radiance path with optional simple tone mapping [`src/dng2jpg/dng2jpg.py`]
-          - `cv2.createMergeDebevec().process(...)`: merge Debevec HDR radiance directly from linearized RGB float brackets (external boundary)
-          - `cv2.createMergeRobertson().process(...)`: merge Robertson HDR radiance directly from linearized RGB float brackets (external boundary)
+        - `_run_opencv_merge_radiance(...)`: execute Debevec or Robertson radiance path on the shared linear bracket contract with optional simple tone mapping [`src/dng2jpg/dng2jpg.py`]
+          - `cv2.createMergeDebevec().process(...)`: merge Debevec HDR radiance directly from linear RGB float brackets (external boundary)
+          - `cv2.createMergeRobertson().process(...)`: merge Robertson HDR radiance directly from linear RGB float brackets (external boundary)
           - `cv2.createTonemap(...).process(...)`: apply simple gamma tone mapping for radiance paths when enabled (external boundary)
           - `_normalize_opencv_hdr_to_unit_range(...)`: normalize radiance or tone-mapped output to repository RGB float contract [`src/dng2jpg/dng2jpg.py`]
         - `_normalize_debevec_hdr_to_unit_range(...)`: compatibility wrapper preserving legacy helper name while delegating to unified OpenCV normalization [`src/dng2jpg/dng2jpg.py`]
