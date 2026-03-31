@@ -169,6 +169,7 @@ class _FakeOpenCvModule:
     IMREAD_UNCHANGED = -1
     COLOR_BGR2RGB = 1
     COLOR_RGB2BGR = 2
+    CV_32F = 5
 
     def __init__(self) -> None:
         self._images_by_path: dict[str, np.ndarray] = {}
@@ -216,6 +217,48 @@ class _FakeOpenCvModule:
     def imwrite(self, _path: str, image: np.ndarray) -> bool:
         self.written_image = np.array(image, copy=True)
         return True
+
+    def calcHist(
+        self,
+        images: list[np.ndarray],
+        channels: list[int],
+        mask,
+        hist_size: list[int],
+        ranges: list[int],
+    ) -> np.ndarray:
+        del mask, channels, ranges
+        histogram, _ = np.histogram(
+            np.asarray(images[0]).ravel(),
+            bins=int(hist_size[0]),
+            range=(0, 256),
+        )
+        return histogram.astype(np.float32).reshape(-1, 1)
+
+    def Sobel(
+        self,
+        image: np.ndarray,
+        ddepth: int,
+        dx: int,
+        dy: int,
+        ksize: int = 3,
+    ) -> np.ndarray:
+        del ddepth, ksize
+        image_float = np.asarray(image, dtype=np.float32)
+        grad_y, grad_x = np.gradient(image_float)
+        if dx == 1 and dy == 0:
+            return grad_x.astype(np.float32)
+        if dx == 0 and dy == 1:
+            return grad_y.astype(np.float32)
+        raise AssertionError(f"Unsupported Sobel derivative order: dx={dx}, dy={dy}")
+
+    def GaussianBlur(
+        self,
+        image: np.ndarray,
+        ksize: tuple[int, int],
+        sigma: float,
+    ) -> np.ndarray:
+        del ksize, sigma
+        return np.asarray(image, dtype=np.float32)
 
 
 class _StaticPostprocessOptionsLike(Protocol):
@@ -1276,6 +1319,7 @@ def test_parse_run_options_enables_debug_flag() -> None:
             "input.dng",
             "output.jpg",
             "--ev=1",
+            "--auto-zero=disable",
             "--hdr-merge=OpenCV",
             "--debug",
         ]
@@ -1313,6 +1357,65 @@ def test_build_ev_times_from_ev_zero_and_delta_matches_bracket_sequence() -> Non
         rtol=1e-6,
         atol=1e-6,
     )
+
+
+def test_resolve_ev_zero_selects_minimum_candidate_and_applies_percentage() -> None:
+    """Auto-zero must select the minimum candidate, scale it, and enforce safe bounds."""
+
+    class _FakeRawHandle:
+        pass
+
+    fake_image = np.array(
+        [
+            [[0.10, 0.20, 0.30], [0.40, 0.50, 0.60]],
+            [[0.70, 0.80, 0.90], [0.25, 0.35, 0.45]],
+        ],
+        dtype=np.float32,
+    )
+    fake_cv2 = _FakeOpenCvModule()
+    resolved_ev_zero = dng2jpg_module._resolve_ev_zero(  # pylint: disable=protected-access
+        raw_handle=_FakeRawHandle(),
+        ev_zero=0.0,
+        auto_zero_enabled=True,
+        auto_zero_pct=50.0,
+        base_max_ev=3.0,
+        supported_ev_values_for_auto_zero=(0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0),
+        auto_zero_dependencies=(fake_cv2, np),
+        base_rgb_float=fake_image,
+    )
+
+    evaluations = dng2jpg_module._calculate_auto_zero_evaluations(  # pylint: disable=protected-access
+        cv2_module=fake_cv2,
+        np_module=np,
+        image_rgb_float=fake_image,
+    )
+    expected_selected = min(
+        evaluations.miglior_ev,
+        evaluations.ev_ettr,
+        evaluations.ev_dettaglio,
+    )
+    expected_scaled = dng2jpg_module._apply_auto_percentage_scaling(  # pylint: disable=protected-access
+        max(-2.0, min(2.0, expected_selected)),
+        50.0,
+    )
+    assert resolved_ev_zero == expected_scaled
+
+
+def test_resolve_ev_zero_rejects_manual_value_outside_safe_bounds() -> None:
+    """Manual EV-zero must reject values above the bit-derived safe ceiling."""
+
+    class _FakeRawHandle:
+        pass
+
+    with np.testing.assert_raises(ValueError):
+        dng2jpg_module._resolve_ev_zero(  # pylint: disable=protected-access
+            raw_handle=_FakeRawHandle(),
+            ev_zero=2.25,
+            auto_zero_enabled=False,
+            auto_zero_pct=100.0,
+            base_max_ev=3.0,
+            supported_ev_values_for_auto_zero=(0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0),
+        )
 
 
 def test_run_opencv_hdr_merge_keeps_mertens_inputs_as_float32() -> None:
@@ -2403,6 +2506,7 @@ def test_run_debug_writes_extraction_and_merge_checkpoints(monkeypatch, tmp_path
             str(input_dng),
             str(output_jpg),
             "--ev=1",
+            "--auto-zero=disable",
             "--hdr-merge=OpenCV",
             "--debug",
         ]
@@ -2415,3 +2519,96 @@ def test_run_debug_writes_extraction_and_merge_checkpoints(monkeypatch, tmp_path
         ("scene", "_1.3_ev_max+1.0"),
         ("scene", "_2.0_hdr-merge"),
     ]
+
+
+def test_run_auto_zero_prints_candidate_diagnostics(monkeypatch, tmp_path, capsys) -> None:
+    """Auto-zero runtime must print all candidate evaluations and the selection."""
+
+    input_dng = tmp_path / "scene.dng"
+    input_dng.write_bytes(b"fake-dng")
+    output_jpg = tmp_path / "scene.jpg"
+    raw_pixels = np.array(
+        [
+            [[2000, 4000, 6000], [8000, 10000, 12000]],
+            [[14000, 16000, 18000], [20000, 22000, 24000]],
+        ],
+        dtype=np.uint16,
+    )
+
+    class _FakeRawHandle:
+        def __init__(self) -> None:
+            self.raw_image_visible = np.zeros((2, 2), dtype=np.uint16)
+            self.white_level = int(16383)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            del exc_type, exc, tb
+
+        def postprocess(
+            self,
+            *,
+            bright,
+            output_bps,
+            use_camera_wb,
+            no_auto_bright,
+            gamma,
+            user_flip,
+        ) -> np.ndarray:
+            del output_bps, use_camera_wb, no_auto_bright, gamma, user_flip
+            return np.clip(raw_pixels.astype(np.float32) * float(bright), 0.0, 65535.0).astype(
+                np.uint16
+            )
+
+    class _FakeRawPyModule:
+        LibRawError = RuntimeError
+
+        @staticmethod
+        def imread(_path: str) -> _FakeRawHandle:
+            return _FakeRawHandle()
+
+    fake_imageio_module = _FakeImageIoModule(
+        merged_rgb_u16=np.full((2, 2, 3), 32768, dtype=np.uint16)
+    )
+    fake_pil_module = _FakePilModule()
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_load_image_dependencies",
+        lambda: (_FakeRawPyModule(), fake_imageio_module, fake_pil_module),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_extract_dng_exif_payload_and_timestamp",
+        lambda **_kwargs: (None, None, 1),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_resolve_auto_adjust_dependencies",
+        lambda: (_FakeOpenCvModule(), np),
+    )
+    monkeypatch.setattr(dng2jpg_module, "_encode_jpg", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_sync_output_file_timestamps_from_exif",
+        lambda **_kwargs: None,
+    )
+
+    exit_code = dng2jpg_module.run(
+        [
+            str(input_dng),
+            str(output_jpg),
+            "--auto-zero=enable",
+            "--auto-zero-pct=100",
+            "--ev=1",
+            "--hdr-merge=OpenCV",
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "Auto-zero candidate miglior_ev:" in output
+    assert "Auto-zero candidate ev_ettr:" in output
+    assert "Auto-zero candidate ev_dettaglio:" in output
+    assert "Auto-zero selected EV:" in output

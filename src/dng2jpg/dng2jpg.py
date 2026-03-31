@@ -10,7 +10,7 @@ parameters, then writes final JPG to user-selected output path. Temporary
 workspace artifacts are isolated in a temporary directory and removed
 automatically on success and failure, while optional debug checkpoints persist
 in the output directory when `--debug` is enabled.
-    @satisfies PRJ-003, DES-008, DES-009, REQ-055, REQ-056, REQ-057, REQ-058, REQ-059, REQ-060, REQ-061, REQ-062, REQ-063, REQ-064, REQ-065, REQ-066, REQ-067, REQ-068, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-079, REQ-080, REQ-081, REQ-088, REQ-089, REQ-090, REQ-091, REQ-092, REQ-093, REQ-094, REQ-095, REQ-096, REQ-097, REQ-098, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-141, REQ-142, REQ-143, REQ-144, REQ-145, REQ-146, REQ-149, REQ-152, REQ-153, REQ-154, REQ-157, REQ-158, REQ-159, REQ-160
+    @satisfies PRJ-001, PRJ-002, DES-003, DES-008, DES-009, REQ-008, REQ-009, REQ-010, REQ-012, REQ-013, REQ-014, REQ-018, REQ-032, REQ-034, REQ-037, REQ-041, REQ-052, REQ-100, REQ-106, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-141, REQ-142, REQ-143, REQ-144, REQ-145, REQ-146, REQ-148, REQ-149, REQ-152, REQ-153, REQ-154, REQ-157, REQ-158, REQ-159, REQ-160
 """
 
 import os
@@ -610,7 +610,7 @@ class AutoEvInputs:
     @param ev_zero {float} Resolved EV-zero center used as adaptive solver anchor.
     @param ev_values {tuple[float, ...]} Supported EV selector values derived from source DNG bit depth.
     @return {None} Immutable scalar container.
-    @satisfies REQ-080, REQ-081, REQ-092, REQ-093, REQ-095, REQ-098
+    @satisfies REQ-009
     """
 
     p_low: float
@@ -621,6 +621,26 @@ class AutoEvInputs:
     median_target: float
     ev_zero: float
     ev_values: tuple[float, ...]
+
+
+@dataclass(frozen=True)
+class AutoZeroEvaluation:
+    """@brief Hold the three automatic EV-zero candidate evaluations.
+
+    @details Stores the entropy-optimized candidate (`miglior_ev`), the ETTR
+    candidate (`ev_ettr`), and the detail-preservation candidate
+    (`ev_dettaglio`) computed from one normalized linear RGB float image.
+    Values are rounded to one decimal place before downstream selection.
+    @param miglior_ev {float} Entropy-optimized EV candidate.
+    @param ev_ettr {float} ETTR EV candidate.
+    @param ev_dettaglio {float} Detail-preservation EV candidate.
+    @return {None} Immutable auto-zero evaluation container.
+    @satisfies REQ-008, REQ-032, REQ-052
+    """
+
+    miglior_ev: float
+    ev_ettr: float
+    ev_dettaglio: float
 
 
 def _print_box_table(headers, rows, header_rows=()):
@@ -745,7 +765,7 @@ def print_help(version):
     characters. Side effects: stdout writes only.
     @param version {str} CLI version label to append in usage output.
     @return {None} Writes help text to stdout.
-    @satisfies DES-008, REQ-017, REQ-056, REQ-063, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-088, REQ-089, REQ-090, REQ-091, REQ-094, REQ-097, REQ-100, REQ-101, REQ-102, REQ-111, REQ-127, REQ-128, REQ-141, REQ-143, REQ-146, REQ-155, REQ-156
+    @satisfies DES-008, REQ-017, REQ-018, REQ-019, REQ-020, REQ-021, REQ-022, REQ-023, REQ-024, REQ-025, REQ-033, REQ-100, REQ-101, REQ-102, REQ-107, REQ-111, REQ-124, REQ-125, REQ-127, REQ-128, REQ-135, REQ-141, REQ-143, REQ-146, REQ-155, REQ-156
     """
 
     postprocess_default_rows = (
@@ -1130,7 +1150,7 @@ def _calculate_safe_ev_zero_max(base_max_ev):
     Safe range guarantees `MAX_BRACKET=(BASE_MAX-abs(ev_zero)) >= 1`.
     @param base_max_ev {float} Bit-derived `BASE_MAX` value.
     @return {float} Safe absolute EV-zero ceiling.
-    @satisfies REQ-093, REQ-094, REQ-096, REQ-097
+    @satisfies DES-003, REQ-018, REQ-030
     """
 
     return max(0.0, base_max_ev - 1.0)
@@ -1143,7 +1163,7 @@ def _derive_supported_ev_zero_values(base_max_ev):
     where `SAFE_ZERO_MAX=max(0, BASE_MAX-1)` and `BASE_MAX=((bits_per_color-8)/2)`.
     @param base_max_ev {float} Bit-derived `BASE_MAX` value.
     @return {tuple[float, ...]} Supported non-negative EV-zero magnitudes including `0.0`.
-    @satisfies REQ-093, REQ-094, REQ-096, REQ-097
+    @satisfies DES-003, REQ-018, REQ-030
     """
 
     safe_ev_zero_max = _calculate_safe_ev_zero_max(base_max_ev)
@@ -1353,7 +1373,7 @@ def _parse_percentage_option(option_name, option_raw):
     @param option_name {str} Long-option identifier used in error messages.
     @param option_raw {str} Raw option token value from CLI args.
     @return {float|None} Parsed percentage value when valid; `None` otherwise.
-    @satisfies REQ-081, REQ-094, REQ-097
+    @satisfies REQ-019, REQ-030
     """
 
     try:
@@ -1584,7 +1604,7 @@ def _extract_normalized_preview_luminance_stats(raw_handle):
     @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
     @return {tuple[float, float, float]} Normalized `(p_low, p_median, p_high)` in `(0,1)`.
     @exception ValueError Raised when preview extraction cannot produce valid luminance values.
-    @satisfies REQ-080, REQ-081, REQ-092, REQ-093, REQ-097
+    @satisfies REQ-009
     """
 
     linear_preview = raw_handle.postprocess(
@@ -1683,47 +1703,251 @@ def _coerce_positive_luminance(value, fallback):
     return numeric_value
 
 
-def _derive_scene_key_preserving_median_target(p_median):
-    """@brief Derive scene-key-preserving median target for auto-zero optimization.
+def _calculate_bt709_luminance(np_module, image_rgb_float):
+    """@brief Convert one normalized RGB float image to BT.709 luminance.
 
-    @details Classifies scene key from normalized preview median luminance and maps
-    it to a bounded median target preserving low-key/high-key intent while enabling
-    exposure correction. Low-key medians map to a low-key target, high-key medians map
-    to a high-key target, and mid-key medians map to neutral target `0.5`.
-    @param p_median {float} Normalized median luminance in `(0.0, 1.0)`.
-    @return {float} Scene-key-preserving median target in `(0.0, 1.0)`.
-    @satisfies REQ-097, REQ-098
+    @details Normalizes the input image to the repository RGB float contract and
+    computes luminance in the linear gamma=`1` domain using BT.709 coefficients
+    `(0.2126, 0.7152, 0.0722)`. Complexity: O(H*W). Side effects: none.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_float {object} Input image payload convertible to normalized RGB float `[0,1]`.
+    @return {object} Linear luminance tensor with shape `(H,W)` and dtype `float32`.
+    @satisfies REQ-008, REQ-032
     """
 
-    if p_median <= AUTO_ZERO_SCENE_KEY_LOW_THRESHOLD:
-        return AUTO_ZERO_TARGET_LOW_KEY
-    if p_median >= AUTO_ZERO_SCENE_KEY_HIGH_THRESHOLD:
-        return AUTO_ZERO_TARGET_HIGH_KEY
-    return AUTO_EV_MEDIAN_TARGET
+    normalized_rgb = _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=image_rgb_float,
+    )
+    return (
+        (0.2126 * normalized_rgb[:, :, 0])
+        + (0.7152 * normalized_rgb[:, :, 1])
+        + (0.0722 * normalized_rgb[:, :, 2])
+    ).astype(np_module.float32)
 
 
-def _optimize_auto_zero(auto_ev_inputs):
-    """@brief Compute optimal EV-zero center from normalized luminance statistics.
+def _smoothstep(np_module, values, edge0, edge1):
+    """@brief Evaluate one smoothstep ramp with clamped normalized input.
 
-    @details Solves `ev_zero=log2(target_median/p_median)` using a scene-key-preserving
-    target derived from preview median luminance, clamps result to
-    `[-SAFE_ZERO_MAX,+SAFE_ZERO_MAX]` where `SAFE_ZERO_MAX=max(ev_values)`, and quantizes to
-    nearest quarter-step represented by `ev_values` with sign preservation.
-    @param auto_ev_inputs {AutoEvInputs} Adaptive EV scalar inputs.
-    @return {float} Quantized EV-zero center.
-    @satisfies REQ-094, REQ-095, REQ-097, REQ-098
+    @details Computes the cubic Hermite interpolation `t*t*(3-2*t)` over input
+    values normalized into `[0,1]` using denominator `max(edge1-edge0, 1e-6)`.
+    Complexity: O(N). Side effects: none.
+    @param np_module {ModuleType} Imported numpy module.
+    @param values {object} Numeric tensor evaluated element-wise.
+    @param edge0 {float} Lower transition edge.
+    @param edge1 {float} Upper transition edge.
+    @return {object} Float tensor with values in `[0,1]`.
+    @satisfies REQ-032
     """
 
-    base_max = auto_ev_inputs.ev_values[-1]
-    target_median = _derive_scene_key_preserving_median_target(auto_ev_inputs.p_median)
-    ev_zero_candidate = math.log2(target_median / auto_ev_inputs.p_median)
-    ev_zero_clamped = max(-base_max, min(base_max, ev_zero_candidate))
-    if math.isclose(ev_zero_clamped, 0.0, rel_tol=0.0, abs_tol=1e-9):
+    denominator = max(float(edge1) - float(edge0), 1e-6)
+    normalized = np_module.clip((values - float(edge0)) / denominator, 0.0, 1.0)
+    return normalized * normalized * (3.0 - (2.0 * normalized))
+
+
+def _calculate_entropy_optimized_ev(cv2_module, np_module, luminance_float):
+    """@brief Compute the entropy-optimized EV candidate on linear luminance.
+
+    @details Sweeps EV values in range `[-3.0,+3.0]` with step `0.1`, scales the
+    normalized linear luminance by `2**EV`, clips into `[0,1]`, converts the
+    clipped image directly to 8-bit linear code values, evaluates histogram
+    entropy with clipping penalties, and returns the highest-score EV rounded to
+    one decimal place. Complexity: O(K*H*W)` where `K=61`. Side effects: none.
+    @param cv2_module {ModuleType} Imported OpenCV module.
+    @param np_module {ModuleType} Imported numpy module.
+    @param luminance_float {object} Linear luminance tensor normalized to `[0,1]`.
+    @return {float} Entropy-optimized EV candidate rounded to one decimal place.
+    @satisfies REQ-032
+    """
+
+    best_ev = 0.0
+    max_score = -float("inf")
+    alpha = 50.0
+    beta = 20.0
+    candidate_values = np_module.arange(-3.0, 3.1, 0.1, dtype=np_module.float32)
+    for ev_value in candidate_values:
+        simulated = np_module.clip(
+            luminance_float.astype(np_module.float32) * (2.0 ** float(ev_value)),
+            0.0,
+            1.0,
+        )
+        luminance_8bit = (simulated * 255.0).astype(np_module.uint8)
+        histogram = cv2_module.calcHist([luminance_8bit], [0], None, [256], [0, 256])
+        histogram = histogram.flatten().astype(np_module.float64)
+        histogram_sum = float(histogram.sum())
+        if histogram_sum <= 0.0:
+            continue
+        probabilities = histogram / histogram_sum
+        non_zero_probabilities = probabilities[probabilities > 0.0]
+        entropy = -float(
+            np_module.sum(non_zero_probabilities * np_module.log2(non_zero_probabilities))
+        )
+        p_0 = float(probabilities[0])
+        p_255 = float(probabilities[255])
+        score = entropy - (alpha * (p_255**2)) - (beta * (p_0**2))
+        if score > max_score:
+            max_score = score
+            best_ev = float(ev_value)
+    return round(best_ev, 1)
+
+
+def _calculate_ettr_ev(np_module, luminance_float):
+    """@brief Compute the ETTR EV candidate on linear luminance.
+
+    @details Evaluates the `99`th percentile of normalized linear luminance,
+    targets that percentile to `0.90`, computes `log2(target/L99)`, and returns
+    the result rounded to one decimal place. Fully black inputs return `0.0`.
+    Complexity: O(H*W log(H*W)) due to percentile extraction. Side effects:
+    none.
+    @param np_module {ModuleType} Imported numpy module.
+    @param luminance_float {object} Linear luminance tensor normalized to `[0,1]`.
+    @return {float} ETTR EV candidate rounded to one decimal place.
+    @satisfies REQ-032
+    """
+
+    luminance_p99 = float(np_module.percentile(luminance_float, 99.0))
+    if luminance_p99 <= 0.0:
         return 0.0
-    quantized_abs = _quantize_ev_to_supported(abs(ev_zero_clamped), auto_ev_inputs.ev_values)
-    if ev_zero_clamped >= 0.0:
-        return quantized_abs
-    return -quantized_abs
+    return round(math.log2(0.90 / luminance_p99), 1)
+
+
+def _calculate_detail_preservation_ev(cv2_module, np_module, luminance_float):
+    """@brief Compute the detail-preservation EV candidate on linear luminance.
+
+    @details Builds local-detail weights from Sobel gradients on
+    `log(luminance+eps)`, suppresses flat regions below the `40`th percentile,
+    estimates a heuristic noise floor from the `1`st percentile, sweeps EV in
+    `[-3.0,+3.0]` with step `0.1`, and maximizes preserved weighted detail while
+    penalizing highlight clipping and shadow crushing. Returns the best EV
+    rounded to one decimal place. Complexity: O(K*H*W)` where `K=61`. Side
+    effects: none.
+    @param cv2_module {ModuleType} Imported OpenCV module.
+    @param np_module {ModuleType} Imported numpy module.
+    @param luminance_float {object} Linear luminance tensor normalized to `[0,1]`.
+    @return {float} Detail-preservation EV candidate rounded to one decimal place.
+    @satisfies REQ-032
+    """
+
+    luminance_float32 = np_module.array(luminance_float, dtype=np_module.float32, copy=False)
+    epsilon = 1e-6
+    log_luminance = np_module.log(luminance_float32 + epsilon)
+    gradient_x = cv2_module.Sobel(log_luminance, cv2_module.CV_32F, 1, 0, ksize=3)
+    gradient_y = cv2_module.Sobel(log_luminance, cv2_module.CV_32F, 0, 1, ksize=3)
+    detail_map = np_module.sqrt((gradient_x * gradient_x) + (gradient_y * gradient_y))
+    detail_map = cv2_module.GaussianBlur(detail_map, (3, 3), 0)
+    texture_threshold = float(np_module.percentile(detail_map, 40.0))
+    detail_map = np_module.where(detail_map >= texture_threshold, detail_map, 0.0).astype(
+        np_module.float32
+    )
+    detail_sum = float(detail_map.sum())
+    if detail_sum <= 0.0:
+        return 0.0
+    weights = detail_map / (detail_sum + epsilon)
+    p1 = float(np_module.percentile(luminance_float32, 1.0))
+    noise_floor = float(np_module.clip(max(0.005, p1 * 0.5), 0.005, 0.02))
+    shadow_target = max(noise_floor + 0.03, 0.05)
+    highlight_knee = 0.98
+    lambda_high = 4.0
+    lambda_shadow = 1.5
+    best_ev = 0.0
+    best_score = -float("inf")
+    candidate_values = np_module.arange(-3.0, 3.1, 0.1, dtype=np_module.float32)
+    for ev_value in candidate_values:
+        simulated = luminance_float32 * (2.0 ** float(ev_value))
+        shadow_weight = _smoothstep(
+            np_module=np_module,
+            values=simulated,
+            edge0=noise_floor,
+            edge1=shadow_target,
+        )
+        highlight_weight = 1.0 - _smoothstep(
+            np_module=np_module,
+            values=simulated,
+            edge0=highlight_knee,
+            edge1=1.0,
+        )
+        preserved_detail = float(np_module.sum(weights * shadow_weight * highlight_weight))
+        clipped_fraction = float(np_module.sum(weights[simulated >= 1.0]))
+        crushed_fraction = float(np_module.sum(weights[simulated <= noise_floor]))
+        score = preserved_detail - (lambda_high * clipped_fraction) - (
+            lambda_shadow * crushed_fraction
+        )
+        if score > best_score:
+            best_score = score
+            best_ev = float(ev_value)
+    return round(best_ev, 1)
+
+
+def _calculate_auto_zero_evaluations(cv2_module, np_module, image_rgb_float):
+    """@brief Compute the three automatic EV-zero candidate evaluations.
+
+    @details Migrates `calcola_correzioni_ev(immagine_float)` from the external
+    prototype into the current pipeline, adapts it to the repository linear
+    gamma=`1` RGB float contract, computes BT.709 luminance, evaluates
+    `miglior_ev`, `ev_ettr`, and `ev_dettaglio`, and returns all three rounded
+    candidates without applying selector quantization. Complexity: dominated by
+    the EV sweeps in entropy/detail evaluation. Side effects: none.
+    @param cv2_module {ModuleType} Imported OpenCV module.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_float {object} Input image payload convertible to normalized RGB float `[0,1]`.
+    @return {AutoZeroEvaluation} Candidate EV evaluations on the normalized linear image.
+    @satisfies REQ-008, REQ-032
+    """
+
+    luminance_float = _calculate_bt709_luminance(
+        np_module=np_module,
+        image_rgb_float=image_rgb_float,
+    )
+    return AutoZeroEvaluation(
+        miglior_ev=_calculate_entropy_optimized_ev(
+            cv2_module=cv2_module,
+            np_module=np_module,
+            luminance_float=luminance_float,
+        ),
+        ev_ettr=_calculate_ettr_ev(
+            np_module=np_module,
+            luminance_float=luminance_float,
+        ),
+        ev_dettaglio=_calculate_detail_preservation_ev(
+            cv2_module=cv2_module,
+            np_module=np_module,
+            luminance_float=luminance_float,
+        ),
+    )
+
+
+def _evaluate_auto_zero_exposure(cv2_module, np_module, image_rgb_float):
+    """@brief Evaluate automatic EV-zero candidates and print the selected value.
+
+    @details Computes the migrated `miglior_ev`, `ev_ettr`, and `ev_dettaglio`
+    candidates on the normalized linear RGB float image, prints each candidate
+    and the selected minimum EV using deterministic diagnostics, and returns the
+    selected value. Complexity: delegated to `_calculate_auto_zero_evaluations`.
+    Side effects: writes diagnostics through `print_info`.
+    @param cv2_module {ModuleType} Imported OpenCV module.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_float {object} Input image payload convertible to normalized RGB float `[0,1]`.
+    @return {float} Minimum candidate EV selected for downstream auto-zero scaling.
+    @satisfies REQ-008, REQ-032, REQ-052
+    """
+
+    evaluations = _calculate_auto_zero_evaluations(
+        cv2_module=cv2_module,
+        np_module=np_module,
+        image_rgb_float=image_rgb_float,
+    )
+    selected_ev = min(
+        evaluations.miglior_ev,
+        evaluations.ev_ettr,
+        evaluations.ev_dettaglio,
+    )
+    print_info(f"Auto-zero candidate miglior_ev: {evaluations.miglior_ev:+.1f} EV")
+    print_info(f"Auto-zero candidate ev_ettr: {evaluations.ev_ettr:+.1f} EV")
+    print_info(
+        f"Auto-zero candidate ev_dettaglio: {evaluations.ev_dettaglio:+.1f} EV"
+    )
+    print_info(f"Auto-zero selected EV: {selected_ev:+.1f} EV")
+    return selected_ev
 
 
 def _optimize_adaptive_ev_delta(auto_ev_inputs):
@@ -1825,46 +2049,61 @@ def _resolve_ev_zero(
     base_max_ev,
     supported_ev_values_for_auto_zero,
     preview_luminance_stats=None,
+    auto_zero_dependencies=None,
+    base_rgb_float=None,
 ):
     """@brief Resolve EV-zero center from manual or automatic selector.
 
     @details Uses manual `--ev-zero` unless `--auto-zero` is enabled. In
-    automatic mode computes EV-zero from normalized median luminance and
-    quantizes to supported quarter-step values. Applies final safe-range clamp
-    preserving at least `±1EV` bracket margin.
+    automatic mode evaluates `miglior_ev`, `ev_ettr`, and `ev_dettaglio` on the
+    normalized linear gamma=`1` RGB float base image migrated from the external
+    prototype, selects the minimum candidate, clamps it to the safe bit-derived
+    range, applies percentage scaling, and validates the final result against
+    `SAFE_ZERO_MAX`.
     @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
     @param ev_zero {float} Parsed manual EV-zero candidate.
     @param auto_zero_enabled {bool} Auto-zero selector state.
     @param auto_zero_pct {float} Percentage scaler applied to computed auto-zero result.
     @param base_max_ev {float} Bit-derived `BASE_MAX` limit.
-    @param supported_ev_values_for_auto_zero {tuple[float, ...]} Supported non-negative EV-zero magnitudes for quantization.
-    @param preview_luminance_stats {tuple[float, float, float]|None} Optional precomputed `(p_low, p_median, p_high)` tuple to avoid duplicate preview extraction.
+    @param supported_ev_values_for_auto_zero {tuple[float, ...]} Supported non-negative EV-zero magnitudes for compatibility with downstream safe-range handling.
+    @param preview_luminance_stats {tuple[float, float, float]|None} Unused compatibility argument retained to minimize call-site changes.
+    @param auto_zero_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2_module, numpy_module)` tuple.
+    @param base_rgb_float {object|None} Optional precomputed normalized linear RGB float base image.
     @return {float} Resolved EV-zero center.
     @exception ValueError Raised when resolved EV-zero is outside bit-derived safe range.
-    @satisfies REQ-094, REQ-095, REQ-097, REQ-098
+    @exception RuntimeError Raised when auto-zero dependencies are unavailable.
+    @satisfies REQ-008, REQ-018, REQ-032, REQ-037
     """
 
+    del preview_luminance_stats, supported_ev_values_for_auto_zero
     resolved_ev_zero = ev_zero
-    if auto_zero_enabled:
-        if preview_luminance_stats is None:
-            p_low, p_median, p_high = _extract_normalized_preview_luminance_stats(raw_handle)
-        else:
-            p_low, p_median, p_high = preview_luminance_stats
-        auto_zero_inputs = AutoEvInputs(
-            p_low=p_low,
-            p_median=p_median,
-            p_high=p_high,
-            target_shadow=AUTO_EV_TARGET_SHADOW,
-            target_highlight=AUTO_EV_TARGET_HIGHLIGHT,
-            median_target=AUTO_EV_MEDIAN_TARGET,
-            ev_zero=0.0,
-            ev_values=supported_ev_values_for_auto_zero,
-        )
-        resolved_ev_zero = _optimize_auto_zero(auto_zero_inputs)
-        resolved_ev_zero = _apply_auto_percentage_scaling(
-            resolved_ev_zero, auto_zero_pct
-        )
     safe_ev_zero_max = _calculate_safe_ev_zero_max(base_max_ev)
+    if auto_zero_enabled:
+        if auto_zero_dependencies is None:
+            resolved_dependencies = _resolve_auto_adjust_dependencies()
+            if resolved_dependencies is None:
+                raise RuntimeError("Missing required dependencies: opencv-python and numpy")
+            cv2_module, np_module = resolved_dependencies
+        else:
+            cv2_module, np_module = auto_zero_dependencies
+        if base_rgb_float is None:
+            base_rgb_float = _extract_base_rgb_linear_float(
+                raw_handle=raw_handle,
+                np_module=np_module,
+            )
+        selected_auto_zero = _evaluate_auto_zero_exposure(
+            cv2_module=cv2_module,
+            np_module=np_module,
+            image_rgb_float=base_rgb_float,
+        )
+        clamped_auto_zero = max(
+            -safe_ev_zero_max,
+            min(safe_ev_zero_max, selected_auto_zero),
+        )
+        resolved_ev_zero = _apply_auto_percentage_scaling(
+            clamped_auto_zero,
+            auto_zero_pct,
+        )
     if abs(resolved_ev_zero) > (safe_ev_zero_max + 1e-9):
         raise ValueError(
             "Unsupported --ev-zero value: "
@@ -4106,28 +4345,37 @@ def _build_bracket_images_from_linear_base_float(np_module, base_rgb_float, mult
     return bracket_images_float
 
 
-def _extract_bracket_images_float(raw_handle, np_module, multipliers, gamma_value):
+def _extract_bracket_images_float(
+    raw_handle,
+    np_module,
+    multipliers,
+    gamma_value,
+    base_rgb_float=None,
+):
     """@brief Extract three normalized RGB float brackets from one RAW handle.
 
-    @details Ignores the parsed CLI gamma pair for HDR extraction, executes one
-    deterministic linear camera-WB-aware RAW postprocess call to obtain one
-    normalized base tensor, then derives canonical bracket tensors by NumPy EV
-    scaling and `[0,1]` clipping without exposing TIFF artifacts outside this
-    step. Complexity: O(H*W). Side effects: one RAW postprocess invocation.
+    @details Ignores the parsed CLI gamma pair for HDR extraction, reuses an
+    optional precomputed normalized linear base tensor when available, otherwise
+    executes one deterministic linear camera-WB-aware RAW postprocess call, and
+    derives canonical bracket tensors by NumPy EV scaling and `[0,1]` clipping
+    without exposing TIFF artifacts outside this step. Complexity: O(H*W).
+    Side effects: at most one RAW postprocess invocation.
     @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
     @param np_module {ModuleType} Imported numpy module.
     @param multipliers {tuple[float, float, float]} Ordered exposure multipliers.
     @param gamma_value {tuple[float, float]} Parsed CLI gamma pair retained for compatibility diagnostics only.
+    @param base_rgb_float {object|None} Optional precomputed normalized linear RGB float base tensor.
     @return {list[object]} Ordered RGB float bracket tensors.
-    @satisfies REQ-010, REQ-057, REQ-079, REQ-080, REQ-157, REQ-158, REQ-159, REQ-160
+    @satisfies REQ-010, REQ-157, REQ-158, REQ-159, REQ-160
     """
 
     del gamma_value
     labels = ("ev_minus", "ev_zero", "ev_plus")
-    base_rgb_float = _extract_base_rgb_linear_float(
-        raw_handle=raw_handle,
-        np_module=np_module,
-    )
+    if base_rgb_float is None:
+        base_rgb_float = _extract_base_rgb_linear_float(
+            raw_handle=raw_handle,
+            np_module=np_module,
+        )
     bracket_images_float = _build_bracket_images_from_linear_base_float(
         np_module=np_module,
         base_rgb_float=base_rgb_float,
@@ -5331,13 +5579,14 @@ def _collect_missing_external_executables(
 
 
 def _resolve_auto_adjust_dependencies():
-    """@brief Resolve auto-adjust runtime dependencies for image-domain stages.
+    """@brief Resolve OpenCV and numpy runtime dependencies for image-domain stages.
 
     @details Imports `cv2` and `numpy` modules required by the auto-adjust
-    pipeline and returns `None` with deterministic error output when
-    dependencies are missing.
+    pipeline, the OpenCV HDR backend, and the automatic EV-zero evaluation, and
+    returns `None` with deterministic error output when dependencies are
+    missing.
     @return {tuple[ModuleType, ModuleType]|None} `(cv2_module, numpy_module)` when available; `None` on dependency failure.
-    @satisfies REQ-059, REQ-073, REQ-075
+    @satisfies REQ-037, REQ-059, REQ-073, REQ-075
     """
 
     try:
@@ -8544,7 +8793,7 @@ def run(args):
     numpy_module = _resolve_numpy_dependency()
     if numpy_module is None:
         return 1
-    if postprocess_options.auto_adjust_enabled or enable_opencv:
+    if postprocess_options.auto_adjust_enabled or enable_opencv or auto_zero_enabled:
         auto_adjust_dependencies = _resolve_auto_adjust_dependencies()
         if auto_adjust_dependencies is None:
             return 1
@@ -8669,9 +8918,15 @@ def run(args):
                 bits_per_color = _detect_dng_bits_per_color(raw_handle)
                 base_max_ev = _calculate_max_ev_from_bits(bits_per_color)
                 preview_luminance_stats = None
-                if auto_zero_enabled or auto_ev_enabled:
+                if auto_ev_enabled:
                     preview_luminance_stats = _extract_normalized_preview_luminance_stats(
                         raw_handle
+                    )
+                base_rgb_float = None
+                if auto_zero_enabled:
+                    base_rgb_float = _extract_base_rgb_linear_float(
+                        raw_handle=raw_handle,
+                        np_module=numpy_module,
                     )
                 auto_zero_supported_values = _derive_supported_ev_zero_values(base_max_ev)
                 resolved_ev_zero = _resolve_ev_zero(
@@ -8682,6 +8937,8 @@ def run(args):
                     base_max_ev=base_max_ev,
                     supported_ev_values_for_auto_zero=auto_zero_supported_values,
                     preview_luminance_stats=preview_luminance_stats,
+                    auto_zero_dependencies=auto_adjust_dependencies,
+                    base_rgb_float=base_rgb_float,
                 )
                 supported_ev_values = _derive_supported_ev_values(
                     bits_per_color, ev_zero=resolved_ev_zero
@@ -8728,6 +8985,7 @@ def run(args):
                     np_module=numpy_module,
                     multipliers=multipliers,
                     gamma_value=gamma_value,
+                    base_rgb_float=base_rgb_float,
                 )
                 if debug_context is not None:
                     extraction_suffixes = (
