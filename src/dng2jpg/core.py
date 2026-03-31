@@ -49,7 +49,7 @@ def _write_version_cache(idle_delay_seconds: int) -> None:
     epoch to derive the next `idle_time_epoch`.
     @return {None} No return value.
     @throws {OSError} Directory creation or cache-file write failure.
-    @satisfies REQ-016, REQ-141, REQ-142
+    @satisfies REQ-016, REQ-150, REQ-151
     @post `_VERSION_CACHE_FILE` stores the latest check epoch and derived
     idle-time metadata.
     """
@@ -112,7 +112,7 @@ def _check_online_version(force: bool) -> None:
     cache idle-time is still active.
     @return {None} No return value.
     @throws {OSError} Cache-file rewrite failure after a completed API attempt.
-    @satisfies REQ-016, REQ-141, REQ-142
+    @satisfies REQ-016, REQ-150, REQ-151
     @see _should_skip_version_check
     @see _write_version_cache
     """

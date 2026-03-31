@@ -98,7 +98,7 @@ class _FakeMergeDebevec:
         self.last_inputs = [np.array(image, copy=True) for image in images]
         self.last_times = np.array(times, copy=True)
         self.last_response = None if response is None else np.array(response, copy=True)
-        hdr_base = self.last_inputs[1].astype(np.float32) / 255.0
+        hdr_base = self.last_inputs[1].astype(np.float32)
         return (hdr_base * 1.6) + 0.2
 
 
@@ -119,7 +119,7 @@ class _FakeMergeRobertson:
         self.last_inputs = [np.array(image, copy=True) for image in images]
         self.last_times = np.array(times, copy=True)
         self.last_response = None if response is None else np.array(response, copy=True)
-        hdr_base = self.last_inputs[1].astype(np.float32) / 255.0
+        hdr_base = self.last_inputs[1].astype(np.float32)
         return (hdr_base * 1.4) + 0.1
 
 
@@ -999,7 +999,7 @@ def test_parse_run_options_accepts_hdr_merge_opencv_backend() -> None:
         == dng2jpg_module.DEFAULT_OPENCV_MERGE_ALGORITHM
     )
     assert opencv_merge_options.tonemap_enabled is True
-    assert opencv_merge_options.tonemap_gamma == 1.0
+    assert opencv_merge_options.tonemap_gamma == 2.2
 
 
 def test_parse_run_options_defaults_hdr_merge_to_opencv() -> None:
@@ -1179,8 +1179,8 @@ def test_build_ev_times_from_ev_zero_and_delta_matches_bracket_sequence() -> Non
     )
 
 
-def test_run_opencv_hdr_merge_adapts_mertens_inputs_to_uint8() -> None:
-    """OpenCV merge must feed Mertens with backend-local uint8 images."""
+def test_run_opencv_hdr_merge_keeps_mertens_inputs_as_float32() -> None:
+    """OpenCV merge must feed Mertens with backend-local float32 images."""
 
     fake_cv2 = _FakeOpenCvModule()
     bracket_images_float = [
@@ -1195,6 +1195,7 @@ def test_run_opencv_hdr_merge_adapts_mertens_inputs_to_uint8() -> None:
         bracket_images_float=bracket_images_float,
         ev_value=1.0,
         ev_zero=0.0,
+        gamma_value=dng2jpg_module.DEFAULT_GAMMA,
         opencv_merge_options=dng2jpg_module.OpenCvMergeOptions(
             merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_MERTENS
         ),
@@ -1203,12 +1204,12 @@ def test_run_opencv_hdr_merge_adapts_mertens_inputs_to_uint8() -> None:
 
     assert fake_cv2.merge_mertens.last_inputs is not None
     assert all(
-        frame.dtype == np.uint8 for frame in fake_cv2.merge_mertens.last_inputs
-    ), "Mertens input must be adapted to uint8 for OpenCV compatibility"
+        frame.dtype == np.float32 for frame in fake_cv2.merge_mertens.last_inputs
+    ), "Mertens input must stay on float32 for OpenCV float-path compatibility"
     assert all(
-        float(np.min(frame)) >= 0.0 and float(np.max(frame)) <= 255.0
+        float(np.min(frame)) >= 0.0 and float(np.max(frame)) <= 1.0
         for frame in fake_cv2.merge_mertens.last_inputs
-    ), "Mertens input must stay on OpenCV-compatible 8-bit scale"
+    ), "Mertens input must stay on normalized OpenCV-compatible float scale"
     assert fake_cv2.merge_debevec.last_inputs is None
     assert output.dtype == np.float32
     assert float(np.min(output)) >= 0.0
@@ -1247,7 +1248,7 @@ def test_parse_run_options_accepts_opencv_controls_and_defaults() -> None:
     assert default_options == dng2jpg_module.OpenCvMergeOptions(
         merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_ROBERTSON,
         tonemap_enabled=True,
-        tonemap_gamma=1.0,
+        tonemap_gamma=2.2,
     )
 
     parsed_override = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
@@ -1307,8 +1308,8 @@ def test_parse_run_options_rejects_invalid_opencv_controls() -> None:
     assert invalid_coupling is None
 
 
-def test_run_opencv_hdr_merge_dispatches_debevec_path_with_tonemap() -> None:
-    """OpenCV merge must dispatch Debevec calibration, merge, and tone-map stages."""
+def test_run_opencv_hdr_merge_dispatches_debevec_direct_float_path_with_tonemap() -> None:
+    """OpenCV merge must dispatch Debevec direct merge on linearized float data."""
 
     fake_cv2 = _FakeOpenCvModule()
     bracket_images_float = [
@@ -1321,39 +1322,41 @@ def test_run_opencv_hdr_merge_dispatches_debevec_path_with_tonemap() -> None:
         bracket_images_float=bracket_images_float,
         ev_value=1.0,
         ev_zero=1.5,
+        gamma_value=(2.0, 1.0),
         opencv_merge_options=dng2jpg_module.OpenCvMergeOptions(
             merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_DEBEVEC,
             tonemap_enabled=True,
-            tonemap_gamma=1.0,
         ),
         auto_adjust_dependencies=(fake_cv2, np),
     )
 
-    assert fake_cv2.calibrate_debevec.last_inputs is not None
+    assert fake_cv2.calibrate_debevec.last_inputs is None
     assert fake_cv2.merge_debevec.last_inputs is not None
     assert fake_cv2.merge_robertson.last_inputs is None
     assert fake_cv2.last_tonemap is not None
-    np.testing.assert_allclose(
-        fake_cv2.calibrate_debevec.last_times,
-        np.array([0.5, 1.0, 2.0], dtype=np.float32),
-        rtol=1e-6,
-        atol=1e-6,
-    )
     np.testing.assert_allclose(
         fake_cv2.merge_debevec.last_times,
         np.array([0.5, 1.0, 2.0], dtype=np.float32),
         rtol=1e-6,
         atol=1e-6,
     )
-    assert all(frame.dtype == np.uint8 for frame in fake_cv2.merge_debevec.last_inputs)
-    assert fake_cv2.last_tonemap.gamma == 1.0
+    assert all(
+        frame.dtype == np.float32 for frame in fake_cv2.merge_debevec.last_inputs
+    )
+    np.testing.assert_allclose(
+        fake_cv2.merge_debevec.last_inputs[1],
+        np.full((1, 2, 3), 0.25, dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    assert fake_cv2.last_tonemap.gamma == 2.2
     assert output.dtype == np.float32
     assert float(np.min(output)) >= 0.0
     assert float(np.max(output)) <= 1.0
 
 
-def test_run_opencv_hdr_merge_dispatches_robertson_path() -> None:
-    """OpenCV merge must dispatch Robertson calibration and merge stages."""
+def test_run_opencv_hdr_merge_dispatches_robertson_direct_float_path() -> None:
+    """OpenCV merge must dispatch Robertson direct merge on float data."""
 
     fake_cv2 = _FakeOpenCvModule()
     bracket_images_float = [
@@ -1366,6 +1369,7 @@ def test_run_opencv_hdr_merge_dispatches_robertson_path() -> None:
         bracket_images_float=bracket_images_float,
         ev_value=0.5,
         ev_zero=-0.5,
+        gamma_value=(1.0, 1.0),
         opencv_merge_options=dng2jpg_module.OpenCvMergeOptions(
             merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_ROBERTSON,
             tonemap_enabled=False,
@@ -1374,15 +1378,18 @@ def test_run_opencv_hdr_merge_dispatches_robertson_path() -> None:
         auto_adjust_dependencies=(fake_cv2, np),
     )
 
-    assert fake_cv2.calibrate_robertson.last_inputs is not None
+    assert fake_cv2.calibrate_robertson.last_inputs is None
     assert fake_cv2.merge_robertson.last_inputs is not None
     assert fake_cv2.merge_debevec.last_inputs is None
     assert fake_cv2.last_tonemap is None
     np.testing.assert_allclose(
-        fake_cv2.calibrate_robertson.last_times,
+        fake_cv2.merge_robertson.last_times,
         np.array([2 ** -0.5, 1.0, 2**0.5], dtype=np.float32),
         rtol=1e-6,
         atol=1e-6,
+    )
+    assert all(
+        frame.dtype == np.float32 for frame in fake_cv2.merge_robertson.last_inputs
     )
     assert output.dtype == np.float32
     assert float(np.min(output)) >= 0.0
@@ -1403,6 +1410,7 @@ def test_run_opencv_hdr_merge_skips_tonemap_for_mertens() -> None:
         bracket_images_float=bracket_images_float,
         ev_value=1.0,
         ev_zero=0.0,
+        gamma_value=dng2jpg_module.DEFAULT_GAMMA,
         opencv_merge_options=dng2jpg_module.OpenCvMergeOptions(
             merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_MERTENS,
             tonemap_enabled=True,
@@ -1415,6 +1423,60 @@ def test_run_opencv_hdr_merge_skips_tonemap_for_mertens() -> None:
     assert fake_cv2.merge_mertens.last_inputs is not None
     assert fake_cv2.merge_debevec.last_inputs is None
     assert fake_cv2.merge_robertson.last_inputs is None
+
+
+def test_invert_rawpy_gamma_rgb_float_inverts_pure_power_gamma() -> None:
+    """rawpy gamma inversion must linearize float data without quantization."""
+
+    encoded = np.array(
+        [[[0.25, 0.5, 0.75], [1.0, 0.0, 0.125]]],
+        dtype=np.float32,
+    )
+
+    linearized = dng2jpg_module._invert_rawpy_gamma_rgb_float(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_float=encoded,
+        rawpy_gamma=(2.0, 1.0),
+    )
+
+    np.testing.assert_allclose(
+        linearized,
+        np.square(encoded),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+
+
+def test_run_opencv_merge_mertens_applies_float_path_brightness_rescaling() -> None:
+    """Mertens float path must rescale OpenCV output before normalization."""
+
+    class _ScalingMergeMertens:
+        def __init__(self) -> None:
+            self.last_inputs: list[np.ndarray] | None = None
+
+        def process(self, images: list[np.ndarray]) -> np.ndarray:
+            self.last_inputs = [np.array(image, copy=True) for image in images]
+            return np.array([[[0.1, 0.2, 0.4]]], dtype=np.float32)
+
+    class _ScalingCv2:
+        def __init__(self) -> None:
+            self.merge_mertens = _ScalingMergeMertens()
+
+        def createMergeMertens(self) -> _ScalingMergeMertens:
+            return self.merge_mertens
+
+    scaled = dng2jpg_module._run_opencv_merge_mertens(  # pylint: disable=protected-access
+        cv2_module=_ScalingCv2(),
+        np_module=np,
+        exposures_float=[np.full((1, 1, 3), 0.5, dtype=np.float32) for _ in range(3)],
+    )
+
+    np.testing.assert_allclose(
+        scaled,
+        np.array([[[0.25, 0.5, 1.0]]], dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
 
 
 def test_parse_auto_levels_options_defaults_match_rawtherapee() -> None:

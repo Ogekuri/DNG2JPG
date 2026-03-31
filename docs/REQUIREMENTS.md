@@ -97,7 +97,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **DES-004**: MUST isolate intermediate processing artifacts in temporary directories and cleanup automatically after command completion.
 - **DES-005**: MUST preserve source EXIF payload into output JPEG, rebuild EXIF thumbnail from final quantized JPG pixels, and write refreshed EXIF metadata before filesystem timestamp synchronization when EXIF payload exists.
 - **DES-006**: MUST resolve backend-specific default postprocess factors from selected `--hdr-merge` mode and, for `Luminace-HDR`, from resolved tone-mapping operator.
-- **DES-008**: MUST default OpenCV backend static postprocess factors to `post_gamma=1.1`, `brightness=1.05`, `contrast=1.3`, and `saturation=1.10`.
+- **DES-008**: MUST default OpenCV backend static postprocess factors to `post_gamma=1.0`, `brightness=1.0`, `contrast=1.0`, and `saturation=1.0`.
 - **DES-007**: MUST process conversion as a one-shot process model without spawning explicit application-managed threads.
 - **DES-009**: MUST serialize `--debug` checkpoints from normalized RGB float stage buffers into persistent TIFF16 files outside the temporary workspace lifecycle.
 
@@ -111,7 +111,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-007**: MUST reject `--aa-*` options when `--auto-adjust` resolves to `disable` and MUST reject `--ab-*` options when `--auto-brightness` resolves to `disable`.
 - **REQ-008**: MUST compute automatic EV center from preview luminance when `--auto-zero` resolves to `enable` and clamp it to safe bit-derived bounds.
 - **REQ-009**: MUST compute adaptive EV from preview luminance statistics when `--auto-ev` resolves to `enable` and `--ev` is not specified, then clamp it to supported selectors.
-- **REQ-010**: MUST extract brackets `ev_minus`, `ev_zero`, and `ev_plus` with `rawpy.postprocess output_bps=16`, convert each bracket to normalized OpenCV-compatible RGB float `[0,1]`, and expose only that float triplet to downstream merge stages.
+- **REQ-010**: MUST extract brackets `ev_minus`, `ev_zero`, and `ev_plus` with `rawpy.postprocess output_bps=16`, convert each bracket to normalized RGB float `[0,1]`, and preserve that float triplet as the only cross-stage HDR contract.
 - **REQ-011**: MUST run `luminance-hdr-cli` with deterministic HDR/TMO arguments for luminance backend, confining any required 16-bit TIFF intermediates to the backend step and returning normalized RGB float output.
 - **REQ-012**: MUST exchange normalized OpenCV-compatible RGB float tensors `[0,1]` between merge, auto-brightness, auto-levels, static postprocess, auto-adjust, and final-save preparation stages.
 - **REQ-013**: MUST execute optional auto-brightness, optional auto-levels, post-gamma, brightness, contrast, and saturation in this exact order on RGB float stage interfaces before any optional auto-adjust stage.
@@ -119,8 +119,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-014**: MUST synchronize output file timestamps from EXIF datetime only after refreshed EXIF metadata has been written when EXIF datetime metadata is available.
 - **REQ-015**: MUST return `1` on parse, validation, dependency, and processing errors, and return `0` on successful processing.
 - **REQ-016**: MUST execute GitHub latest-release version checks with an idle-time cache JSON file and print version status or check errors.
-- **REQ-141**: MUST use idle-delay `3600` seconds after successful latest-release checks and idle-delay `86400` seconds after any latest-release check error.
-- **REQ-142**: MUST recalculate idle-time and rewrite the version-check cache JSON after every latest-release API attempt, regardless of success or error outcome.
+- **REQ-150**: MUST use idle-delay `3600` seconds after successful latest-release checks and idle-delay `86400` seconds after any latest-release check error.
+- **REQ-151**: MUST recalculate idle-time and rewrite the version-check cache JSON after every latest-release API attempt, regardless of success or error outcome.
 - **REQ-017**: MUST render conversion usage with canonical executable name `dng2jpg` and MUST NOT prepend alternative launcher labels.
 - **REQ-018**: MUST parse `--auto-zero <enable|disable>`, default it to `enable` without `--ev-zero` and `disable` with `--ev-zero`, and MUST let `--ev-zero` override enabled auto-zero with an explicit ignored-parameter output.
 - **REQ-019**: MUST enforce `--auto-zero-pct` and `--auto-ev-pct` values in inclusive range `0..100`.
@@ -178,11 +178,14 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-107**: MUST accept `--hdr-merge OpenCV` as HDR backend selector and execute OpenCV backend behavior when selected or by default.
 - **REQ-108**: MUST execute OpenCV backend from three in-memory RGB float brackets ordered as `ev_minus`, `ev_zero`, `ev_plus` using selectable algorithm `Debevec`, `Robertson`, or `Mertens`, defaulting to `Robertson`.
 - **REQ-109**: MUST derive OpenCV exposure times from extracted bracket span, preserve bracket order, and map the sequence to `ev_zero=0 EV`.
-- **REQ-110**: MUST preserve RGB float input/output interfaces for OpenCV merge and confine backend-local quantization to OpenCV merge adaptation boundaries only.
-- **REQ-141**: MUST expose OpenCV controls `--opencv-merge-algorithm`, `--opencv-tonemap`, and `--opencv-tonemap-gamma`, defaulting to `Robertson`, `enable`, and `1.0`.
+- **REQ-110**: MUST preserve RGB float input/output interfaces for OpenCV merge and MUST keep the full OpenCV HDR path in RGB float `[0,1]` without backend-local `uint8` or `uint16` conversions.
+- **REQ-141**: MUST expose OpenCV controls `--opencv-merge-algorithm`, `--opencv-tonemap`, and `--opencv-tonemap-gamma`, defaulting to `Robertson`, `enable`, and `2.2`.
 - **REQ-142**: MUST interpret OpenCV exposure times against the zero-centered span `[-ev_delta,0,+ev_delta]` so extracted non-zero `ev_zero` remains a uniform exposure correction already embedded in bracket pixels.
-- **REQ-143**: MUST execute optional OpenCV tone mapping for Debevec and Robertson outputs before downstream postprocess, default enabled with gamma `1.0`, and MUST skip contrast-enhancing tone operators.
-- **REQ-144**: MUST deliver one congruent normalized RGB float output contract across OpenCV `Debevec`, `Robertson`, and `Mertens`, with no backend-specific contrast boost and only HDR reconstruction plus exposure correction.
+- **REQ-143**: MUST execute optional OpenCV simple gamma tone mapping for Debevec and Robertson outputs before downstream postprocess, default enabled with gamma `2.2`, and MUST skip contrast-enhancing tone operators.
+- **REQ-144**: MUST deliver one congruent normalized RGB float output contract across OpenCV `Debevec`, `Robertson`, and `Mertens`, preserving exposure semantics without backend-specific contrast compensation.
+- **REQ-152**: MUST linearize Debevec and Robertson OpenCV input brackets in RGB float `[0,1]` before radiance merge by inverting the configured RAW extraction gamma pair.
+- **REQ-153**: MUST execute OpenCV `MergeDebevec` and `MergeRobertson` directly on float brackets with exposure times and without explicit `CalibrateDebevec` or `CalibrateRobertson` preprocessing.
+- **REQ-154**: MUST execute OpenCV `MergeMertens` on RGB float `[0,1]` brackets and rescale its float output to match OpenCV exposure-fusion brightness semantics before final normalization.
 - **REQ-145**: MUST keep OpenCV backend default downstream postprocess factors neutral at `post_gamma=1.0`, `brightness=1.0`, `contrast=1.0`, and `saturation=1.0`.
 - **REQ-111**: MUST accept `--hdr-merge HDR-Plus` as HDR backend selector and execute HDR+ backend behavior when selected.
 - **REQ-112**: MUST execute HDR+ backend in source step order `scalar proxy -> hierarchical alignment -> box_down2 -> temporal merge -> spatial merge`, with internal frame order `(ev_zero, ev_minus, ev_plus)` and `ev_zero` at index `0`.
@@ -222,7 +225,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-012**: MUST verify `_encode_jpg` keeps float stage buffers and applies a single float-to-uint8 conversion immediately before JPEG save.
 - **TST-013**: MUST verify `_parse_run_options` accepts `--hdr-merge OpenCV`, defaults `--hdr-merge` to `OpenCV`, and rejects values outside `Luminace-HDR`, `OpenCV`, and `HDR-Plus`.
 - **TST-014**: MUST verify OpenCV exposure derivation preserves bracket order, maps the sequence to `ev_zero=0 EV`, and remains deterministic for variable bracket spans.
-- **TST-015**: MUST verify OpenCV merge outputs for `Debevec`, `Robertson`, and `Mertens` are normalized RGB float images bounded to `[0,1]`.
+- **TST-015**: MUST verify OpenCV merge outputs for `Debevec`, `Robertson`, and `Mertens` remain normalized RGB float images bounded to `[0,1]` after float-only backend execution.
 - **TST-016**: MUST verify auto-levels parser defaults `clip_pct=0.02`, `clip_out_of_gamut=true`, `highlight_reconstruction_method=Inpaint Opposed`, and `gain_threshold=1.0`.
 - **TST-017**: MUST verify auto-levels histogram calibration reproduces RawTherapee-compatible `expcomp`, `black`, `brightness`, `contrast`, `hlcompr`, and `hlcomprthresh` for deterministic synthetic histograms.
 - **TST-018**: MUST verify `Color Propagation` and `Inpaint Opposed` selectors produce deterministic RGB float outputs and preserve float-only internal math within the auto-levels stage.
@@ -240,12 +243,14 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-030**: MUST verify float-domain auto-adjust CLAHE-luma preserves blend semantics and remains within quantization-only deviation from the former uint16 implementation on deterministic fixtures.
 - **TST-031**: MUST verify `_resolve_default_postprocess` returns neutral factors `post_gamma=1.0`, `brightness=1.0`, `contrast=1.0`, and `saturation=1.0` when `--hdr-merge` resolves to `OpenCV`.
 - **TST-032**: MUST verify `_parse_run_options` accepts `--opencv-merge-algorithm`, `--opencv-tonemap`, and `--opencv-tonemap-gamma`, applies defaults, and rejects invalid OpenCV HDR values.
-- **TST-033**: MUST verify OpenCV backend dispatch selects `MergeDebevec`, `MergeRobertson`, or `MergeMertens` according to the resolved OpenCV algorithm option.
-- **TST-034**: MUST verify optional OpenCV tone mapping defaults to enabled with gamma `1.0` and can be disabled without changing pre-tonemap merge radiance.
+- **TST-033**: MUST verify OpenCV backend dispatch selects `MergeDebevec`, `MergeRobertson`, or `MergeMertens` and skips `CalibrateDebevec` and `CalibrateRobertson` preprocessing.
+- **TST-034**: MUST verify optional OpenCV tone mapping defaults to enabled with gamma `2.2` and can be disabled without changing pre-tonemap merged radiance.
 - **TST-035**: MUST verify OpenCV zero-centered exposure reference preserves the uniform exposure correction embedded by non-zero extracted `ev_zero`.
-- **TST-036**: MUST verify OpenCV backend preserves RGB float input/output boundaries and confines backend-local quantization to OpenCV merge adaptation boundaries only.
+- **TST-036**: MUST verify OpenCV backend preserves RGB float input/output boundaries and avoids backend-local `uint8` or `uint16` conversions.
 - **TST-037**: MUST verify `_parse_run_options` accepts `--debug` and enables persistent debug checkpoint configuration without changing existing positional or backend parsing.
 - **TST-038**: MUST verify debug checkpoint writers emit progressive TIFF filenames for extraction, merge, static postprocess, auto-brightness, auto-levels, and auto-adjust outputs in the output directory.
+- **TST-039**: MUST verify Debevec and Robertson OpenCV inputs are linearized in float by inverting the configured RAW extraction gamma pair before merge dispatch.
+- **TST-040**: MUST verify float-only OpenCV Mertens output applies OpenCV-equivalent `255x` exposure-fusion scaling before final `[0,1]` normalization.
 
 ## 5. Evidence Matrix
 
@@ -268,7 +273,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | DES-004 | `src/dng2jpg/dng2jpg.py::run`, `_run_luminance_hdr_cli`; excerpt: isolates intermediate artifacts under the command temporary workspace and backend-local subdirectories. |
 | DES-005 | `src/dng2jpg/dng2jpg.py::_extract_dng_exif_payload_and_timestamp`, `_refresh_output_jpg_exif_thumbnail_after_save`, `_build_oriented_thumbnail_jpeg_bytes`, `_encode_jpg`, `_sync_output_file_timestamps_from_exif`. |
 | DES-006 | `src/dng2jpg/dng2jpg.py::_resolve_default_postprocess`; excerpt: backend and TMO-specific defaults. |
-| DES-008 | `src/dng2jpg/dng2jpg.py::_resolve_default_postprocess`; excerpt: OpenCV backend defaults `post_gamma=1.1`, `brightness=1.05`, `contrast=1.3`, `saturation=1.10`. |
+| DES-008 | `src/dng2jpg/dng2jpg.py::_resolve_default_postprocess`; excerpt: OpenCV backend defaults `post_gamma=1.0`, `brightness=1.0`, `contrast=1.0`, `saturation=1.0`. |
 | DES-007 | `docs/WORKFLOW.md`; excerpt: execution-unit model shows process-based flows and "no explicit threads detected". |
 | REQ-001 | `src/dng2jpg/core.py::main`; excerpt: no args -> `ported.print_help(__version__)` and `return 0`. |
 | REQ-002 | `src/dng2jpg/core.py::main`; excerpt: `--help` prints management help and conversion help. |
@@ -286,8 +291,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-014 | `src/dng2jpg/dng2jpg.py::_encode_jpg`, `_sync_output_file_timestamps_from_exif`; excerpt: writes refreshed EXIF metadata before applying `os.utime` from EXIF timestamp. |
 | REQ-015 | `src/dng2jpg/dng2jpg.py::run`; excerpt: parse/dependency/processing failures return `1`, success returns `0`. |
 | REQ-016 | `src/dng2jpg/core.py::_check_online_version`, `_write_version_cache`; excerpt: GitHub latest-release check uses idle-time cache JSON and prints status or error output. |
-| REQ-141 | `src/dng2jpg/core.py::_check_online_version`; excerpt: success path uses `3600` seconds and error paths use `86400` seconds when calculating idle-delay. |
-| REQ-142 | `src/dng2jpg/core.py::_check_online_version`, `_write_version_cache`; excerpt: cache JSON is rewritten after every latest-release API attempt on both success and error outcomes. |
+| REQ-150 | `src/dng2jpg/core.py::_check_online_version`; excerpt: success path uses `3600` seconds and error paths use `86400` seconds when calculating idle-delay. |
+| REQ-151 | `src/dng2jpg/core.py::_check_online_version`, `_write_version_cache`; excerpt: cache JSON is rewritten after every latest-release API attempt on both success and error outcomes. |
 | REQ-017 | `src/dng2jpg/dng2jpg.py`; excerpt: `PROGRAM = "dng2jpg"` and help usage renders canonical command label without duplicated command token. |
 | REQ-018 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: resolves `--ev-zero` and `--auto-zero <enable|disable>` defaults with explicit ignored-parameter output on override. |
 | REQ-019 | `src/dng2jpg/dng2jpg.py::_parse_percentage_option`; excerpt: enforces inclusive `0..100` bounds. |

@@ -9,7 +9,7 @@ JPG to user-selected output path. Temporary workspace artifacts are isolated in
 a temporary directory and removed automatically on success and failure, while
 optional debug checkpoints persist in the output directory when `--debug` is
 enabled.
-    @satisfies PRJ-003, DES-008, DES-009, REQ-055, REQ-056, REQ-057, REQ-058, REQ-059, REQ-060, REQ-061, REQ-062, REQ-063, REQ-064, REQ-065, REQ-066, REQ-067, REQ-068, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-079, REQ-080, REQ-081, REQ-088, REQ-089, REQ-090, REQ-091, REQ-092, REQ-093, REQ-094, REQ-095, REQ-096, REQ-097, REQ-098, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-141, REQ-142, REQ-143, REQ-144, REQ-145, REQ-146, REQ-149
+    @satisfies PRJ-003, DES-008, DES-009, REQ-055, REQ-056, REQ-057, REQ-058, REQ-059, REQ-060, REQ-061, REQ-062, REQ-063, REQ-064, REQ-065, REQ-066, REQ-067, REQ-068, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-079, REQ-080, REQ-081, REQ-088, REQ-089, REQ-090, REQ-091, REQ-092, REQ-093, REQ-094, REQ-095, REQ-096, REQ-097, REQ-098, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-141, REQ-142, REQ-143, REQ-144, REQ-145, REQ-146, REQ-149, REQ-152, REQ-153, REQ-154
 """
 
 import os
@@ -110,7 +110,7 @@ DEFAULT_OPENCV_CONTRAST = 1.0
 DEFAULT_OPENCV_SATURATION = 1.0
 DEFAULT_OPENCV_MERGE_ALGORITHM = OPENCV_MERGE_ALGORITHM_ROBERTSON
 DEFAULT_OPENCV_TONEMAP_ENABLED = True
-DEFAULT_OPENCV_TONEMAP_GAMMA = 1.0
+DEFAULT_OPENCV_TONEMAP_GAMMA = 2.2
 DEFAULT_HDRPLUS_PROXY_MODE = "rggb"
 DEFAULT_HDRPLUS_SEARCH_RADIUS = 4
 DEFAULT_HDRPLUS_TEMPORAL_FACTOR = 8.0
@@ -529,15 +529,16 @@ class OpenCvMergeOptions:
     """@brief Hold deterministic OpenCV HDR merge option values.
 
     @details Encapsulates OpenCV merge controls used by the
-    `--hdr-merge=OpenCV` backend. Debevec and Robertson follow tutorial flow
-    `Calibrate* -> Merge* -> Tonemap`, Mertens executes exposure fusion
-    directly, and all OpenCV-local quantization is confined to merge
-    adaptation boundaries while external interfaces stay RGB float.
+    `--hdr-merge=OpenCV` backend. Debevec and Robertson linearize the extracted
+    float brackets and execute `Merge* -> Tonemap` directly on float inputs,
+    Mertens executes exposure fusion directly on float brackets with
+    OpenCV-equivalent output rescaling, and all external interfaces stay RGB
+    float `[0,1]`.
     @param merge_algorithm {str} Canonical OpenCV merge algorithm in `{"Debevec","Robertson","Mertens"}`.
     @param tonemap_enabled {bool} `True` enables simple OpenCV gamma tone mapping for Debevec/Robertson outputs.
-    @param tonemap_gamma {float} Positive gamma value passed to `cv2.createTonemap`; `1.0` preserves neutral gamma.
+    @param tonemap_gamma {float} Positive gamma value passed to `cv2.createTonemap`; `2.2` matches standard display brightness.
     @return {None} Immutable dataclass container.
-    @satisfies REQ-108, REQ-109, REQ-110, REQ-141, REQ-142, REQ-143, REQ-144
+    @satisfies REQ-108, REQ-109, REQ-110, REQ-141, REQ-142, REQ-143, REQ-144, REQ-152, REQ-153, REQ-154
     """
 
     merge_algorithm: str = DEFAULT_OPENCV_MERGE_ALGORITHM
@@ -3896,8 +3897,8 @@ def _extract_bracket_images_float(raw_handle, np_module, multipliers, gamma_valu
     @details Invokes `raw.postprocess` with `output_bps=16`,
     `use_camera_wb=True`, `no_auto_bright=True`, explicit `user_flip=0`, and
     the configured gamma pair, then converts each extracted bracket to
-    normalized OpenCV-compatible RGB float `[0,1]` without exposing TIFF
-    artifacts outside this step.
+    normalized RGB float `[0,1]` without exposing TIFF artifacts outside this
+    step.
     @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
     @param np_module {ModuleType} Imported numpy module.
     @param multipliers {tuple[float, float, float]} Ordered exposure multipliers.
@@ -4070,6 +4071,66 @@ def _build_ev_times_from_ev_zero_and_delta(ev_zero, ev_delta):
     )
 
 
+def _invert_rawpy_gamma_rgb_float(np_module, image_rgb_float, rawpy_gamma):
+    """@brief Invert rawpy/libraw gamma encoding on one RGB float tensor.
+
+    @details Reconstructs the encoded-domain cutoff and offset used by
+    `LibRaw::gamma_curve` because rawpy forwards `gamma=(power,slope)` as
+    `(1/power,slope)`. Applies the inverse piecewise transfer
+    `linear=encoded/slope` below the encoded cutoff and
+    `linear=((encoded+offset)/(1+offset))^power` above the cutoff. Keeps the
+    entire transform on RGB float `[0,1]`.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_float {object} Gamma-encoded RGB float tensor in `[0,1]`.
+    @param rawpy_gamma {tuple[float, float]} rawpy gamma pair `(power, slope)`.
+    @return {object} Linearized RGB float tensor in `[0,1]`.
+    @satisfies REQ-110, REQ-152
+    """
+
+    encoded_rgb = _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=image_rgb_float,
+    ).astype(np_module.float64)
+    power = float(rawpy_gamma[0])
+    slope = float(rawpy_gamma[1])
+    if power == 1.0 and slope == 1.0:
+        return encoded_rgb.astype(np_module.float32)
+    if slope <= 1.0:
+        return np_module.clip(
+            np_module.power(encoded_rgb, power),
+            0.0,
+            1.0,
+        ).astype(np_module.float32)
+    libraw_power = 1.0 / power
+    encoded_cutoff = 0.0
+    offset = 0.0
+    if slope != 0.0 and (slope - 1.0) * (libraw_power - 1.0) <= 0.0:
+        bounds = [0.0, 0.0]
+        bounds[1 if slope >= 1.0 else 0] = 1.0
+        for _ in range(48):
+            encoded_cutoff = (bounds[0] + bounds[1]) / 2.0
+            if encoded_cutoff <= 0.0:
+                decision_metric = float("inf")
+            else:
+                decision_metric = (
+                    (math.pow(encoded_cutoff / slope, -libraw_power) - 1.0)
+                    / libraw_power
+                ) - (1.0 / encoded_cutoff)
+            bounds[1 if decision_metric > -1.0 else 0] = encoded_cutoff
+        offset = encoded_cutoff * (power - 1.0)
+    linear_rgb = encoded_rgb.copy()
+    if encoded_cutoff <= 0.0:
+        linear_rgb = np_module.power(linear_rgb, power)
+    else:
+        toe_mask = linear_rgb < encoded_cutoff
+        linear_rgb[toe_mask] = linear_rgb[toe_mask] / slope
+        linear_rgb[~toe_mask] = np_module.power(
+            (linear_rgb[~toe_mask] + offset) / (1.0 + offset),
+            power,
+        )
+    return np_module.clip(linear_rgb, 0.0, 1.0).astype(np_module.float32)
+
+
 def _normalize_opencv_hdr_to_unit_range(np_module, hdr_rgb_float32):
     """@brief Normalize OpenCV HDR tensor to unit range with deterministic bounds.
 
@@ -4094,20 +4155,22 @@ def _normalize_opencv_hdr_to_unit_range(np_module, hdr_rgb_float32):
     return np_module.clip(normalized, 0.0, 1.0).astype(np_module.float32)
 
 
-def _run_opencv_merge_mertens(cv2_module, np_module, exposures_uint8):
+def _run_opencv_merge_mertens(cv2_module, np_module, exposures_float):
     """@brief Execute OpenCV Mertens exposure fusion path.
 
-    @details Runs `cv2.createMergeMertens().process(...)` on backend-local
-    `uint8` bracket images and normalizes the result to the repository RGB float
-    contract.
+    @details Runs `cv2.createMergeMertens().process(...)` on normalized RGB
+    float brackets, rescales the float result by `255` to match OpenCV
+    exposure-fusion brightness semantics observed on `uint8` inputs, and then
+    normalizes the result to the repository RGB float contract.
     @param cv2_module {ModuleType} Imported OpenCV module.
     @param np_module {ModuleType} Imported numpy module.
-    @param exposures_uint8 {list[object]} Ordered RGB bracket tensors adapted to `uint8`.
+    @param exposures_float {list[object]} Ordered normalized RGB float bracket tensors.
     @return {object} Normalized RGB float tensor.
-    @satisfies REQ-108, REQ-110, REQ-144
+    @satisfies REQ-108, REQ-110, REQ-144, REQ-154
     """
 
-    fusion_rgb = cv2_module.createMergeMertens().process(exposures_uint8)
+    fusion_rgb = cv2_module.createMergeMertens().process(exposures_float)
+    fusion_rgb = np_module.array(fusion_rgb, dtype=np_module.float32) * 255.0
     return _normalize_opencv_hdr_to_unit_range(
         np_module=np_module,
         hdr_rgb_float32=fusion_rgb,
@@ -4117,7 +4180,7 @@ def _run_opencv_merge_mertens(cv2_module, np_module, exposures_uint8):
 def _run_opencv_merge_radiance(
     cv2_module,
     np_module,
-    exposures_uint8,
+    exposures_linear_float,
     exposure_times,
     merge_algorithm,
     tonemap_enabled,
@@ -4125,39 +4188,32 @@ def _run_opencv_merge_radiance(
 ):
     """@brief Execute OpenCV radiance HDR path for Debevec or Robertson.
 
-    @details Follows the OpenCV tutorial flow using `Calibrate* -> Merge*` with
-    zero-centered exposure times. Applies simple OpenCV gamma tone mapping when
-    enabled, otherwise normalizes the radiance map directly to the repository
-    RGB float contract.
+    @details Follows the OpenCV tutorial flow using zero-centered exposure times
+    and direct `MergeDebevec` or `MergeRobertson` execution on linearized RGB
+    float brackets. Applies simple OpenCV gamma tone mapping when enabled;
+    otherwise normalizes the radiance map directly to the repository RGB float
+    contract.
     @param cv2_module {ModuleType} Imported OpenCV module.
     @param np_module {ModuleType} Imported numpy module.
-    @param exposures_uint8 {list[object]} Ordered RGB bracket tensors adapted to `uint8`.
+    @param exposures_linear_float {list[object]} Ordered linear RGB float bracket tensors.
     @param exposure_times {object} OpenCV exposure-time vector.
     @param merge_algorithm {str} Canonical OpenCV merge algorithm token.
     @param tonemap_enabled {bool} `True` enables simple OpenCV tone mapping.
     @param tonemap_gamma {float} Positive gamma passed to `createTonemap`.
     @return {object} Normalized RGB float tensor.
     @exception RuntimeError Raised when `merge_algorithm` is unsupported.
-    @satisfies REQ-108, REQ-109, REQ-110, REQ-143, REQ-144
+    @satisfies REQ-108, REQ-109, REQ-110, REQ-143, REQ-144, REQ-152, REQ-153
     """
 
     if merge_algorithm == OPENCV_MERGE_ALGORITHM_DEBEVEC:
-        response = cv2_module.createCalibrateDebevec().process(
-            exposures_uint8, exposure_times
-        )
         hdr_rgb = cv2_module.createMergeDebevec().process(
-            exposures_uint8,
+            exposures_linear_float,
             times=exposure_times,
-            response=response,
         )
     elif merge_algorithm == OPENCV_MERGE_ALGORITHM_ROBERTSON:
-        response = cv2_module.createCalibrateRobertson().process(
-            exposures_uint8, exposure_times
-        )
         hdr_rgb = cv2_module.createMergeRobertson().process(
-            exposures_uint8,
+            exposures_linear_float,
             times=exposure_times,
-            response=response,
         )
     else:
         raise RuntimeError(f"Unsupported OpenCV merge algorithm: {merge_algorithm}")
@@ -4196,26 +4252,28 @@ def _run_opencv_hdr_merge(
     bracket_images_float,
     ev_value,
     ev_zero,
+    gamma_value,
     opencv_merge_options,
     auto_adjust_dependencies,
 ):
     """@brief Merge bracket float images into one RGB float image via OpenCV.
 
     @details Accepts three normalized RGB float bracket tensors ordered as
-    `(ev_minus, ev_zero, ev_plus)`, converts them to OpenCV-local `uint8`
-    bracket inputs, derives zero-centered exposure times from the bracket span,
-    dispatches one of `MergeDebevec`, `MergeRobertson`, or `MergeMertens`, and
-    returns one congruent normalized RGB float image. Debevec and Robertson
-    optionally apply simple OpenCV gamma tone mapping with neutral default
-    gamma `1.0`.
+    `(ev_minus, ev_zero, ev_plus)`, derives zero-centered exposure times from
+    the bracket span, dispatches one of `MergeDebevec`, `MergeRobertson`, or
+    `MergeMertens`, and returns one congruent normalized RGB float image.
+    Debevec and Robertson first invert the configured rawpy gamma pair to
+    restore linearized float brackets, while Mertens stays on the extracted
+    gamma-encoded float brackets and compensates OpenCV float-path scaling.
     @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors.
     @param ev_value {float} EV bracket delta used to generate exposure files.
     @param ev_zero {float} Central EV used to generate exposure files.
+    @param gamma_value {tuple[float, float]} rawpy gamma pair used during bracket extraction.
     @param opencv_merge_options {OpenCvMergeOptions} OpenCV merge backend controls.
     @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
     @return {object} Normalized RGB float merged image.
     @exception RuntimeError Raised when OpenCV/numpy dependencies are missing or bracket payloads are invalid.
-    @satisfies REQ-107, REQ-108, REQ-109, REQ-110, REQ-142, REQ-143, REQ-144
+    @satisfies REQ-107, REQ-108, REQ-109, REQ-110, REQ-142, REQ-143, REQ-144, REQ-152, REQ-153, REQ-154
     """
 
     if auto_adjust_dependencies is not None:
@@ -4226,30 +4284,36 @@ def _run_opencv_hdr_merge(
             raise RuntimeError("Missing required dependencies: opencv-python and numpy")
         cv2_module, np_module = resolved_dependencies
 
-    exposures_uint8 = []
+    exposures_float = []
     for image_rgb_float in bracket_images_float:
-        normalized_image = _normalize_float_rgb_image(
-            np_module=np_module,
-            image_data=image_rgb_float,
-        )
-        exposures_uint8.append(
-            _to_uint8_image_array(
+        exposures_float.append(
+            _normalize_float_rgb_image(
                 np_module=np_module,
-                image_data=normalized_image,
-            ).astype(np_module.uint8, copy=False)
+                image_data=image_rgb_float,
+            )
         )
 
-    exposure_times = _build_ev_times_from_ev_zero_and_delta(ev_zero=ev_zero, ev_delta=ev_value)
+    exposure_times = _build_ev_times_from_ev_zero_and_delta(
+        ev_zero=ev_zero, ev_delta=ev_value
+    )
     if opencv_merge_options.merge_algorithm == OPENCV_MERGE_ALGORITHM_MERTENS:
         return _run_opencv_merge_mertens(
             cv2_module=cv2_module,
             np_module=np_module,
-            exposures_uint8=exposures_uint8,
+            exposures_float=exposures_float,
         )
+    linearized_exposures_float = [
+        _invert_rawpy_gamma_rgb_float(
+            np_module=np_module,
+            image_rgb_float=image_rgb_float,
+            rawpy_gamma=gamma_value,
+        )
+        for image_rgb_float in exposures_float
+    ]
     return _run_opencv_merge_radiance(
         cv2_module=cv2_module,
         np_module=np_module,
-        exposures_uint8=exposures_uint8,
+        exposures_linear_float=linearized_exposures_float,
         exposure_times=exposure_times,
         merge_algorithm=opencv_merge_options.merge_algorithm,
         tonemap_enabled=opencv_merge_options.tonemap_enabled,
@@ -5171,7 +5235,7 @@ def _resolve_numpy_dependency():
 def _to_float32_image_array(np_module, image_data):
     """@brief Convert image tensor to normalized `float32` range `[0,1]`.
 
-    @details Normalizes integer or float image payloads into OpenCV-compatible
+    @details Normalizes integer or float image payloads into RGB-stage
     `float32` tensors. `uint16` uses `/65535`, `uint8` uses `/255`, floating
     inputs outside `[0,1]` are interpreted on the closest integer image scale
     (`255` or `65535`) and then clamped.
@@ -8556,6 +8620,7 @@ def run(args):
                     bracket_images_float=bracket_images_float,
                     ev_value=effective_ev_value,
                     ev_zero=resolved_ev_zero,
+                    gamma_value=gamma_value,
                     opencv_merge_options=opencv_merge_options,
                     auto_adjust_dependencies=auto_adjust_dependencies,
                 )
