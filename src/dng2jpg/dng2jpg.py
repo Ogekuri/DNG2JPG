@@ -3,11 +3,11 @@
 
 @details Implements bracketed RAW extraction with three synthetic exposures
 (`ev_zero-ev`, `ev_zero`, `ev_zero+ev`), merges them through selected
-`luminance-hdr-cli`, selected OpenCV (`Mertens+Debevec`), or selected HDR+
-tile-based flow with deterministic parameters, then writes final JPG to
-user-selected output path. Temporary artifacts are isolated in a temporary
-directory and removed automatically on success and failure.
-    @satisfies PRJ-003, DES-008, REQ-055, REQ-056, REQ-057, REQ-058, REQ-059, REQ-060, REQ-061, REQ-062, REQ-063, REQ-064, REQ-065, REQ-066, REQ-067, REQ-068, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-079, REQ-080, REQ-081, REQ-088, REQ-089, REQ-090, REQ-091, REQ-092, REQ-093, REQ-094, REQ-095, REQ-096, REQ-097, REQ-098, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115
+`luminance-hdr-cli`, selected OpenCV (`Debevec`, `Robertson`, `Mertens`), or
+selected HDR+ tile-based flow with deterministic parameters, then writes final
+JPG to user-selected output path. Temporary artifacts are isolated in a
+temporary directory and removed automatically on success and failure.
+    @satisfies PRJ-003, DES-008, REQ-055, REQ-056, REQ-057, REQ-058, REQ-059, REQ-060, REQ-061, REQ-062, REQ-063, REQ-064, REQ-065, REQ-066, REQ-067, REQ-068, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-079, REQ-080, REQ-081, REQ-088, REQ-089, REQ-090, REQ-091, REQ-092, REQ-093, REQ-094, REQ-095, REQ-096, REQ-097, REQ-098, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-141, REQ-142, REQ-143, REQ-144, REQ-145
 """
 
 import os
@@ -95,15 +95,20 @@ DEFAULT_AUTO_ADJUST_ENABLED = True
 HDR_MERGE_MODE_LUMINANCE = "Luminace-HDR"
 HDR_MERGE_MODE_OPENCV = "OpenCV"
 HDR_MERGE_MODE_HDR_PLUS = "HDR-Plus"
+OPENCV_MERGE_ALGORITHM_DEBEVEC = "Debevec"
+OPENCV_MERGE_ALGORITHM_ROBERTSON = "Robertson"
+OPENCV_MERGE_ALGORITHM_MERTENS = "Mertens"
 DEFAULT_REINHARD02_BRIGHTNESS = 1.25
 DEFAULT_REINHARD02_CONTRAST = 0.85
 DEFAULT_REINHARD02_SATURATION = 0.55
 DEFAULT_MANTIUK08_CONTRAST = 1.2
-DEFAULT_OPENCV_POST_GAMMA = 1.1
-DEFAULT_OPENCV_BRIGHTNESS = 1.05
-DEFAULT_OPENCV_CONTRAST = 1.3
-DEFAULT_OPENCV_SATURATION = 1.1
-DEFAULT_OPENCV_DEBEVEC_WHITE_POINT_PERCENTILE = 99.5
+DEFAULT_OPENCV_POST_GAMMA = 1.0
+DEFAULT_OPENCV_BRIGHTNESS = 1.0
+DEFAULT_OPENCV_CONTRAST = 1.0
+DEFAULT_OPENCV_SATURATION = 1.0
+DEFAULT_OPENCV_MERGE_ALGORITHM = OPENCV_MERGE_ALGORITHM_ROBERTSON
+DEFAULT_OPENCV_TONEMAP_ENABLED = True
+DEFAULT_OPENCV_TONEMAP_GAMMA = 1.0
 DEFAULT_HDRPLUS_PROXY_MODE = "rggb"
 DEFAULT_HDRPLUS_SEARCH_RADIUS = 4
 DEFAULT_HDRPLUS_TEMPORAL_FACTOR = 8.0
@@ -177,10 +182,20 @@ _HDRPLUS_KNOB_OPTIONS = (
     "--hdrplus-temporal-min-dist",
     "--hdrplus-temporal-max-dist",
 )
+_OPENCV_KNOB_OPTIONS = (
+    "--opencv-merge-algorithm",
+    "--opencv-tonemap",
+    "--opencv-tonemap-gamma",
+)
 _HDR_MERGE_MODES = (
     HDR_MERGE_MODE_LUMINANCE,
     HDR_MERGE_MODE_OPENCV,
     HDR_MERGE_MODE_HDR_PLUS,
+)
+_OPENCV_MERGE_ALGORITHMS = (
+    OPENCV_MERGE_ALGORITHM_DEBEVEC,
+    OPENCV_MERGE_ALGORITHM_ROBERTSON,
+    OPENCV_MERGE_ALGORITHM_MERTENS,
 )
 _AUTO_LEVELS_KNOB_OPTIONS = (
     "--al-clip-pct",
@@ -492,16 +507,20 @@ class OpenCvMergeOptions:
     """@brief Hold deterministic OpenCV HDR merge option values.
 
     @details Encapsulates OpenCV merge controls used by the
-    `--hdr-merge=OpenCV`
-    backend. The backend computes exposure fusion (`MergeMertens`) and
-    radiance merge (`MergeDebevec`) from the same uint16 bracket TIFF set, then
-    blends both outputs in float domain before one uint16 conversion.
-    @param debevec_white_point_percentile {float} Percentile in `(0, 100)` used to derive robust white-point normalization from Debevec luminance.
+    `--hdr-merge=OpenCV` backend. Debevec and Robertson follow tutorial flow
+    `Calibrate* -> Merge* -> Tonemap`, Mertens executes exposure fusion
+    directly, and all OpenCV-local quantization is confined to merge
+    adaptation boundaries while external interfaces stay RGB float.
+    @param merge_algorithm {str} Canonical OpenCV merge algorithm in `{"Debevec","Robertson","Mertens"}`.
+    @param tonemap_enabled {bool} `True` enables simple OpenCV gamma tone mapping for Debevec/Robertson outputs.
+    @param tonemap_gamma {float} Positive gamma value passed to `cv2.createTonemap`; `1.0` preserves neutral gamma.
     @return {None} Immutable dataclass container.
-    @satisfies REQ-108, REQ-109, REQ-110
+    @satisfies REQ-108, REQ-109, REQ-110, REQ-141, REQ-142, REQ-143, REQ-144
     """
 
-    debevec_white_point_percentile: float = DEFAULT_OPENCV_DEBEVEC_WHITE_POINT_PERCENTILE
+    merge_algorithm: str = DEFAULT_OPENCV_MERGE_ALGORITHM
+    tonemap_enabled: bool = DEFAULT_OPENCV_TONEMAP_ENABLED
+    tonemap_gamma: float = DEFAULT_OPENCV_TONEMAP_GAMMA
 
 
 @dataclass(frozen=True)
@@ -639,11 +658,11 @@ def print_help(version):
     @details Documents required positional arguments, required mutually
     exclusive exposure selectors (`--ev` or `--auto-ev`), optional RAW gamma
     controls, optional `--ev-zero` and `--auto-zero` selectors, shared
-    postprocessing controls, backend selection including HDR+, and
-    luminance-hdr-cli tone-mapping options.
+    postprocessing controls, backend selection including OpenCV algorithm and
+    tone-map knobs, HDR+ controls, and luminance-hdr-cli tone-mapping options.
     @param version {str} CLI version label to append in usage output.
     @return {None} Writes help text to stdout.
-    @satisfies DES-008, REQ-056, REQ-063, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-088, REQ-089, REQ-090, REQ-091, REQ-094, REQ-097, REQ-100, REQ-101, REQ-102, REQ-111, REQ-127, REQ-128
+    @satisfies DES-008, REQ-056, REQ-063, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-088, REQ-089, REQ-090, REQ-091, REQ-094, REQ-097, REQ-100, REQ-101, REQ-102, REQ-111, REQ-127, REQ-128, REQ-141, REQ-143
     """
 
     print(
@@ -672,6 +691,9 @@ def print_help(version):
         "[--aa-sigmoid-contrast=<value>] [--aa-sigmoid-midpoint=<0..1>] "
         "[--aa-saturation-gamma=<value>] [--aa-highpass-blur-sigma=<value>] "
         f"[--hdr-merge <{HDR_MERGE_MODE_LUMINANCE}|{HDR_MERGE_MODE_OPENCV}|{HDR_MERGE_MODE_HDR_PLUS}>] "
+        "[--opencv-merge-algorithm=<Debevec|Robertson|Mertens>] "
+        "[--opencv-tonemap=<0|1|false|true|no|yes|off|on>] "
+        "[--opencv-tonemap-gamma=<value>] "
         "[--hdrplus-proxy-mode=<rggb|bt709|mean>] "
         "[--hdrplus-search-radius=<value>] "
         "[--hdrplus-temporal-factor=<value>] "
@@ -823,6 +845,21 @@ def print_help(version):
     )
     print(
         f"  --hdr-merge <name> - Select HDR merge backend ({HDR_MERGE_MODE_LUMINANCE}, {HDR_MERGE_MODE_OPENCV}, {HDR_MERGE_MODE_HDR_PLUS}; default: {HDR_MERGE_MODE_OPENCV})."
+    )
+    print(
+        f"  [OpenCV knobs]    - Effective only when --hdr-merge {HDR_MERGE_MODE_OPENCV} is selected."
+    )
+    print(
+        "  --opencv-merge-algorithm=<name> - OpenCV HDR algorithm selector."
+        f" Allowed values: {', '.join(_OPENCV_MERGE_ALGORITHMS)}"
+        f" (default: {DEFAULT_OPENCV_MERGE_ALGORITHM})."
+    )
+    print(
+        f"  --opencv-tonemap=<bool> - Enable simple OpenCV tone mapping for {OPENCV_MERGE_ALGORITHM_DEBEVEC}/{OPENCV_MERGE_ALGORITHM_ROBERTSON}"
+        f" (default: {'true' if DEFAULT_OPENCV_TONEMAP_ENABLED else 'false'})."
+    )
+    print(
+        f"  --opencv-tonemap-gamma=<value> - Positive gamma for OpenCV simple tone mapping (default: {DEFAULT_OPENCV_TONEMAP_GAMMA:g})."
     )
     print(
         f"  [HDR+ knobs]      - Effective only when --hdr-merge {HDR_MERGE_MODE_HDR_PLUS} is selected."
@@ -1232,6 +1269,78 @@ def _parse_explicit_boolean_option(option_name, option_raw):
     print_error(f"Invalid {option_name} value: {option_raw}")
     print_error("Allowed values: 0, 1, false, true, no, yes, off, on")
     return None
+
+
+def _parse_opencv_merge_algorithm_option(algorithm_raw):
+    """@brief Parse OpenCV merge algorithm selector.
+
+    @details Accepts case-insensitive OpenCV algorithm names, normalizes them
+    to canonical runtime tokens, and rejects unsupported values with
+    deterministic diagnostics.
+    @param algorithm_raw {str} Raw `--opencv-merge-algorithm` selector token.
+    @return {str|None} Canonical OpenCV merge algorithm token or `None` on parse failure.
+    @satisfies REQ-108, REQ-141
+    """
+
+    normalized = algorithm_raw.strip().lower()
+    mapping = {
+        OPENCV_MERGE_ALGORITHM_DEBEVEC.lower(): OPENCV_MERGE_ALGORITHM_DEBEVEC,
+        OPENCV_MERGE_ALGORITHM_ROBERTSON.lower(): OPENCV_MERGE_ALGORITHM_ROBERTSON,
+        OPENCV_MERGE_ALGORITHM_MERTENS.lower(): OPENCV_MERGE_ALGORITHM_MERTENS,
+    }
+    resolved = mapping.get(normalized)
+    if resolved is not None:
+        return resolved
+    print_error(f"Invalid --opencv-merge-algorithm value: {algorithm_raw}")
+    print_error("Allowed values: " + ", ".join(_OPENCV_MERGE_ALGORITHMS))
+    return None
+
+
+def _parse_opencv_options(opencv_raw_values):
+    """@brief Parse and validate OpenCV HDR merge knob values.
+
+    @details Applies OpenCV defaults for algorithm selector, tone-map toggle,
+    and tone-map gamma, validates allowed values, and returns one immutable
+    backend option container for downstream merge dispatch.
+    @param opencv_raw_values {dict[str, str]} Raw `--opencv-*` option values keyed by long option name.
+    @return {OpenCvMergeOptions|None} Parsed OpenCV merge options or `None` on validation error.
+    @satisfies REQ-141, REQ-143
+    """
+
+    options = OpenCvMergeOptions()
+    merge_algorithm = options.merge_algorithm
+    tonemap_enabled = options.tonemap_enabled
+    tonemap_gamma = options.tonemap_gamma
+
+    if "--opencv-merge-algorithm" in opencv_raw_values:
+        parsed = _parse_opencv_merge_algorithm_option(
+            opencv_raw_values["--opencv-merge-algorithm"]
+        )
+        if parsed is None:
+            return None
+        merge_algorithm = parsed
+
+    if "--opencv-tonemap" in opencv_raw_values:
+        parsed = _parse_explicit_boolean_option(
+            "--opencv-tonemap", opencv_raw_values["--opencv-tonemap"]
+        )
+        if parsed is None:
+            return None
+        tonemap_enabled = parsed
+
+    if "--opencv-tonemap-gamma" in opencv_raw_values:
+        parsed = _parse_positive_float_option(
+            "--opencv-tonemap-gamma", opencv_raw_values["--opencv-tonemap-gamma"]
+        )
+        if parsed is None:
+            return None
+        tonemap_gamma = parsed
+
+    return OpenCvMergeOptions(
+        merge_algorithm=merge_algorithm,
+        tonemap_enabled=tonemap_enabled,
+        tonemap_gamma=tonemap_gamma,
+    )
 
 
 def _clamp_ev_to_supported(ev_candidate, ev_values):
@@ -2453,13 +2562,13 @@ def _parse_run_options(args):
     `--ab-*` knobs, optional auto-levels stage and `--al-*` knobs,
     optional shared auto-adjust knobs, optional backend selector
     (`--hdr-merge=<Luminace-HDR|OpenCV|HDR-Plus>` default `OpenCV`),
-    HDR+ backend controls, and luminance backend controls
+    OpenCV backend controls, HDR+ backend controls, and luminance backend controls
     including explicit `--tmo*` passthrough options and optional
     auto-adjust enable selector (`--auto-adjust <enable|disable>`); rejects
     unknown options and invalid arity.
     @param args {list[str]} Raw command argument vector.
     @return {tuple[Path, Path, float|None, bool, tuple[float, float], PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, bool, float, float]|None} Parsed `(input, output, ev, auto_ev, gamma, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, auto_zero_enabled, auto_zero_pct, auto_ev_pct)` tuple; `None` on parse failure.
-    @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135
+    @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143
     """
 
     positional = []
@@ -2487,6 +2596,7 @@ def _parse_run_options(args):
     auto_adjust_enabled = DEFAULT_AUTO_ADJUST_ENABLED
     auto_adjust_raw_values = {}
     hdr_merge_mode = HDR_MERGE_MODE_OPENCV
+    opencv_raw_values = {}
     hdrplus_raw_values = {}
     luminance_hdr_model = DEFAULT_LUMINANCE_HDR_MODEL
     luminance_hdr_weight = DEFAULT_LUMINANCE_HDR_WEIGHT
@@ -2541,6 +2651,28 @@ def _parse_run_options(args):
                 print_error(f"Unknown option: {option_name}")
                 return None
             hdrplus_raw_values[option_name] = option_value
+            idx += consume_count
+            continue
+
+        if token.startswith("--opencv-"):
+            option_name = token
+            option_value = None
+            consume_count = 1
+            if "=" in token:
+                option_name, option_value = token.split("=", 1)
+            else:
+                if idx + 1 >= len(args):
+                    print_error(f"Missing value for {token}")
+                    return None
+                option_value = args[idx + 1]
+                if option_value.startswith("--"):
+                    print_error(f"Missing value for {token}")
+                    return None
+                consume_count = 2
+            if option_name not in _OPENCV_KNOB_OPTIONS:
+                print_error(f"Unknown option: {option_name}")
+                return None
+            opencv_raw_values[option_name] = option_value
             idx += consume_count
             continue
 
@@ -3145,6 +3277,12 @@ def _parse_run_options(args):
         invalid_knob = next(iter(hdrplus_raw_values))
         print_error(f"HDR+ knob {invalid_knob} requires --hdr-merge {HDR_MERGE_MODE_HDR_PLUS}")
         return None
+    if hdr_merge_mode != HDR_MERGE_MODE_OPENCV and opencv_raw_values:
+        invalid_knob = next(iter(opencv_raw_values))
+        print_error(
+            f"OpenCV knob {invalid_knob} requires --hdr-merge {HDR_MERGE_MODE_OPENCV}"
+        )
+        return None
 
     (
         backend_post_gamma,
@@ -3168,6 +3306,9 @@ def _parse_run_options(args):
         return None
     auto_adjust_options = _parse_auto_adjust_options(auto_adjust_raw_values)
     if auto_adjust_options is None:
+        return None
+    opencv_merge_options = _parse_opencv_options(opencv_raw_values)
+    if opencv_merge_options is None:
         return None
     hdrplus_options = _parse_hdrplus_options(hdrplus_raw_values)
     if hdrplus_options is None:
@@ -3205,9 +3346,7 @@ def _parse_run_options(args):
             tmo=luminance_tmo,
             tmo_extra_args=tuple(luminance_tmo_extra_args),
         ),
-        OpenCvMergeOptions(
-            debevec_white_point_percentile=DEFAULT_OPENCV_DEBEVEC_WHITE_POINT_PERCENTILE
-        ),
+        opencv_merge_options,
         hdrplus_options,
         enable_hdr_plus,
         ev_zero,
@@ -3864,64 +4003,153 @@ def _run_luminance_hdr_cli(
 def _build_ev_times_from_ev_zero_and_delta(ev_zero, ev_delta):
     """@brief Build deterministic exposure times array from EV center and EV delta.
 
-    @details Computes exposure times in stop space as
-    `[2^(ev_zero-ev_delta), 2^ev_zero, 2^(ev_zero+ev_delta)]` mapped to
-    bracket order `(ev_minus, ev_zero, ev_plus)` and returns `float32` vector
-    suitable for OpenCV `MergeDebevec.process`.
+    @details Computes zero-centered OpenCV exposure times in stop space as
+    `[2^(-ev_delta), 1, 2^(+ev_delta)]` mapped to bracket order
+    `(ev_minus, ev_zero, ev_plus)`. The extracted bracket pixels already embed
+    any non-zero `ev_zero` uniform exposure correction, so OpenCV merge times
+    stay centered on the canonical reference exposure.
     @param ev_zero {float} Central EV used during bracket extraction.
     @param ev_delta {float} EV bracket delta used during bracket extraction.
     @return {object} `numpy.float32` vector with length `3`.
     @exception RuntimeError Raised when numpy dependency is unavailable.
-    @satisfies REQ-108, REQ-109
+    @satisfies REQ-109, REQ-142
     """
 
     try:
         import numpy as np_module  # type: ignore
     except ModuleNotFoundError as exc:
         raise RuntimeError("Missing required dependency: numpy") from exc
+    del ev_zero
     return np_module.array(
         [
-            2 ** (ev_zero - ev_delta),
-            2**ev_zero,
-            2 ** (ev_zero + ev_delta),
+            2 ** (-ev_delta),
+            1.0,
+            2**ev_delta,
         ],
         dtype=np_module.float32,
     )
 
 
-def _normalize_debevec_hdr_to_unit_range(np_module, hdr_rgb_float32, white_point_percentile):
-    """@brief Normalize Debevec HDR tensor to unit range with robust white point.
+def _normalize_opencv_hdr_to_unit_range(np_module, hdr_rgb_float32):
+    """@brief Normalize OpenCV HDR tensor to unit range with deterministic bounds.
 
-    @details Computes BT.709 luminance, extracts percentile-derived `Lwhite`,
-    scales RGB tensor by `1/Lwhite`, and clamps into `[0,1]` to produce
-    deterministic blend-ready Debevec contribution.
+    @details Normalizes arbitrary OpenCV HDR or fusion output to one congruent
+    RGB float contract. Negative and non-finite values are cleared, values above
+    unit range are scaled down by global maximum, and the final tensor is
+    clamped into `[0,1]`.
     @param np_module {ModuleType} Imported numpy module.
-    @param hdr_rgb_float32 {object} Debevec output RGB tensor in float domain.
-    @param white_point_percentile {float} White-point percentile in `(0,100)`.
-    @return {object} Debevec RGB float tensor clamped to `[0,1]`.
-    @satisfies REQ-109, REQ-110
+    @param hdr_rgb_float32 {object} OpenCV HDR or fusion RGB tensor.
+    @return {object} Normalized RGB float tensor clamped to `[0,1]`.
+    @satisfies REQ-110, REQ-143, REQ-144
     """
 
     hdr_rgb_float64 = np_module.array(hdr_rgb_float32, dtype=np_module.float64)
-    luminance = (
-        0.2126 * hdr_rgb_float64[..., 0]
-        + 0.7152 * hdr_rgb_float64[..., 1]
-        + 0.0722 * hdr_rgb_float64[..., 2]
-    )
-    positive_mask = luminance > 0.0
-    if np_module.any(positive_mask):
-        positive_luminance = luminance[positive_mask]
-        white_point = float(
-            np_module.percentile(positive_luminance, float(white_point_percentile))
-        )
-        if white_point <= 0.0:
-            white_point = float(np_module.max(positive_luminance))
-        if white_point <= 0.0:
-            white_point = 1.0
-    else:
-        white_point = 1.0
-    normalized = hdr_rgb_float64 / white_point
+    finite_mask = np_module.isfinite(hdr_rgb_float64)
+    hdr_rgb_float64 = np_module.where(finite_mask, hdr_rgb_float64, 0.0)
+    hdr_rgb_float64 = np_module.maximum(hdr_rgb_float64, 0.0)
+    max_value = float(np_module.max(hdr_rgb_float64)) if hdr_rgb_float64.size else 0.0
+    if max_value > 1.0:
+        hdr_rgb_float64 = hdr_rgb_float64 / max_value
+    normalized = hdr_rgb_float64
     return np_module.clip(normalized, 0.0, 1.0).astype(np_module.float32)
+
+
+def _run_opencv_merge_mertens(cv2_module, np_module, exposures_uint8):
+    """@brief Execute OpenCV Mertens exposure fusion path.
+
+    @details Runs `cv2.createMergeMertens().process(...)` on backend-local
+    `uint8` bracket images and normalizes the result to the repository RGB float
+    contract.
+    @param cv2_module {ModuleType} Imported OpenCV module.
+    @param np_module {ModuleType} Imported numpy module.
+    @param exposures_uint8 {list[object]} Ordered RGB bracket tensors adapted to `uint8`.
+    @return {object} Normalized RGB float tensor.
+    @satisfies REQ-108, REQ-110, REQ-144
+    """
+
+    fusion_rgb = cv2_module.createMergeMertens().process(exposures_uint8)
+    return _normalize_opencv_hdr_to_unit_range(
+        np_module=np_module,
+        hdr_rgb_float32=fusion_rgb,
+    )
+
+
+def _run_opencv_merge_radiance(
+    cv2_module,
+    np_module,
+    exposures_uint8,
+    exposure_times,
+    merge_algorithm,
+    tonemap_enabled,
+    tonemap_gamma,
+):
+    """@brief Execute OpenCV radiance HDR path for Debevec or Robertson.
+
+    @details Follows the OpenCV tutorial flow using `Calibrate* -> Merge*` with
+    zero-centered exposure times. Applies simple OpenCV gamma tone mapping when
+    enabled, otherwise normalizes the radiance map directly to the repository
+    RGB float contract.
+    @param cv2_module {ModuleType} Imported OpenCV module.
+    @param np_module {ModuleType} Imported numpy module.
+    @param exposures_uint8 {list[object]} Ordered RGB bracket tensors adapted to `uint8`.
+    @param exposure_times {object} OpenCV exposure-time vector.
+    @param merge_algorithm {str} Canonical OpenCV merge algorithm token.
+    @param tonemap_enabled {bool} `True` enables simple OpenCV tone mapping.
+    @param tonemap_gamma {float} Positive gamma passed to `createTonemap`.
+    @return {object} Normalized RGB float tensor.
+    @exception RuntimeError Raised when `merge_algorithm` is unsupported.
+    @satisfies REQ-108, REQ-109, REQ-110, REQ-143, REQ-144
+    """
+
+    if merge_algorithm == OPENCV_MERGE_ALGORITHM_DEBEVEC:
+        response = cv2_module.createCalibrateDebevec().process(
+            exposures_uint8, exposure_times
+        )
+        hdr_rgb = cv2_module.createMergeDebevec().process(
+            exposures_uint8,
+            times=exposure_times,
+            response=response,
+        )
+    elif merge_algorithm == OPENCV_MERGE_ALGORITHM_ROBERTSON:
+        response = cv2_module.createCalibrateRobertson().process(
+            exposures_uint8, exposure_times
+        )
+        hdr_rgb = cv2_module.createMergeRobertson().process(
+            exposures_uint8,
+            times=exposure_times,
+            response=response,
+        )
+    else:
+        raise RuntimeError(f"Unsupported OpenCV merge algorithm: {merge_algorithm}")
+
+    hdr_rgb = np_module.array(hdr_rgb, dtype=np_module.float32)
+    if tonemap_enabled:
+        tonemap = cv2_module.createTonemap(float(tonemap_gamma))
+        hdr_rgb = tonemap.process(hdr_rgb)
+    return _normalize_opencv_hdr_to_unit_range(
+        np_module=np_module,
+        hdr_rgb_float32=hdr_rgb,
+    )
+
+
+def _normalize_debevec_hdr_to_unit_range(np_module, hdr_rgb_float32, white_point_percentile):
+    """@brief Preserve legacy Debevec normalization helper contract.
+
+    @details Keeps the historical helper name as one compatibility adapter for
+    tests and references while delegating to the unified OpenCV normalization
+    contract used by Debevec, Robertson, and Mertens outputs.
+    @param np_module {ModuleType} Imported numpy module.
+    @param hdr_rgb_float32 {object} OpenCV HDR RGB tensor.
+    @param white_point_percentile {float} Unused legacy parameter retained for compatibility.
+    @return {object} Normalized RGB float tensor clamped to `[0,1]`.
+    @satisfies REQ-144
+    """
+
+    del white_point_percentile
+    return _normalize_opencv_hdr_to_unit_range(
+        np_module=np_module,
+        hdr_rgb_float32=hdr_rgb_float32,
+    )
 
 
 def _run_opencv_hdr_merge(
@@ -3933,11 +4161,13 @@ def _run_opencv_hdr_merge(
 ):
     """@brief Merge bracket float images into one RGB float image via OpenCV.
 
-    @details Accepts the three bracket images as normalized RGB float tensors,
-    converts them to float32 `[0,1]` for `MergeMertens`, converts them to
-    `uint16` only for `MergeDebevec`, normalizes Debevec output with robust
-    luminance white-point scaling, blends both outputs in float domain, and
-    returns one normalized RGB float image.
+    @details Accepts three normalized RGB float bracket tensors ordered as
+    `(ev_minus, ev_zero, ev_plus)`, converts them to OpenCV-local `uint8`
+    bracket inputs, derives zero-centered exposure times from the bracket span,
+    dispatches one of `MergeDebevec`, `MergeRobertson`, or `MergeMertens`, and
+    returns one congruent normalized RGB float image. Debevec and Robertson
+    optionally apply simple OpenCV gamma tone mapping with neutral default
+    gamma `1.0`.
     @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors.
     @param ev_value {float} EV bracket delta used to generate exposure files.
     @param ev_zero {float} Central EV used to generate exposure files.
@@ -3945,7 +4175,7 @@ def _run_opencv_hdr_merge(
     @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
     @return {object} Normalized RGB float merged image.
     @exception RuntimeError Raised when OpenCV/numpy dependencies are missing or bracket payloads are invalid.
-    @satisfies REQ-107, REQ-108, REQ-109, REQ-110
+    @satisfies REQ-107, REQ-108, REQ-109, REQ-110, REQ-142, REQ-143, REQ-144
     """
 
     if auto_adjust_dependencies is not None:
@@ -3956,41 +4186,34 @@ def _run_opencv_hdr_merge(
             raise RuntimeError("Missing required dependencies: opencv-python and numpy")
         cv2_module, np_module = resolved_dependencies
 
-    exposures_uint16 = []
-    exposures_unit_float32 = []
+    exposures_uint8 = []
     for image_rgb_float in bracket_images_float:
         normalized_image = _normalize_float_rgb_image(
             np_module=np_module,
             image_data=image_rgb_float,
         )
-        exposures_unit_float32.append(normalized_image.astype(np_module.float32, copy=False))
-        exposures_uint16.append(
-            _to_uint16_image_array(
+        exposures_uint8.append(
+            _to_uint8_image_array(
                 np_module=np_module,
                 image_data=normalized_image,
-            )
+            ).astype(np_module.uint8, copy=False)
         )
 
     exposure_times = _build_ev_times_from_ev_zero_and_delta(ev_zero=ev_zero, ev_delta=ev_value)
-    merge_mertens = cv2_module.createMergeMertens()
-    fusion_rgb_float32 = merge_mertens.process(exposures_unit_float32)
-    merge_debevec = cv2_module.createMergeDebevec()
-    debevec_hdr_float32 = merge_debevec.process(exposures_uint16, times=exposure_times)
-    debevec_rgb_unit = _normalize_debevec_hdr_to_unit_range(
+    if opencv_merge_options.merge_algorithm == OPENCV_MERGE_ALGORITHM_MERTENS:
+        return _run_opencv_merge_mertens(
+            cv2_module=cv2_module,
+            np_module=np_module,
+            exposures_uint8=exposures_uint8,
+        )
+    return _run_opencv_merge_radiance(
+        cv2_module=cv2_module,
         np_module=np_module,
-        hdr_rgb_float32=debevec_hdr_float32,
-        white_point_percentile=opencv_merge_options.debevec_white_point_percentile,
-    )
-    fusion_rgb_float32 = np_module.clip(
-        np_module.array(fusion_rgb_float32, dtype=np_module.float32),
-        0.0,
-        1.0,
-    )
-    blended_rgb_float32 = (fusion_rgb_float32 + debevec_rgb_unit) * 0.5
-    return np_module.clip(
-        np_module.array(blended_rgb_float32, dtype=np_module.float32),
-        0.0,
-        1.0,
+        exposures_uint8=exposures_uint8,
+        exposure_times=exposure_times,
+        merge_algorithm=opencv_merge_options.merge_algorithm,
+        tonemap_enabled=opencv_merge_options.tonemap_enabled,
+        tonemap_gamma=opencv_merge_options.tonemap_gamma,
     )
 
 
@@ -7954,7 +8177,10 @@ def run(args):
     elif enable_opencv:
         print_info(
             "HDR backend: OpenCV "
-            f"(merge=Mertens+Debevec, debevecWhitePointPct={opencv_merge_options.debevec_white_point_percentile:g})"
+            f"(algorithm={opencv_merge_options.merge_algorithm}, "
+            f"tonemap={'enabled' if opencv_merge_options.tonemap_enabled else 'disabled'}, "
+            f"tonemapGamma={opencv_merge_options.tonemap_gamma:g}, "
+            "exposureReference=zero-centered span)"
         )
     elif enable_hdr_plus:
         print_info(

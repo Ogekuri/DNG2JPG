@@ -100,6 +100,13 @@
         - `_parse_hdr_merge_option(...)`: parse `--hdr-merge` backend selector [`src/dng2jpg/dng2jpg.py`]
           - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
         - `_resolve_default_postprocess(...)`: derive backend-specific default postprocess factors in `(post_gamma, brightness, contrast, saturation)` order, including OpenCV static defaults and luminance-TMO-specific overrides [`src/dng2jpg/dng2jpg.py`]
+        - `_parse_opencv_options(...)`: build OpenCV merge options dataclass from algorithm and tone-map knobs [`src/dng2jpg/dng2jpg.py`]
+          - `_parse_opencv_merge_algorithm_option(...)`: normalize `Debevec|Robertson|Mertens` selector [`src/dng2jpg/dng2jpg.py`]
+            - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
+          - `_parse_explicit_boolean_option(...)`: parse explicit OpenCV tone-map boolean values [`src/dng2jpg/dng2jpg.py`]
+            - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
+          - `_parse_positive_float_option(...)`: parse OpenCV tone-map gamma [`src/dng2jpg/dng2jpg.py`]
+            - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
         - `_parse_auto_brightness_options(...)`: build auto-brightness options dataclass with original photographic tonemap and desaturation controls [`src/dng2jpg/dng2jpg.py`]
           - `_parse_float_exclusive_range_option(...)`: parse `(min,max)` float range [`src/dng2jpg/dng2jpg.py`]
             - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
@@ -198,13 +205,21 @@
             - `_to_uint16_image_array(...)`: quantize normalized float tensors to `uint16` when file-oriented tools require 16-bit payloads [`src/dng2jpg/dng2jpg.py`]
         - `_order_bracket_paths(...)`: enforce deterministic bracket order [`src/dng2jpg/dng2jpg.py`]
         - `_normalize_float_rgb_image(...)`: normalize luminance backend output to RGB float `[0,1]` [`src/dng2jpg/dng2jpg.py`]
-      - `_run_opencv_hdr_merge(...)`: merge in-memory float brackets through OpenCV Mertens+Debevec backend and return normalized RGB float output [`src/dng2jpg/dng2jpg.py`]
+      - `_run_opencv_hdr_merge(...)`: merge in-memory float brackets through selected OpenCV `Debevec`, `Robertson`, or `Mertens` path and return normalized RGB float output [`src/dng2jpg/dng2jpg.py`]
         - `_normalize_float_rgb_image(...)`: normalize merge-step bracket payloads to RGB float `[0,1]` [`src/dng2jpg/dng2jpg.py`]
-        - `_to_uint16_image_array(...)`: adapt normalized float brackets to `uint16` only for Debevec radiance merge [`src/dng2jpg/dng2jpg.py`]
-        - `cv2.createMergeMertens().process(...)`: run Mertens fusion on normalized float32 RGB bracket tensors in `[0,1]` (external boundary)
-        - `cv2.createMergeDebevec().process(...)`: run Debevec HDR radiance merge on uint16 RGB bracket tensors with EV-derived exposure times (external boundary)
-        - `_build_ev_times_from_ev_zero_and_delta(...)`: derive exposure-time vector from EV center and EV delta [`src/dng2jpg/dng2jpg.py`]
-        - `_normalize_debevec_hdr_to_unit_range(...)`: normalize Debevec radiance to blend-ready unit range [`src/dng2jpg/dng2jpg.py`]
+        - `_to_uint8_image_array(...)`: adapt normalized float brackets to OpenCV-local `uint8` merge payloads [`src/dng2jpg/dng2jpg.py`]
+        - `_build_ev_times_from_ev_zero_and_delta(...)`: derive zero-centered exposure-time vector from bracket span [`src/dng2jpg/dng2jpg.py`]
+        - `_run_opencv_merge_mertens(...)`: execute OpenCV exposure fusion path [`src/dng2jpg/dng2jpg.py`]
+          - `cv2.createMergeMertens().process(...)`: run Mertens fusion on OpenCV-local `uint8` RGB bracket tensors (external boundary)
+          - `_normalize_opencv_hdr_to_unit_range(...)`: normalize OpenCV fusion output to repository RGB float contract [`src/dng2jpg/dng2jpg.py`]
+        - `_run_opencv_merge_radiance(...)`: execute Debevec or Robertson radiance path with optional simple tone mapping [`src/dng2jpg/dng2jpg.py`]
+          - `cv2.createCalibrateDebevec().process(...)`: recover inverse camera response for Debevec path (external boundary)
+          - `cv2.createMergeDebevec().process(...)`: merge Debevec HDR radiance from OpenCV-local `uint8` RGB brackets (external boundary)
+          - `cv2.createCalibrateRobertson().process(...)`: recover inverse camera response for Robertson path (external boundary)
+          - `cv2.createMergeRobertson().process(...)`: merge Robertson HDR radiance from OpenCV-local `uint8` RGB brackets (external boundary)
+          - `cv2.createTonemap(...).process(...)`: apply simple gamma tone mapping for radiance paths when enabled (external boundary)
+          - `_normalize_opencv_hdr_to_unit_range(...)`: normalize radiance or tone-mapped output to repository RGB float contract [`src/dng2jpg/dng2jpg.py`]
+        - `_normalize_debevec_hdr_to_unit_range(...)`: compatibility wrapper preserving legacy helper name while delegating to unified OpenCV normalization [`src/dng2jpg/dng2jpg.py`]
       - `_run_hdr_plus_merge(...)`: merge in-memory float brackets through HDR+ temporal/spatial tile backend and return normalized RGB float32 output [`src/dng2jpg/dng2jpg.py`]
         - `_normalize_float_rgb_image(...)`: normalize HDR+ input brackets to RGB float32 `[0,1]` in reference-first frame order [`src/dng2jpg/dng2jpg.py`]
         - `_hdrplus_build_scalar_proxy_float32(...)`: derive HDR+ normalized scalar proxy from RGB float32 brackets using the selected proxy mode [`src/dng2jpg/dng2jpg.py`]
@@ -320,7 +335,7 @@
   - filesystem cache read/write under user cache directory [`src/dng2jpg/core.py`]
   - process execution of `uv` management commands [`src/dng2jpg/core.py`]
   - process execution of `luminance-hdr-cli` backend [`src/dng2jpg/dng2jpg.py`]
-  - runtime execution of OpenCV merge APIs `MergeMertens` and `MergeDebevec` [`src/dng2jpg/dng2jpg.py`]
+  - runtime execution of OpenCV HDR APIs `CalibrateDebevec`, `MergeDebevec`, `CalibrateRobertson`, `MergeRobertson`, `MergeMertens`, and `Tonemap` [`src/dng2jpg/dng2jpg.py`]
   - runtime execution of NumPy sliding-window, padding, and vectorized tile arithmetic for HDR+ merge [`src/dng2jpg/dng2jpg.py`]
   - runtime imports and execution boundaries for `rawpy`, `imageio`, `PIL`, `numpy`, `cv2`, `piexif` [`src/dng2jpg/dng2jpg.py`]
   - filesystem IO for input DNG, temporary TIFF artifacts, output JPG, and metadata timestamps [`src/dng2jpg/dng2jpg.py`]

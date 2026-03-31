@@ -175,9 +175,14 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-136**: MUST implement CLAHE-luma directly on RGB float `[0,1]` by adjusting luminance only, reconstructing RGB with preserved chroma, and blending with the original image via configurable strength.
 - **REQ-137**: MUST keep auto-adjust CLAHE-luma functionally equivalent to the former auto-brightness CLAHE-luma stage except for differences attributable only to removed float-uint16 quantization.
 - **REQ-107**: MUST accept `--hdr-merge OpenCV` as HDR backend selector and execute OpenCV backend behavior when selected or by default.
-- **REQ-108**: MUST execute OpenCV backend merge from three in-memory RGB float brackets ordered as `ev_minus`, `ev_zero`, `ev_plus`, using `MergeMertens`, `MergeDebevec`, and EV-derived exposure times.
-- **REQ-109**: MUST normalize Debevec HDR radiance in float domain using robust luminance white-point percentile, blend it with Mertens fusion in float domain, and return one normalized RGB float image.
-- **REQ-110**: MUST confine any OpenCV-backend float-to-uint16 adaptation required by `MergeDebevec` to the merge step itself and MUST preserve RGB float input/output interfaces for the merge step.
+- **REQ-108**: MUST execute OpenCV backend from three in-memory RGB float brackets ordered as `ev_minus`, `ev_zero`, `ev_plus` using selectable algorithm `Debevec`, `Robertson`, or `Mertens`, defaulting to `Robertson`.
+- **REQ-109**: MUST derive OpenCV exposure times from extracted bracket span, preserve bracket order, and map the sequence to `ev_zero=0 EV`.
+- **REQ-110**: MUST preserve RGB float input/output interfaces for OpenCV merge and confine backend-local quantization to OpenCV merge adaptation boundaries only.
+- **REQ-141**: MUST expose OpenCV controls `--opencv-merge-algorithm`, `--opencv-tonemap`, and `--opencv-tonemap-gamma`, defaulting to `Robertson`, `enable`, and `1.0`.
+- **REQ-142**: MUST interpret OpenCV exposure times against the zero-centered span `[-ev_delta,0,+ev_delta]` so extracted non-zero `ev_zero` remains a uniform exposure correction already embedded in bracket pixels.
+- **REQ-143**: MUST execute optional OpenCV tone mapping for Debevec and Robertson outputs before downstream postprocess, default enabled with gamma `1.0`, and MUST skip contrast-enhancing tone operators.
+- **REQ-144**: MUST deliver one congruent normalized RGB float output contract across OpenCV `Debevec`, `Robertson`, and `Mertens`, with no backend-specific contrast boost and only HDR reconstruction plus exposure correction.
+- **REQ-145**: MUST keep OpenCV backend default downstream postprocess factors neutral at `post_gamma=1.0`, `brightness=1.0`, `contrast=1.0`, and `saturation=1.0`.
 - **REQ-111**: MUST accept `--hdr-merge HDR-Plus` as HDR backend selector and execute HDR+ backend behavior when selected.
 - **REQ-112**: MUST execute HDR+ backend in source step order `scalar proxy -> hierarchical alignment -> box_down2 -> temporal merge -> spatial merge`, with internal frame order `(ev_zero, ev_minus, ev_plus)` and `ev_zero` at index `0`.
 - **REQ-113**: MUST compute three-level HDR+ alignment on the scalar proxy with `box_down2`, two `gauss_down4` levels, per-tile L1 minimization over offsets `[-4,+3]`, and final full-resolution offset lift by `2`.
@@ -211,8 +216,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-011**: MUST verify `_apply_auto_brightness_rgb_float` preserves float I/O and executes the original step order, key-analysis thresholds, Reinhard mapping, and optional desaturation.
 - **TST-012**: MUST verify `_encode_jpg` keeps float stage buffers and applies a single float-to-uint8 conversion immediately before JPEG save.
 - **TST-013**: MUST verify `_parse_run_options` accepts `--hdr-merge OpenCV`, defaults `--hdr-merge` to `OpenCV`, and rejects values outside `Luminace-HDR`, `OpenCV`, and `HDR-Plus`.
-- **TST-014**: MUST verify OpenCV EV-time derivation returns deterministic three-element stop-space sequence mapped to bracket order.
-- **TST-015**: MUST verify Debevec normalization clamps blended radiance contribution to `[0,1]` float range before merge-step float return.
+- **TST-014**: MUST verify OpenCV exposure derivation preserves bracket order, maps the sequence to `ev_zero=0 EV`, and remains deterministic for variable bracket spans.
+- **TST-015**: MUST verify OpenCV merge outputs for `Debevec`, `Robertson`, and `Mertens` are normalized RGB float images bounded to `[0,1]`.
 - **TST-016**: MUST verify auto-levels parser defaults `clip_pct=0.02`, `clip_out_of_gamut=true`, `highlight_reconstruction_method=Inpaint Opposed`, and `gain_threshold=1.0`.
 - **TST-017**: MUST verify auto-levels histogram calibration reproduces RawTherapee-compatible `expcomp`, `black`, `brightness`, `contrast`, `hlcompr`, and `hlcomprthresh` for deterministic synthetic histograms.
 - **TST-018**: MUST verify `Color Propagation` and `Inpaint Opposed` selectors produce deterministic RGB float outputs and preserve float-only internal math within the auto-levels stage.
@@ -228,7 +233,12 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-028**: MUST verify auto-adjust CLI parsing accepts `enable|disable`, defaults to `enable`, and exposes CLAHE-luma enable, strength, clip-limit, and tile-grid controls with deterministic defaults and validation.
 - **TST-029**: MUST verify `_apply_validated_auto_adjust_pipeline` preserves float I/O and executes `blur -> level -> CLAHE-luma -> sigmoid -> vibrance -> high-pass`.
 - **TST-030**: MUST verify float-domain auto-adjust CLAHE-luma preserves blend semantics and remains within quantization-only deviation from the former uint16 implementation on deterministic fixtures.
-- **TST-031**: MUST verify `_resolve_default_postprocess` returns `post_gamma=1.1`, `brightness=1.05`, `contrast=1.3`, and `saturation=1.10` when `--hdr-merge` resolves to `OpenCV`.
+- **TST-031**: MUST verify `_resolve_default_postprocess` returns neutral factors `post_gamma=1.0`, `brightness=1.0`, `contrast=1.0`, and `saturation=1.0` when `--hdr-merge` resolves to `OpenCV`.
+- **TST-032**: MUST verify `_parse_run_options` accepts `--opencv-merge-algorithm`, `--opencv-tonemap`, and `--opencv-tonemap-gamma`, applies defaults, and rejects invalid OpenCV HDR values.
+- **TST-033**: MUST verify OpenCV backend dispatch selects `MergeDebevec`, `MergeRobertson`, or `MergeMertens` according to the resolved OpenCV algorithm option.
+- **TST-034**: MUST verify optional OpenCV tone mapping defaults to enabled with gamma `1.0` and can be disabled without changing pre-tonemap merge radiance.
+- **TST-035**: MUST verify OpenCV zero-centered exposure reference preserves the uniform exposure correction embedded by non-zero extracted `ev_zero`.
+- **TST-036**: MUST verify OpenCV backend preserves RGB float input/output boundaries and confines backend-local quantization to OpenCV merge adaptation boundaries only.
 
 ## 5. Evidence Matrix
 
@@ -326,9 +336,9 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-136 | `src/dng2jpg/dng2jpg.py::_apply_clahe_luma_rgb_float`; excerpt: applies CLAHE on float-domain luminance, reconstructs RGB with preserved chroma, and blends with original via configured strength. |
 | REQ-137 | `src/dng2jpg/dng2jpg.py::_apply_clahe_luma_rgb_float`; excerpt: keeps auto-adjust CLAHE-luma behavior aligned with the former uint16-based local-contrast stage except for quantization removal. |
 | REQ-107 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `print_help`; excerpt: parses `--hdr-merge OpenCV` and defaults to `OpenCV` when omitted. |
-| REQ-108 | `src/dng2jpg/dng2jpg.py::_run_opencv_hdr_merge`, `_build_ev_times_from_ev_zero_and_delta`; excerpt: executes OpenCV Mertens+Debevec using ordered bracket inputs and EV-derived exposure times. |
-| REQ-109 | `src/dng2jpg/dng2jpg.py::_normalize_debevec_hdr_to_unit_range`, `_run_opencv_hdr_merge`; excerpt: applies robust luminance white-point percentile normalization and blends Debevec with Mertens in float domain. |
-| REQ-110 | `src/dng2jpg/dng2jpg.py::_run_opencv_hdr_merge`; excerpt: maintains float-domain processing and performs one float-to-uint16 conversion for merged TIFF write. |
+| REQ-108 | `src/dng2jpg/dng2jpg.py::OpenCvMergeOptions`, `_parse_opencv_merge_algorithm_option`, `_parse_opencv_options`, `_run_opencv_hdr_merge`, `_run_opencv_merge_radiance`, `_run_opencv_merge_mertens`; excerpt: selects OpenCV `Debevec`, `Robertson`, or `Mertens` and dispatches the matching merge path. |
+| REQ-109 | `src/dng2jpg/dng2jpg.py::_build_ev_times_from_ev_zero_and_delta`; excerpt: derives deterministic zero-centered exposure times `[2^-ev_delta,1,2^+ev_delta]` in bracket order. |
+| REQ-110 | `src/dng2jpg/dng2jpg.py::_run_opencv_hdr_merge`, `_to_uint8_image_array`; excerpt: preserves RGB float input/output while confining OpenCV-local quantization to backend merge adaptation boundaries. |
 | REQ-111 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `print_help`, `run`; excerpt: accepts `--hdr-merge HDR-Plus`, documents backend, and routes execution to HDR+ merge path. |
 | REQ-112 | `src/dng2jpg/dng2jpg.py::_order_hdr_plus_reference_paths`, `_hdrplus_build_scalar_proxy_float32`, `_hdrplus_align_layers`, `_hdrplus_box_down2_float32`, `_hdrplus_compute_temporal_weights`, `_hdrplus_merge_temporal_rgb`, `_hdrplus_merge_spatial_rgb`, `_run_hdr_plus_merge`; excerpt: executes source order `scalar proxy -> hierarchical alignment -> box_down2 -> temporal merge -> spatial merge` with internal frame order `(ev_zero, ev_minus, ev_plus)` and `ev_zero` reference index `0`. |
 | REQ-113 | `src/dng2jpg/dng2jpg.py::_hdrplus_align_layer`, `_hdrplus_align_layers`; excerpt: applies three-level hierarchical tile alignment with `box_down2`, two `gauss_down4` levels, search offsets `[-4,+3]`, and final full-resolution offset lift. |
@@ -343,6 +353,11 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-138 | `src/dng2jpg/dng2jpg.py::HdrPlusOptions`, `HdrPlusTemporalRuntimeOptions`, `_hdrplus_resolve_temporal_runtime_options`, `_hdrplus_compute_temporal_weights`; excerpt: remaps temporal weighting controls for normalized `[0,1]` distances while preserving historical 16-bit code-domain behavior. |
 | REQ-139 | `src/dng2jpg/dng2jpg.py::_hdrplus_compute_tile_start_positions`, `_hdrplus_trunc_divide_int32`, `_hdrplus_align_layers`; excerpt: keeps alignment offsets, tile geometry, and search-domain indexing in integer form. |
 | REQ-140 | `src/dng2jpg/dng2jpg.py::_hdrplus_build_scalar_proxy_float32`, `_hdrplus_merge_temporal_rgb`, `_hdrplus_merge_spatial_rgb`, `_run_hdr_plus_merge`; excerpt: keeps HDR+ RGB frames and scalar proxy on float32 path with no `uint16` adaptation. |
+| REQ-141 | `src/dng2jpg/dng2jpg.py::OpenCvMergeOptions`, `_parse_opencv_options`, `_parse_run_options`, `print_help`; excerpt: exposes OpenCV algorithm, tone-map enable, and tone-map gamma controls with defaults `Robertson`, `enable`, and `1.0`. |
+| REQ-142 | `src/dng2jpg/dng2jpg.py::_build_ev_times_from_ev_zero_and_delta`, `_run_opencv_hdr_merge`; excerpt: uses zero-centered OpenCV exposure times so non-zero extracted `ev_zero` remains embedded in bracket pixels as uniform exposure correction. |
+| REQ-143 | `src/dng2jpg/dng2jpg.py::_run_opencv_merge_radiance`, `_normalize_opencv_hdr_to_unit_range`; excerpt: applies optional simple gamma tone mapping for Debevec/Robertson and avoids contrast-enhancing OpenCV tone operators. |
+| REQ-144 | `src/dng2jpg/dng2jpg.py::_normalize_opencv_hdr_to_unit_range`, `_run_opencv_merge_radiance`, `_run_opencv_merge_mertens`; excerpt: normalizes Debevec, Robertson, and Mertens outputs to one congruent RGB float `[0,1]` contract. |
+| REQ-145 | `src/dng2jpg/dng2jpg.py::_resolve_default_postprocess`; excerpt: assigns neutral downstream postprocess defaults for the OpenCV backend. |
 | REQ-132 | `src/dng2jpg/dng2jpg.py::_apply_static_postprocess_float`, `_apply_post_gamma_float`, `_apply_brightness_float`, `_apply_contrast_float`, `_apply_saturation_float`; excerpt: executes static postprocess directly on RGB float tensors without quantized intermediates. |
 | REQ-133 | `src/dng2jpg/dng2jpg.py::_encode_jpg`; excerpt: performs the only float-to-uint8 quantization immediately before Pillow JPEG save. |
 | REQ-134 | `src/dng2jpg/dng2jpg.py::_apply_post_gamma_float`, `_apply_brightness_float`, `_apply_contrast_float`, `_apply_saturation_float`; excerpt: preserves the legacy transfer equations and parameter semantics in float domain. |
@@ -376,4 +391,9 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | TST-028 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_accepts_auto_adjust_clahe_controls`; verifies auto-adjust parser defaults, enable/disable handling, and CLAHE-luma controls. |
 | TST-029 | `tests/test_uint16_postprocess_pipeline.py::test_apply_validated_auto_adjust_pipeline_executes_clahe_stage_order`; verifies float-interface auto-adjust stage order with inserted CLAHE-luma stage. |
 | TST-030 | `tests/test_uint16_postprocess_pipeline.py::test_apply_clahe_luma_rgb_float_matches_uint16_reference_within_quantization_tolerance`; verifies float-domain CLAHE-luma stays within quantization-only deviation from the former uint16 implementation. |
-| TST-031 | `tests/test_uint16_postprocess_pipeline.py::test_resolve_default_postprocess_opencv_uses_updated_static_defaults`; verifies OpenCV default static postprocess factors resolve to `1.1`, `1.05`, `1.3`, and `1.10`. |
+| TST-031 | `tests/test_uint16_postprocess_pipeline.py::test_resolve_default_postprocess_opencv_uses_updated_static_defaults`; verifies OpenCV default static postprocess factors resolve to neutral `1.0`, `1.0`, `1.0`, and `1.0`. |
+| TST-032 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_accepts_opencv_controls_and_defaults`, `test_parse_run_options_rejects_invalid_opencv_controls`; verifies `--opencv-*` parsing, defaults, validation, and backend coupling. |
+| TST-033 | `tests/test_uint16_postprocess_pipeline.py::test_run_opencv_hdr_merge_dispatches_debevec_path_with_tonemap`, `test_run_opencv_hdr_merge_dispatches_robertson_path`, `test_run_opencv_hdr_merge_skips_tonemap_for_mertens`; verifies OpenCV algorithm dispatch across Debevec, Robertson, and Mertens. |
+| TST-034 | `tests/test_uint16_postprocess_pipeline.py::test_run_opencv_hdr_merge_dispatches_debevec_path_with_tonemap`, `test_run_opencv_hdr_merge_skips_tonemap_for_mertens`; verifies tone-map default path for radiance modes and skip path for Mertens. |
+| TST-035 | `tests/test_uint16_postprocess_pipeline.py::test_build_ev_times_from_ev_zero_and_delta_matches_bracket_sequence`, `test_run_opencv_hdr_merge_dispatches_debevec_path_with_tonemap`; verifies zero-centered OpenCV exposure reference preserves extracted non-zero `ev_zero` as embedded pixel correction. |
+| TST-036 | `tests/test_uint16_postprocess_pipeline.py::test_run_opencv_hdr_merge_adapts_mertens_inputs_to_uint8`, `test_run_opencv_hdr_merge_dispatches_debevec_path_with_tonemap`, `test_run_opencv_hdr_merge_dispatches_robertson_path`; verifies RGB float boundaries remain external while OpenCV merge adaptation stays backend-local. |
