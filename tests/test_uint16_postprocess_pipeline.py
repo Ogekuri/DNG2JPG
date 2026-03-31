@@ -69,6 +69,54 @@ class _FakeImageIoModule:
         self.writes.append((path, np.array(image, copy=True)))
 
 
+class _FakeExifRatio:
+    """Minimal EXIF rational-like payload for exposure-time parsing tests."""
+
+    def __init__(self, numerator: int, denominator: int) -> None:
+        self.numerator = numerator
+        self.denominator = denominator
+
+
+class _FakeExifData:
+    """Minimal EXIF mapping shim for `_extract_dng_exif_payload_and_timestamp` tests."""
+
+    def __init__(self, values: dict[int, object], payload: bytes = b"fake-exif") -> None:
+        self._values = dict(values)
+        self._payload = payload
+
+    def get(self, key: int):
+        return self._values.get(key)
+
+    def tobytes(self) -> bytes:
+        return self._payload
+
+
+class _FakeOpenedImage:
+    """Minimal context-managed Pillow image shim exposing `getexif`."""
+
+    def __init__(self, exif_data: _FakeExifData | None) -> None:
+        self._exif_data = exif_data
+
+    def __enter__(self) -> "_FakeOpenedImage":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        del exc_type, exc, tb
+
+    def getexif(self) -> _FakeExifData | None:
+        return self._exif_data
+
+
+class _FakeExifPilModule:
+    """Minimal Pillow module shim exposing `open` for EXIF extraction tests."""
+
+    def __init__(self, exif_data: _FakeExifData | None) -> None:
+        self._exif_data = exif_data
+
+    def open(self, _path: str) -> _FakeOpenedImage:
+        return _FakeOpenedImage(self._exif_data)
+
+
 class _FakeMergeMertens:
     """Minimal OpenCV MergeMertens shim for HDR backend tests."""
 
@@ -1353,10 +1401,34 @@ def test_build_ev_times_from_ev_zero_and_delta_matches_bracket_sequence() -> Non
     assert times.shape == (3,)
     np.testing.assert_allclose(
         times,
-        np.array([2 ** -0.5, 1.0, 2**0.5], dtype=np.float32),
+        np.array([2 ** 0.5, 2.0, 2 ** 1.5], dtype=np.float32),
         rtol=1e-6,
         atol=1e-6,
     )
+
+
+def test_extract_dng_exif_payload_and_timestamp_reads_datetime_priority_and_exposure_time() -> None:
+    """EXIF extraction must prioritize datetime tags and parse exposure time seconds."""
+
+    fake_exif = _FakeExifData(
+        {
+            dng2jpg_module._EXIF_TAG_DATETIME_ORIGINAL: b"2024:01:02 03:04:05",  # pylint: disable=protected-access
+            dng2jpg_module._EXIF_TAG_DATETIME_DIGITIZED: b"2023:01:01 00:00:00",  # pylint: disable=protected-access
+            dng2jpg_module._EXIF_TAG_ORIENTATION: 6,  # pylint: disable=protected-access
+            dng2jpg_module._EXIF_TAG_EXPOSURE_TIME: _FakeExifRatio(1, 8),  # pylint: disable=protected-access
+        }
+    )
+    payload, timestamp, orientation, exposure_time_seconds = (
+        dng2jpg_module._extract_dng_exif_payload_and_timestamp(  # pylint: disable=protected-access
+            pil_image_module=_FakeExifPilModule(fake_exif),
+            input_dng=Path("input.dng"),
+        )
+    )
+
+    assert payload == b"fake-exif"
+    assert orientation == 6
+    assert exposure_time_seconds == 0.125
+    assert timestamp is not None
 
 
 def test_resolve_ev_zero_selects_minimum_candidate_and_applies_percentage() -> None:
@@ -1434,6 +1506,7 @@ def test_run_opencv_hdr_merge_keeps_mertens_inputs_as_float32() -> None:
         bracket_images_float=bracket_images_float,
         ev_value=1.0,
         ev_zero=0.0,
+        source_exposure_time_seconds=0.125,
         gamma_value=dng2jpg_module.DEFAULT_GAMMA,
         opencv_merge_options=dng2jpg_module.OpenCvMergeOptions(
             merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_MERTENS
@@ -1561,6 +1634,7 @@ def test_run_opencv_hdr_merge_dispatches_debevec_direct_float_path_with_tonemap(
         bracket_images_float=bracket_images_float,
         ev_value=1.0,
         ev_zero=1.5,
+        source_exposure_time_seconds=0.125,
         gamma_value=(2.0, 1.0),
         opencv_merge_options=dng2jpg_module.OpenCvMergeOptions(
             merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_DEBEVEC,
@@ -1569,16 +1643,17 @@ def test_run_opencv_hdr_merge_dispatches_debevec_direct_float_path_with_tonemap(
         auto_adjust_dependencies=(fake_cv2, np),
     )
 
-    assert fake_cv2.calibrate_debevec.last_inputs is None
+    assert fake_cv2.calibrate_debevec.last_inputs is not None
     assert fake_cv2.merge_debevec.last_inputs is not None
     assert fake_cv2.merge_robertson.last_inputs is None
     assert fake_cv2.last_tonemap is not None
     np.testing.assert_allclose(
         fake_cv2.merge_debevec.last_times,
-        np.array([0.5, 1.0, 2.0], dtype=np.float32),
+        np.array([0.17677669, 0.35355338, 0.70710677], dtype=np.float32),
         rtol=1e-6,
         atol=1e-6,
     )
+    assert fake_cv2.merge_debevec.last_response is not None
     assert all(
         frame.dtype == np.float32 for frame in fake_cv2.merge_debevec.last_inputs
     )
@@ -1608,6 +1683,7 @@ def test_run_opencv_hdr_merge_dispatches_robertson_direct_float_path() -> None:
         bracket_images_float=bracket_images_float,
         ev_value=0.5,
         ev_zero=-0.5,
+        source_exposure_time_seconds=0.125,
         gamma_value=(1.0, 1.0),
         opencv_merge_options=dng2jpg_module.OpenCvMergeOptions(
             merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_ROBERTSON,
@@ -1617,16 +1693,17 @@ def test_run_opencv_hdr_merge_dispatches_robertson_direct_float_path() -> None:
         auto_adjust_dependencies=(fake_cv2, np),
     )
 
-    assert fake_cv2.calibrate_robertson.last_inputs is None
+    assert fake_cv2.calibrate_robertson.last_inputs is not None
     assert fake_cv2.merge_robertson.last_inputs is not None
     assert fake_cv2.merge_debevec.last_inputs is None
     assert fake_cv2.last_tonemap is None
     np.testing.assert_allclose(
         fake_cv2.merge_robertson.last_times,
-        np.array([2 ** -0.5, 1.0, 2**0.5], dtype=np.float32),
+        np.array([0.0625, 0.08838835, 0.125], dtype=np.float32),
         rtol=1e-6,
         atol=1e-6,
     )
+    assert fake_cv2.merge_robertson.last_response is not None
     assert all(
         frame.dtype == np.float32 for frame in fake_cv2.merge_robertson.last_inputs
     )
@@ -1649,6 +1726,7 @@ def test_run_opencv_hdr_merge_skips_tonemap_for_mertens() -> None:
         bracket_images_float=bracket_images_float,
         ev_value=1.0,
         ev_zero=0.0,
+        source_exposure_time_seconds=0.125,
         gamma_value=dng2jpg_module.DEFAULT_GAMMA,
         opencv_merge_options=dng2jpg_module.OpenCvMergeOptions(
             merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_MERTENS,
@@ -1755,6 +1833,7 @@ def test_run_opencv_hdr_merge_ignores_gamma_value_for_linear_inputs() -> None:
         bracket_images_float=bracket_images_float,
         ev_value=0.5,
         ev_zero=0.0,
+        source_exposure_time_seconds=0.125,
         gamma_value=(9.9, 9.9),
         opencv_merge_options=dng2jpg_module.OpenCvMergeOptions(
             merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_ROBERTSON,
@@ -2486,7 +2565,7 @@ def test_run_debug_writes_extraction_and_merge_checkpoints(monkeypatch, tmp_path
     monkeypatch.setattr(
         dng2jpg_module,
         "_extract_dng_exif_payload_and_timestamp",
-        lambda **_kwargs: (None, None, 1),
+        lambda **_kwargs: (None, None, 1, 0.125),
     )
     monkeypatch.setattr(
         dng2jpg_module,
@@ -2581,7 +2660,7 @@ def test_run_auto_zero_prints_candidate_diagnostics(monkeypatch, tmp_path, capsy
     monkeypatch.setattr(
         dng2jpg_module,
         "_extract_dng_exif_payload_and_timestamp",
-        lambda **_kwargs: (None, None, 1),
+        lambda **_kwargs: (None, None, 1, 0.125),
     )
     monkeypatch.setattr(
         dng2jpg_module,
@@ -2612,3 +2691,25 @@ def test_run_auto_zero_prints_candidate_diagnostics(monkeypatch, tmp_path, capsy
     assert "Auto-zero candidate ev_ettr:" in output
     assert "Auto-zero candidate ev_dettaglio:" in output
     assert "Auto-zero selected EV:" in output
+def test_run_opencv_hdr_merge_requires_exif_exposure_time_for_radiance_modes() -> None:
+    """OpenCV radiance modes must reject missing EXIF exposure time."""
+
+    fake_cv2 = _FakeOpenCvModule()
+    bracket_images_float = [
+        np.full((1, 1, 3), 0.1, dtype=np.float32),
+        np.full((1, 1, 3), 0.3, dtype=np.float32),
+        np.full((1, 1, 3), 0.6, dtype=np.float32),
+    ]
+
+    with np.testing.assert_raises(ValueError):
+        dng2jpg_module._run_opencv_hdr_merge(  # pylint: disable=protected-access
+            bracket_images_float=bracket_images_float,
+            ev_value=1.0,
+            ev_zero=0.0,
+            source_exposure_time_seconds=None,
+            gamma_value=dng2jpg_module.DEFAULT_GAMMA,
+            opencv_merge_options=dng2jpg_module.OpenCvMergeOptions(
+                merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_DEBEVEC,
+            ),
+            auto_adjust_dependencies=(fake_cv2, np),
+        )

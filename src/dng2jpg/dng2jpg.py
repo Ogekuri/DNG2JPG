@@ -154,6 +154,7 @@ _EXIF_TAG_ORIENTATION = 274
 _EXIF_TAG_DATETIME = 306
 _EXIF_TAG_DATETIME_ORIGINAL = 36867
 _EXIF_TAG_DATETIME_DIGITIZED = 36868
+_EXIF_TAG_EXPOSURE_TIME = 33434
 _EXIF_VALID_ORIENTATIONS = (1, 2, 3, 4, 5, 6, 7, 8)
 _THUMBNAIL_MAX_SIZE = (256, 256)
 _AUTO_ADJUST_KNOB_OPTIONS = (
@@ -3886,23 +3887,87 @@ def _parse_exif_datetime_to_timestamp(datetime_raw):
     return parsed_datetime.timestamp()
 
 
+def _parse_exif_exposure_time_to_seconds(exposure_raw):
+    """@brief Parse one EXIF exposure-time token into positive seconds.
+
+    @details Normalizes scalar or rational-like EXIF `ExposureTime` payloads from
+    Pillow metadata into one positive Python `float` measured in seconds.
+    Accepted forms include numeric scalars, two-item `(numerator, denominator)`
+    pairs, and objects exposing `numerator`/`denominator` attributes.
+    @param exposure_raw {object} EXIF `ExposureTime` scalar or rational-like payload.
+    @return {float|None} Positive exposure time in seconds; `None` when missing or invalid.
+    @satisfies REQ-161
+    """
+
+    if exposure_raw is None:
+        return None
+    if isinstance(exposure_raw, (list, tuple)):
+        if len(exposure_raw) == 2:
+            numerator, denominator = exposure_raw
+            try:
+                exposure_seconds = float(numerator) / float(denominator)
+            except (TypeError, ValueError, ZeroDivisionError):
+                return None
+            return exposure_seconds if exposure_seconds > 0.0 else None
+        if len(exposure_raw) == 1:
+            exposure_raw = exposure_raw[0]
+    numerator = getattr(exposure_raw, "numerator", None)
+    denominator = getattr(exposure_raw, "denominator", None)
+    if numerator is not None and denominator is not None:
+        try:
+            exposure_seconds = float(numerator) / float(denominator)
+        except (TypeError, ValueError, ZeroDivisionError):
+            return None
+        return exposure_seconds if exposure_seconds > 0.0 else None
+    if isinstance(exposure_raw, bool):
+        return None
+    if isinstance(exposure_raw, (int, float)):
+        exposure_seconds = float(exposure_raw)
+        return exposure_seconds if exposure_seconds > 0.0 else None
+    if isinstance(exposure_raw, bytes):
+        try:
+            exposure_text = exposure_raw.decode("ascii").strip()
+        except UnicodeDecodeError:
+            return None
+    elif isinstance(exposure_raw, str):
+        exposure_text = exposure_raw.strip()
+    else:
+        return None
+    exposure_text = exposure_text.rstrip("\x00")
+    if not exposure_text:
+        return None
+    if "/" in exposure_text:
+        numerator_text, denominator_text = exposure_text.split("/", 1)
+        try:
+            exposure_seconds = float(numerator_text) / float(denominator_text)
+        except (TypeError, ValueError, ZeroDivisionError):
+            return None
+        return exposure_seconds if exposure_seconds > 0.0 else None
+    try:
+        exposure_seconds = float(exposure_text)
+    except ValueError:
+        return None
+    return exposure_seconds if exposure_seconds > 0.0 else None
+
+
 def _extract_dng_exif_payload_and_timestamp(pil_image_module, input_dng):
-    """@brief Extract DNG EXIF payload bytes, preferred datetime timestamp, and source orientation.
+    """@brief Extract DNG EXIF payload bytes, preferred datetime timestamp, source orientation, and exposure time.
 
     @details Opens input DNG via Pillow, suppresses known non-actionable
     `PIL.TiffImagePlugin` metadata warning for malformed TIFF tag `33723`, reads
     EXIF mapping without orientation mutation, serializes payload for JPEG save
     while source image handle is still open,
-    resolves source orientation from EXIF tag `274`, and resolves filesystem timestamp priority:
+    resolves source orientation from EXIF tag `274`, parses EXIF `ExposureTime`
+    to positive seconds, and resolves filesystem timestamp priority:
     `DateTimeOriginal`(36867) > `DateTimeDigitized`(36868) > `DateTime`(306).
     @param pil_image_module {ModuleType} Imported Pillow Image module.
     @param input_dng {Path} Source DNG path.
-    @return {tuple[bytes|None, float|None, int]} `(exif_payload, exif_timestamp, source_orientation)` with orientation defaulting to `1`.
-    @satisfies REQ-066, REQ-074, REQ-077
+    @return {tuple[bytes|None, float|None, int, float|None]} `(exif_payload, exif_timestamp, source_orientation, exposure_time_seconds)` with orientation defaulting to `1`.
+    @satisfies REQ-066, REQ-074, REQ-077, REQ-161
     """
 
     if not hasattr(pil_image_module, "open"):
-        return (None, None, 1)
+        return (None, None, 1, None)
     try:
         with warnings.catch_warnings():
             warnings.filterwarnings(
@@ -3912,10 +3977,10 @@ def _extract_dng_exif_payload_and_timestamp(pil_image_module, input_dng):
             )
             with pil_image_module.open(str(input_dng)) as source_image:
                 if not hasattr(source_image, "getexif"):
-                    return (None, None, 1)
+                    return (None, None, 1, None)
                 exif_data = source_image.getexif()
                 if exif_data is None:
-                    return (None, None, 1)
+                    return (None, None, 1, None)
                 exif_payload = (
                     exif_data.tobytes() if hasattr(exif_data, "tobytes") else None
                 )
@@ -3939,9 +4004,17 @@ def _extract_dng_exif_payload_and_timestamp(pil_image_module, input_dng):
                     )
                     if exif_timestamp is not None:
                         break
-                return (exif_payload, exif_timestamp, source_orientation)
+                exposure_time_seconds = _parse_exif_exposure_time_to_seconds(
+                    exif_data.get(_EXIF_TAG_EXPOSURE_TIME)
+                )
+                return (
+                    exif_payload,
+                    exif_timestamp,
+                    source_orientation,
+                    exposure_time_seconds,
+                )
     except (OSError, ValueError, TypeError, AttributeError):
-        return (None, None, 1)
+        return (None, None, 1, None)
 
 
 def _resolve_thumbnail_transpose_map(pil_image_module):
@@ -4499,14 +4572,49 @@ def _run_luminance_hdr_cli(
     )
 
 
-def _build_ev_times_from_ev_zero_and_delta(ev_zero, ev_delta):
-    """@brief Build deterministic exposure times array from EV center and EV delta.
+def _build_opencv_radiance_exposure_times(
+    source_exposure_time_seconds,
+    ev_zero,
+    ev_delta,
+):
+    """@brief Build OpenCV radiance exposure times in seconds from EXIF exposure and EV offsets.
 
-    @details Computes zero-centered OpenCV exposure times in stop space as
-    `[2^(-ev_delta), 1, 2^(+ev_delta)]` mapped to bracket order
-    `(ev_minus, ev_zero, ev_plus)`. The extracted bracket pixels already embed
-    any non-zero `ev_zero` uniform exposure correction, so OpenCV merge times
-    stay centered on the canonical reference exposure.
+    @details Computes OpenCV Debevec/Robertson exposure times in seconds from the
+    extracted RAW EXIF `ExposureTime` associated with the linear base image and
+    maps them to bracket order `(ev_minus, ev_zero, ev_plus)` as
+    `t_raw*2^(ev_zero-ev_delta)`, `t_raw*2^ev_zero`, and `t_raw*2^(ev_zero+ev_delta)`.
+    @param source_exposure_time_seconds {float} Positive source EXIF exposure time in seconds.
+    @param ev_zero {float} Central EV used during bracket extraction.
+    @param ev_delta {float} EV bracket delta used during bracket extraction.
+    @return {object} `numpy.float32` vector with length `3`.
+    @exception RuntimeError Raised when numpy dependency is unavailable.
+    @exception ValueError Raised when source exposure time is missing or invalid.
+    @satisfies REQ-109, REQ-142, REQ-161
+    """
+
+    try:
+        import numpy as np_module  # type: ignore
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("Missing required dependency: numpy") from exc
+    if source_exposure_time_seconds is None or float(source_exposure_time_seconds) <= 0.0:
+        raise ValueError("Missing valid EXIF ExposureTime for OpenCV radiance merge")
+    exposure_seconds = float(source_exposure_time_seconds)
+    return np_module.array(
+        [
+            exposure_seconds * (2 ** (ev_zero - ev_delta)),
+            exposure_seconds * (2**ev_zero),
+            exposure_seconds * (2 ** (ev_zero + ev_delta)),
+        ],
+        dtype=np_module.float32,
+    )
+
+
+def _build_ev_times_from_ev_zero_and_delta(ev_zero, ev_delta):
+    """@brief Build deterministic unit-base exposure times array from EV center and EV delta.
+
+    @details Delegates to the OpenCV radiance exposure-time helper using unit
+    source exposure `1.0` second so tests and compatibility callers can verify
+    deterministic stop-space mapping without EXIF metadata dependency.
     @param ev_zero {float} Central EV used during bracket extraction.
     @param ev_delta {float} EV bracket delta used during bracket extraction.
     @return {object} `numpy.float32` vector with length `3`.
@@ -4514,18 +4622,10 @@ def _build_ev_times_from_ev_zero_and_delta(ev_zero, ev_delta):
     @satisfies REQ-109, REQ-142
     """
 
-    try:
-        import numpy as np_module  # type: ignore
-    except ModuleNotFoundError as exc:
-        raise RuntimeError("Missing required dependency: numpy") from exc
-    del ev_zero
-    return np_module.array(
-        [
-            2 ** (-ev_delta),
-            1.0,
-            2**ev_delta,
-        ],
-        dtype=np_module.float32,
+    return _build_opencv_radiance_exposure_times(
+        source_exposure_time_seconds=1.0,
+        ev_zero=ev_zero,
+        ev_delta=ev_delta,
     )
 
 
@@ -4575,6 +4675,35 @@ def _run_opencv_merge_mertens(cv2_module, np_module, exposures_float):
     )
 
 
+def _estimate_opencv_camera_response(
+    cv2_module,
+    exposures_linear_float,
+    exposure_times,
+    merge_algorithm,
+):
+    """@brief Estimate OpenCV inverse camera response for Debevec or Robertson radiance merge.
+
+    @details Selects the OpenCV calibrator matching the requested radiance merge
+    algorithm and computes one inverse camera response tensor from the same
+    linear float brackets and exposure times used by the merge stage.
+    @param cv2_module {ModuleType} Imported OpenCV module.
+    @param exposures_linear_float {list[object]} Ordered linear RGB float bracket tensors.
+    @param exposure_times {object} OpenCV exposure-time vector.
+    @param merge_algorithm {str} Canonical OpenCV merge algorithm token.
+    @return {object} OpenCV response tensor compatible with Debevec/Robertson merge calls.
+    @exception RuntimeError Raised when `merge_algorithm` is unsupported.
+    @satisfies REQ-153, REQ-162
+    """
+
+    if merge_algorithm == OPENCV_MERGE_ALGORITHM_DEBEVEC:
+        calibrator = cv2_module.createCalibrateDebevec()
+    elif merge_algorithm == OPENCV_MERGE_ALGORITHM_ROBERTSON:
+        calibrator = cv2_module.createCalibrateRobertson()
+    else:
+        raise RuntimeError(f"Unsupported OpenCV merge algorithm: {merge_algorithm}")
+    return calibrator.process(exposures_linear_float, times=exposure_times)
+
+
 def _run_opencv_merge_radiance(
     cv2_module,
     np_module,
@@ -4586,11 +4715,11 @@ def _run_opencv_merge_radiance(
 ):
     """@brief Execute OpenCV radiance HDR path for Debevec or Robertson.
 
-    @details Follows the OpenCV tutorial flow using zero-centered exposure times
-    and direct `MergeDebevec` or `MergeRobertson` execution on linearized RGB
-    float brackets. Applies simple OpenCV gamma tone mapping when enabled;
-    otherwise normalizes the radiance map directly to the repository RGB float
-    contract.
+    @details Follows the OpenCV tutorial flow by estimating inverse camera
+    response with the matching `CalibrateDebevec` or `CalibrateRobertson`
+    implementation before `MergeDebevec` or `MergeRobertson`, then applies
+    simple OpenCV gamma tone mapping when enabled; otherwise normalizes the
+    radiance map directly to the repository RGB float contract.
     @param cv2_module {ModuleType} Imported OpenCV module.
     @param np_module {ModuleType} Imported numpy module.
     @param exposures_linear_float {list[object]} Ordered linear RGB float bracket tensors.
@@ -4600,18 +4729,26 @@ def _run_opencv_merge_radiance(
     @param tonemap_gamma {float} Positive gamma passed to `createTonemap`.
     @return {object} Normalized RGB float tensor.
     @exception RuntimeError Raised when `merge_algorithm` is unsupported.
-    @satisfies REQ-108, REQ-109, REQ-110, REQ-143, REQ-144, REQ-152, REQ-153
+    @satisfies REQ-108, REQ-109, REQ-110, REQ-143, REQ-144, REQ-152, REQ-153, REQ-162
     """
 
+    response = _estimate_opencv_camera_response(
+        cv2_module=cv2_module,
+        exposures_linear_float=exposures_linear_float,
+        exposure_times=exposure_times,
+        merge_algorithm=merge_algorithm,
+    )
     if merge_algorithm == OPENCV_MERGE_ALGORITHM_DEBEVEC:
         hdr_rgb = cv2_module.createMergeDebevec().process(
             exposures_linear_float,
             times=exposure_times,
+            response=response,
         )
     elif merge_algorithm == OPENCV_MERGE_ALGORITHM_ROBERTSON:
         hdr_rgb = cv2_module.createMergeRobertson().process(
             exposures_linear_float,
             times=exposure_times,
+            response=response,
         )
     else:
         raise RuntimeError(f"Unsupported OpenCV merge algorithm: {merge_algorithm}")
@@ -4650,6 +4787,7 @@ def _run_opencv_hdr_merge(
     bracket_images_float,
     ev_value,
     ev_zero,
+    source_exposure_time_seconds,
     gamma_value,
     opencv_merge_options,
     auto_adjust_dependencies,
@@ -4657,21 +4795,22 @@ def _run_opencv_hdr_merge(
     """@brief Merge bracket float images into one RGB float image via OpenCV.
 
     @details Accepts three normalized RGB float bracket tensors ordered as
-    `(ev_minus, ev_zero, ev_plus)`, derives zero-centered exposure times from
-    the bracket span, dispatches one of `MergeDebevec`, `MergeRobertson`, or
-    `MergeMertens`, and returns one congruent normalized RGB float image.
+    `(ev_minus, ev_zero, ev_plus)`, derives OpenCV radiance exposure times in
+    seconds from EXIF `ExposureTime` for Debevec/Robertson or dispatches
+    Mertens directly, and returns one congruent normalized RGB float image.
     Debevec and Robertson consume the shared linear HDR bracket contract
-    directly, while Mertens consumes the same normalized float brackets and
-    compensates OpenCV float-path scaling.
+    directly with calibrated inverse response, while Mertens consumes the same
+    normalized float brackets and compensates OpenCV float-path scaling.
     @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors.
     @param ev_value {float} EV bracket delta used to generate exposure files.
     @param ev_zero {float} Central EV used to generate exposure files.
+    @param source_exposure_time_seconds {float|None} Positive EXIF `ExposureTime` in seconds for the extracted linear base image.
     @param gamma_value {tuple[float, float]} Parsed CLI gamma pair retained for compatibility with existing call sites.
     @param opencv_merge_options {OpenCvMergeOptions} OpenCV merge backend controls.
     @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
     @return {object} Normalized RGB float merged image.
     @exception RuntimeError Raised when OpenCV/numpy dependencies are missing or bracket payloads are invalid.
-    @satisfies REQ-107, REQ-108, REQ-109, REQ-110, REQ-142, REQ-143, REQ-144, REQ-152, REQ-153, REQ-154, REQ-160
+    @satisfies REQ-107, REQ-108, REQ-109, REQ-110, REQ-142, REQ-143, REQ-144, REQ-152, REQ-153, REQ-154, REQ-160, REQ-161, REQ-162
     """
 
     del gamma_value
@@ -4692,15 +4831,17 @@ def _run_opencv_hdr_merge(
             )
         )
 
-    exposure_times = _build_ev_times_from_ev_zero_and_delta(
-        ev_zero=ev_zero, ev_delta=ev_value
-    )
     if opencv_merge_options.merge_algorithm == OPENCV_MERGE_ALGORITHM_MERTENS:
         return _run_opencv_merge_mertens(
             cv2_module=cv2_module,
             np_module=np_module,
             exposures_float=exposures_float,
         )
+    exposure_times = _build_opencv_radiance_exposure_times(
+        source_exposure_time_seconds=source_exposure_time_seconds,
+        ev_zero=ev_zero,
+        ev_delta=ev_value,
+    )
     return _run_opencv_merge_radiance(
         cv2_module=cv2_module,
         np_module=np_module,
@@ -8803,7 +8944,12 @@ def run(args):
         return 1
 
     rawpy_module, imageio_module, pil_image_module = dependencies
-    source_exif_payload, source_exif_timestamp, source_orientation = (
+    (
+        source_exif_payload,
+        source_exif_timestamp,
+        source_orientation,
+        source_exposure_time_seconds,
+    ) = (
         _extract_dng_exif_payload_and_timestamp(
             pil_image_module=pil_image_module,
             input_dng=input_dng,
@@ -8895,8 +9041,7 @@ def run(args):
             "HDR backend: OpenCV "
             f"(algorithm={opencv_merge_options.merge_algorithm}, "
             f"tonemap={'enabled' if opencv_merge_options.tonemap_enabled else 'disabled'}, "
-            f"tonemapGamma={opencv_merge_options.tonemap_gamma:g}, "
-            "exposureReference=zero-centered span)"
+            f"tonemapGamma={opencv_merge_options.tonemap_gamma:g})"
         )
     elif enable_hdr_plus:
         print_info(
@@ -8977,6 +9122,34 @@ def run(args):
                     "Export EV triplet: "
                     f"{(resolved_ev_zero-effective_ev_value):g}, {resolved_ev_zero:g}, {(resolved_ev_zero+effective_ev_value):g}"
                 )
+                if enable_opencv and (
+                    opencv_merge_options.merge_algorithm
+                    in (
+                        OPENCV_MERGE_ALGORITHM_DEBEVEC,
+                        OPENCV_MERGE_ALGORITHM_ROBERTSON,
+                    )
+                ):
+                    if source_exposure_time_seconds is None or source_exposure_time_seconds <= 0.0:
+                        raise RuntimeError(
+                            "OpenCV Debevec/Robertson requires valid source EXIF ExposureTime"
+                        )
+                    opencv_radiance_times = _build_opencv_radiance_exposure_times(
+                        source_exposure_time_seconds=source_exposure_time_seconds,
+                        ev_zero=resolved_ev_zero,
+                        ev_delta=effective_ev_value,
+                    )
+                    print_info(
+                        "OpenCV radiance EXIF exposure: "
+                        f"{source_exposure_time_seconds:g} s"
+                    )
+                    print_info(
+                        "OpenCV radiance exposure formula: "
+                        "t_raw*2^(ev_zero-ev_delta), t_raw*2^ev_zero, t_raw*2^(ev_zero+ev_delta)"
+                    )
+                    print_info(
+                        "OpenCV radiance exposure times [s]: "
+                        f"{opencv_radiance_times[0]:g}, {opencv_radiance_times[1]:g}, {opencv_radiance_times[2]:g}"
+                    )
                 multipliers = _build_exposure_multipliers(
                     effective_ev_value, ev_zero=resolved_ev_zero
                 )
@@ -9025,6 +9198,7 @@ def run(args):
                     bracket_images_float=bracket_images_float,
                     ev_value=effective_ev_value,
                     ev_zero=resolved_ev_zero,
+                    source_exposure_time_seconds=source_exposure_time_seconds,
                     gamma_value=gamma_value,
                     opencv_merge_options=opencv_merge_options,
                     auto_adjust_dependencies=auto_adjust_dependencies,
