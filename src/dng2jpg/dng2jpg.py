@@ -5491,13 +5491,361 @@ def _apply_mild_local_contrast_bgr_uint16(cv2_module, np_module, image_bgr_uint1
     return np_module.clip(blended, 0, 65535).astype(np_module.uint16)
 
 
+def _quantize_clahe_luminance_bins(np_module, luminance_values, histogram_size):
+    """@brief Map normalized luminance samples onto CLAHE histogram addresses.
+
+    @details Computes OpenCV-compatible histogram bin addresses from normalized
+    float luminance without materializing an intermediate uint16 image plane.
+    Rounds against the `[0, hist_size-1]` lattice preserved by the historical
+    uint16 reference so tile histograms remain semantically aligned while the
+    active path stays in float-domain image buffers.
+    @param np_module {ModuleType} Imported numpy module.
+    @param luminance_values {object} Normalized luminance tensor in `[0,1]`.
+    @param histogram_size {int} Number of CLAHE histogram bins.
+    @return {object} `int32` tensor of histogram bin addresses.
+    @satisfies REQ-136, REQ-137
+    """
+
+    max_bin = float(histogram_size - 1)
+    scaled = np_module.clip(
+        np_module.rint(
+            np_module.asarray(luminance_values, dtype=np_module.float64) * max_bin
+        ),
+        0.0,
+        max_bin,
+    )
+    return scaled.astype(np_module.int32)
+
+
+def _build_clahe_float_tile_histogram(np_module, luminance_tile, histogram_size):
+    """@brief Build one CLAHE histogram from a float luminance tile.
+
+    @details Converts one normalized luminance tile into one dense histogram
+    using the preserved 16-bit CLAHE lattice and returns per-bin population
+    counts for downstream clipping and CDF generation.
+    @param np_module {ModuleType} Imported numpy module.
+    @param luminance_tile {object} Tile luminance tensor in `[0,1]`.
+    @param histogram_size {int} Number of CLAHE histogram bins.
+    @return {object} Dense histogram tensor with one count per CLAHE bin.
+    @satisfies REQ-136, REQ-137
+    """
+
+    histogram_index = _quantize_clahe_luminance_bins(
+        np_module=np_module,
+        luminance_values=luminance_tile,
+        histogram_size=histogram_size,
+    )
+    histogram = np_module.bincount(histogram_index.ravel(), minlength=histogram_size)
+    return histogram.astype(np_module.int64, copy=False)
+
+
+def _clip_clahe_histogram(np_module, histogram, clip_limit, tile_population):
+    """@brief Clip one CLAHE histogram with OpenCV-compatible redistribution.
+
+    @details Normalizes the user clip limit by tile population and histogram
+    size, applies the same integer clip ceiling used by OpenCV CLAHE, then
+    redistributes clipped mass through uniform batch fill plus residual stride
+    increments. Output preserves the original total tile population.
+    @param np_module {ModuleType} Imported numpy module.
+    @param histogram {object} Dense tile histogram tensor.
+    @param clip_limit {float} User-provided CLAHE clip limit.
+    @param tile_population {int} Number of pixels contained in the tile.
+    @return {object} Clipped histogram tensor after redistributed excess mass.
+    @satisfies REQ-136, REQ-137
+    """
+
+    clipped_histogram = np_module.asarray(histogram, dtype=np_module.int64).copy()
+    histogram_size = int(clipped_histogram.size)
+    if clip_limit <= 0.0:
+        return clipped_histogram
+    effective_clip_limit = max(
+        int(float(clip_limit) * float(tile_population) / float(histogram_size)),
+        1,
+    )
+    over_limit = clipped_histogram > effective_clip_limit
+    if not bool(np_module.any(over_limit)):
+        return clipped_histogram
+    clipped_mass = int(
+        np_module.sum(clipped_histogram[over_limit] - effective_clip_limit)
+    )
+    clipped_histogram[over_limit] = effective_clip_limit
+    if clipped_mass <= 0:
+        return clipped_histogram
+    redistribution_batch = clipped_mass // histogram_size
+    residual = clipped_mass - (redistribution_batch * histogram_size)
+    if redistribution_batch > 0:
+        clipped_histogram += redistribution_batch
+    if residual > 0:
+        residual_step = max(histogram_size // residual, 1)
+        residual_index = np_module.arange(
+            0,
+            histogram_size,
+            residual_step,
+            dtype=np_module.int64,
+        )[:residual]
+        clipped_histogram[residual_index] += 1
+    return clipped_histogram
+
+
+def _build_clahe_float_lut(np_module, histogram, tile_population):
+    """@brief Convert one clipped CLAHE histogram into one normalized LUT.
+
+    @details Builds one cumulative distribution from the clipped histogram and
+    normalizes it by tile population so the resulting lookup table maps each
+    histogram address directly into one float luminance output in `[0,1]`.
+    Uses `float32` storage to limit per-tile memory while preserving normalized
+    luminance precision required by the active float pipeline.
+    @param np_module {ModuleType} Imported numpy module.
+    @param histogram {object} Clipped histogram tensor.
+    @param tile_population {int} Number of pixels contained in the tile.
+    @return {object} Normalized CLAHE lookup-table tensor in `[0,1]`.
+    @satisfies REQ-136, REQ-137
+    """
+
+    cdf = np_module.cumsum(np_module.asarray(histogram, dtype=np_module.float64))
+    lut = np_module.clip(cdf / float(tile_population), 0.0, 1.0)
+    return lut.astype(np_module.float32)
+
+
+def _pad_clahe_luminance_float(np_module, luminance_float, tile_grid_size):
+    """@brief Pad luminance plane to an even CLAHE tile lattice.
+
+    @details Reproduces OpenCV CLAHE tiling rules by extending only the bottom
+    and right borders to the next multiple of the configured tile grid. Uses
+    reflect-101 semantics when the axis length is greater than one and edge
+    replication for single-pixel axes where reflection is undefined.
+    @param np_module {ModuleType} Imported numpy module.
+    @param luminance_float {object} Luminance tensor in `[0,1]`.
+    @param tile_grid_size {tuple[int, int]} OpenCV-compatible tile-grid tuple.
+    @return {tuple[object, int, int]} Padded luminance tensor, tile height, and
+    tile width.
+    @satisfies REQ-136, REQ-137
+    """
+
+    tiles_x, tiles_y = tuple(int(value) for value in tile_grid_size)
+    height, width = luminance_float.shape
+    pad_bottom = (tiles_y - (height % tiles_y)) % tiles_y
+    pad_right = (tiles_x - (width % tiles_x)) % tiles_x
+    padded = np_module.asarray(luminance_float, dtype=np_module.float64)
+    if pad_bottom > 0:
+        row_pad_mode = "reflect" if padded.shape[0] > 1 else "edge"
+        padded = np_module.pad(
+            padded,
+            ((0, pad_bottom), (0, 0)),
+            mode=row_pad_mode,
+        )
+    if pad_right > 0:
+        col_pad_mode = "reflect" if padded.shape[1] > 1 else "edge"
+        padded = np_module.pad(
+            padded,
+            ((0, 0), (0, pad_right)),
+            mode=col_pad_mode,
+        )
+    tile_height = padded.shape[0] // tiles_y
+    tile_width = padded.shape[1] // tiles_x
+    return padded, tile_height, tile_width
+
+
+def _build_clahe_axis_interpolation(np_module, axis_length, tile_size, tile_count):
+    """@brief Precompute CLAHE neighbor indices and bilinear weights per axis.
+
+    @details Recreates OpenCV CLAHE interpolation coordinates by locating each
+    sample relative to adjacent tile centers using `coord / tile_size - 0.5`.
+    Returned weights remain unchanged after edge clamping so border pixels map
+    to the closest tile exactly as the historical uint16 reference does.
+    @param np_module {ModuleType} Imported numpy module.
+    @param axis_length {int} Number of samples on the axis.
+    @param tile_size {int} Size of each padded tile on the axis.
+    @param tile_count {int} Number of tiles on the axis.
+    @return {tuple[object, object, object, object]} Lower indices, upper
+    indices, lower weights, and upper weights.
+    @satisfies REQ-136, REQ-137
+    """
+
+    axis_position = (
+        np_module.arange(axis_length, dtype=np_module.float64) / float(tile_size)
+    ) - 0.5
+    lower_index = np_module.floor(axis_position).astype(np_module.int32)
+    upper_index = lower_index + 1
+    upper_weight = axis_position - lower_index
+    lower_weight = 1.0 - upper_weight
+    lower_index = np_module.clip(lower_index, 0, tile_count - 1)
+    upper_index = np_module.clip(upper_index, 0, tile_count - 1)
+    return lower_index, upper_index, lower_weight, upper_weight
+
+
+def _build_clahe_tile_luts_float(np_module, luminance_float, clip_limit, tile_grid_size, histogram_size):
+    """@brief Build per-tile CLAHE lookup tables from float luminance input.
+
+    @details Pads the luminance plane to the CLAHE lattice, then builds one
+    histogram, clipped histogram, and normalized LUT per tile in call order.
+    Stores LUTs in one dense `(tiles_y, tiles_x, hist_size)` tensor used by the
+    bilinear tile interpolation stage.
+    @param np_module {ModuleType} Imported numpy module.
+    @param luminance_float {object} Luminance tensor in `[0,1]`.
+    @param clip_limit {float} User-provided CLAHE clip limit.
+    @param tile_grid_size {tuple[int, int]} OpenCV-compatible tile-grid tuple.
+    @param histogram_size {int} Number of CLAHE histogram bins.
+    @return {tuple[object, int, int]} LUT tensor, tile height, and tile width.
+    @satisfies REQ-136, REQ-137
+    """
+
+    padded_luminance, tile_height, tile_width = _pad_clahe_luminance_float(
+        np_module=np_module,
+        luminance_float=luminance_float,
+        tile_grid_size=tile_grid_size,
+    )
+    tiles_x, tiles_y = tuple(int(value) for value in tile_grid_size)
+    tile_population = int(tile_height * tile_width)
+    tile_luts = np_module.empty(
+        (tiles_y, tiles_x, histogram_size),
+        dtype=np_module.float32,
+    )
+    for tile_y in range(tiles_y):
+        row_start = tile_y * tile_height
+        row_end = row_start + tile_height
+        for tile_x in range(tiles_x):
+            col_start = tile_x * tile_width
+            col_end = col_start + tile_width
+            tile_histogram = _build_clahe_float_tile_histogram(
+                np_module=np_module,
+                luminance_tile=padded_luminance[row_start:row_end, col_start:col_end],
+                histogram_size=histogram_size,
+            )
+            clipped_histogram = _clip_clahe_histogram(
+                np_module=np_module,
+                histogram=tile_histogram,
+                clip_limit=clip_limit,
+                tile_population=tile_population,
+            )
+            tile_luts[tile_y, tile_x] = _build_clahe_float_lut(
+                np_module=np_module,
+                histogram=clipped_histogram,
+                tile_population=tile_population,
+            )
+    return tile_luts, tile_height, tile_width
+
+
+def _interpolate_clahe_bilinear_float(np_module, luminance_float, tile_luts, tile_height, tile_width):
+    """@brief Bilinearly interpolate CLAHE LUT outputs across adjacent tiles.
+
+    @details Samples the four neighboring tile LUTs for each original-image row
+    using OpenCV-compatible tile-center geometry and blends those per-pixel
+    outputs with bilinear weights. Processes one row at a time to avoid one
+    extra full-image histogram-address buffer.
+    @param np_module {ModuleType} Imported numpy module.
+    @param luminance_float {object} Original luminance tensor in `[0,1]`.
+    @param tile_luts {object} Per-tile LUT tensor.
+    @param tile_height {int} Padded tile height.
+    @param tile_width {int} Padded tile width.
+    @return {object} Equalized luminance tensor in `[0,1]`.
+    @satisfies REQ-136, REQ-137
+    """
+
+    height, width = luminance_float.shape
+    tiles_y, tiles_x, histogram_size = tile_luts.shape
+    row_low, row_high, row_low_weight, row_high_weight = (
+        _build_clahe_axis_interpolation(
+            np_module=np_module,
+            axis_length=height,
+            tile_size=tile_height,
+            tile_count=tiles_y,
+        )
+    )
+    col_low, col_high, col_low_weight, col_high_weight = (
+        _build_clahe_axis_interpolation(
+            np_module=np_module,
+            axis_length=width,
+            tile_size=tile_width,
+            tile_count=tiles_x,
+        )
+    )
+    equalized_luminance = np_module.empty((height, width), dtype=np_module.float64)
+    for row_index in range(height):
+        lut_bins = _quantize_clahe_luminance_bins(
+            np_module=np_module,
+            luminance_values=luminance_float[row_index],
+            histogram_size=histogram_size,
+        )
+        top_left = tile_luts[row_low[row_index], col_low, lut_bins]
+        top_right = tile_luts[row_low[row_index], col_high, lut_bins]
+        bottom_left = tile_luts[row_high[row_index], col_low, lut_bins]
+        bottom_right = tile_luts[row_high[row_index], col_high, lut_bins]
+        top_mix = (col_low_weight * top_left) + (col_high_weight * top_right)
+        bottom_mix = (col_low_weight * bottom_left) + (col_high_weight * bottom_right)
+        equalized_luminance[row_index] = (
+            row_low_weight[row_index] * top_mix
+        ) + (row_high_weight[row_index] * bottom_mix)
+    return _clamp01(np_module, equalized_luminance)
+
+
+def _apply_clahe_luminance_float(np_module, luminance_float, clip_limit, tile_grid_size):
+    """@brief Execute native float-domain CLAHE on one luminance plane.
+
+    @details Builds per-tile histograms and normalized LUTs with OpenCV-like
+    clip-limit normalization, then reconstructs one equalized luminance plane
+    via bilinear interpolation between adjacent tiles. Keeps the luminance plane
+    in normalized float representation throughout the active path.
+    @param np_module {ModuleType} Imported numpy module.
+    @param luminance_float {object} Luminance tensor in `[0,1]`.
+    @param clip_limit {float} User-provided CLAHE clip limit.
+    @param tile_grid_size {tuple[int, int]} OpenCV-compatible tile-grid tuple.
+    @return {object} Equalized luminance tensor in `[0,1]`.
+    @satisfies REQ-136, REQ-137
+    """
+
+    histogram_size = 1 << 16
+    tile_luts, tile_height, tile_width = _build_clahe_tile_luts_float(
+        np_module=np_module,
+        luminance_float=luminance_float,
+        clip_limit=clip_limit,
+        tile_grid_size=tile_grid_size,
+        histogram_size=histogram_size,
+    )
+    return _interpolate_clahe_bilinear_float(
+        np_module=np_module,
+        luminance_float=luminance_float,
+        tile_luts=tile_luts,
+        tile_height=tile_height,
+        tile_width=tile_width,
+    )
+
+
+def _reconstruct_rgb_from_ycrcb_luma_float(cv2_module, np_module, luminance_float, cr_channel, cb_channel):
+    """@brief Reconstruct RGB float output from YCrCb float channels.
+
+    @details Creates one float32 YCrCb tensor from one equalized luminance plane
+    plus preserved Cr/Cb channels, converts it back to RGB with OpenCV color
+    transforms only, and returns one clamped float64 RGB tensor for downstream
+    blending in the auto-adjust pipeline.
+    @param cv2_module {ModuleType} Imported cv2 module.
+    @param np_module {ModuleType} Imported numpy module.
+    @param luminance_float {object} Equalized luminance tensor in `[0,1]`.
+    @param cr_channel {object} Preserved YCrCb Cr channel.
+    @param cb_channel {object} Preserved YCrCb Cb channel.
+    @return {object} Reconstructed RGB float tensor in `[0,1]`.
+    @satisfies REQ-136, REQ-137
+    """
+
+    ycrcb_float = np_module.empty(luminance_float.shape + (3,), dtype=np_module.float32)
+    ycrcb_float[..., 0] = np_module.asarray(luminance_float, dtype=np_module.float32)
+    ycrcb_float[..., 1] = np_module.asarray(cr_channel, dtype=np_module.float32)
+    ycrcb_float[..., 2] = np_module.asarray(cb_channel, dtype=np_module.float32)
+    rgb_float = cv2_module.cvtColor(ycrcb_float, cv2_module.COLOR_YCrCb2RGB)
+    return _clamp01(np_module, rgb_float.astype(np_module.float64))
+
+
 def _apply_clahe_luma_rgb_float(cv2_module, np_module, image_rgb_float, auto_adjust_options):
     """@brief Apply CLAHE-luma local contrast directly on RGB float buffers.
 
-    @details Converts normalized RGB float input to float YCrCb, quantizes only
-    the luminance plane for OpenCV CLAHE evaluation, reconstructs one RGB float
-    CLAHE candidate from preserved chroma plus mapped luminance, and blends that
-    candidate with the original float RGB image using configured strength.
+    @details Converts normalized RGB float input to float YCrCb, runs one native
+    NumPy CLAHE implementation on the luminance plane with OpenCV-compatible
+    tiling, clip-limit normalization, clipping, redistribution, and bilinear
+    tile interpolation, then reconstructs one RGB float CLAHE candidate from
+    preserved chroma plus mapped luminance and blends that candidate with the
+    original float RGB image using configured strength. OpenCV is used only for
+    RGB<->YCrCb color conversion; the active CLAHE path performs no uint16
+    image-plane round-trip.
     @param cv2_module {ModuleType} Imported cv2 module.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} RGB float tensor in `[0,1]`.
@@ -5519,23 +5867,20 @@ def _apply_clahe_luma_rgb_float(cv2_module, np_module, image_rgb_float, auto_adj
     ycrcb_float = cv2_module.cvtColor(
         rgb_float.astype(np_module.float32),
         cv2_module.COLOR_RGB2YCrCb,
-    ).astype(np_module.float64)
-    luminance_uint16 = np_module.clip(
-        np_module.rint(ycrcb_float[..., 0] * 65535.0),
-        0.0,
-        65535.0,
-    ).astype(np_module.uint16)
-    clahe = cv2_module.createCLAHE(
-        clipLimit=float(auto_adjust_options.clahe_clip_limit),
-        tileGridSize=tuple(auto_adjust_options.clahe_tile_grid_size),
     )
-    ycrcb_clahe = ycrcb_float.copy()
-    ycrcb_clahe[..., 0] = clahe.apply(luminance_uint16).astype(np_module.float64) / 65535.0
-    rgb_clahe = cv2_module.cvtColor(
-        ycrcb_clahe.astype(np_module.float32),
-        cv2_module.COLOR_YCrCb2RGB,
-    ).astype(np_module.float64)
-    rgb_clahe = _clamp01(np_module, rgb_clahe)
+    equalized_luminance = _apply_clahe_luminance_float(
+        np_module=np_module,
+        luminance_float=np_module.asarray(ycrcb_float[..., 0], dtype=np_module.float64),
+        clip_limit=float(auto_adjust_options.clahe_clip_limit),
+        tile_grid_size=tuple(auto_adjust_options.clahe_tile_grid_size),
+    )
+    rgb_clahe = _reconstruct_rgb_from_ycrcb_luma_float(
+        cv2_module=cv2_module,
+        np_module=np_module,
+        luminance_float=equalized_luminance,
+        cr_channel=ycrcb_float[..., 1],
+        cb_channel=ycrcb_float[..., 2],
+    )
     blended = ((1.0 - strength) * rgb_float) + (strength * rgb_clahe)
     return _clamp01(np_module, blended)
 
