@@ -95,9 +95,9 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **DES-002**: MUST model runtime options with immutable dataclasses `AutoAdjustOptions`, `AutoBrightnessOptions`, `PostprocessOptions`, `LuminanceOptions`, and `AutoEvInputs`.
 - **DES-003**: MUST derive supported EV and EV-zero quantized values from detected DNG bit depth using `0.25` EV step constraints.
 - **DES-004**: MUST isolate intermediate processing artifacts in temporary directories and cleanup automatically after command completion.
-- **DES-005**: MUST preserve source EXIF payload into output JPEG, rebuild EXIF thumbnail from final quantized JPG pixels, and write refreshed EXIF metadata before filesystem timestamp synchronization when EXIF payload exists.
-- **DES-006**: MUST resolve backend-specific default postprocess factors from selected `--hdr-merge` mode and, for `Luminace-HDR`, from resolved tone-mapping operator.
-- **DES-008**: MUST default OpenCV backend static postprocess factors to `post_gamma=1.0`, `brightness=1.0`, `contrast=1.0`, and `saturation=1.0`.
+- **DES-005**: MUST preserve source EXIF payload into output JPEG, rebuild EXIF thumbnail from the exact final quantized RGB uint8 save buffer, preserve JPEG-display-equivalent thumbnail orientation, and write refreshed EXIF metadata before timestamp synchronization.
+- **DES-006**: MUST resolve backend-specific default postprocess factors from selected `--hdr-merge` mode, from resolved `Luminace-HDR` tone-mapping operator, and from resolved OpenCV merge algorithm.
+- **DES-008**: MUST resolve OpenCV backend static postprocess defaults per `Debevec`, `Robertson`, and `Mertens`, assigning each algorithm `post_gamma=1.0`, `brightness=1.0`, `contrast=1.0`, and `saturation=1.0`.
 - **DES-007**: MUST process conversion as a one-shot process model without spawning explicit application-managed threads.
 - **DES-009**: MUST serialize `--debug` checkpoints from normalized RGB float stage buffers into persistent TIFF16 files outside the temporary workspace lifecycle.
 
@@ -121,7 +121,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-016**: MUST execute GitHub latest-release version checks with an idle-time cache JSON file and print version status or check errors.
 - **REQ-150**: MUST use idle-delay `3600` seconds after successful latest-release checks and idle-delay `86400` seconds after any latest-release check error.
 - **REQ-151**: MUST recalculate idle-time and rewrite the version-check cache JSON after every latest-release API attempt, regardless of success or error outcome.
-- **REQ-017**: MUST render conversion usage with canonical executable name `dng2jpg` and MUST NOT prepend alternative launcher labels.
+- **REQ-017**: MUST render conversion usage/help with canonical executable name `dng2jpg`, stable aligned indentation, and MUST NOT prepend alternative launcher labels.
 - **REQ-018**: MUST parse `--auto-zero <enable|disable>`, default it to `enable` without `--ev-zero` and `disable` with `--ev-zero`, and MUST let `--ev-zero` override enabled auto-zero with an explicit ignored-parameter output.
 - **REQ-019**: MUST enforce `--auto-zero-pct` and `--auto-ev-pct` values in inclusive range `0..100`.
 - **REQ-020**: MUST parse `--gamma` as two positive numeric values and reject malformed pairs.
@@ -143,8 +143,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-037**: MUST fail enabled auto-adjust stage when `cv2` or `numpy` dependencies are unavailable.
 - **REQ-038**: MUST fail EXIF-preserving encode path when source EXIF payload exists and `piexif` is unavailable.
 - **REQ-039**: MUST extract source EXIF timestamp with priority `DateTimeOriginal` then `DateTimeDigitized` then `DateTime`.
-- **REQ-040**: MUST preserve source EXIF orientation in output `0th` IFD and set thumbnail orientation to `1`.
-- **REQ-041**: MUST regenerate EXIF thumbnail from the final quantized RGB uint8 image that is saved as the output JPEG when source EXIF payload exists.
+- **REQ-040**: MUST preserve source EXIF orientation in output `0th` IFD and MUST set thumbnail orientation to `1` after orienting thumbnail pixels to match the saved JPEG display orientation.
+- **REQ-041**: MUST regenerate EXIF thumbnail from the exact final quantized RGB uint8 buffer saved as the output JPEG when source EXIF payload exists.
 - **REQ-042**: MUST normalize integer-like EXIF values before `piexif.dump` and drop out-of-range integers for constrained integer tag types.
 - **REQ-043**: MUST gate release build-and-publish job on `check-branch` output `is_master == "true"`.
 - **REQ-044**: MUST trigger release workflow on `workflow_dispatch` and push tags matching `v[0-9]+.[0-9]+.[0-9]+`.
@@ -186,7 +186,9 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-152**: MUST linearize Debevec and Robertson OpenCV input brackets in RGB float `[0,1]` before radiance merge by inverting the configured RAW extraction gamma pair.
 - **REQ-153**: MUST execute OpenCV `MergeDebevec` and `MergeRobertson` directly on float brackets with exposure times and without explicit `CalibrateDebevec` or `CalibrateRobertson` preprocessing.
 - **REQ-154**: MUST execute OpenCV `MergeMertens` on RGB float `[0,1]` brackets and rescale its float output to match OpenCV exposure-fusion brightness semantics before final normalization.
-- **REQ-145**: MUST keep OpenCV backend default downstream postprocess factors neutral at `post_gamma=1.0`, `brightness=1.0`, `contrast=1.0`, and `saturation=1.0`.
+- **REQ-145**: MUST resolve OpenCV backend downstream postprocess defaults per `Debevec`, `Robertson`, and `Mertens`, assigning each algorithm neutral factors `post_gamma=1.0`, `brightness=1.0`, `contrast=1.0`, and `saturation=1.0`.
+- **REQ-155**: MUST group conversion help sections in pipeline execution order and colocate each step selector with the option set that configures that step.
+- **REQ-156**: MUST document every accepted conversion CLI option in help output, including accepted values, implicit activation conditions, and effective default value when omitted.
 - **REQ-111**: MUST accept `--hdr-merge HDR-Plus` as HDR backend selector and execute HDR+ backend behavior when selected.
 - **REQ-112**: MUST execute HDR+ backend in source step order `scalar proxy -> hierarchical alignment -> box_down2 -> temporal merge -> spatial merge`, with internal frame order `(ev_zero, ev_minus, ev_plus)` and `ev_zero` at index `0`.
 - **REQ-113**: MUST compute three-level HDR+ alignment on the scalar proxy with `box_down2`, two `gauss_down4` levels, per-tile L1 minimization over offsets `[-4,+3]`, and final full-resolution offset lift by `2`.
@@ -218,7 +220,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-005**: MUST verify `_resolve_ev_value` clamps adaptive EV to bit-derived selector bounds and rejects unsupported static EV for the detected bit depth.
 - **TST-006**: MUST verify `_run_luminance_hdr_cli` builds deterministic argument order and includes any `--tmo*` passthrough pairs unchanged.
 - **TST-007**: MUST verify `_extract_dng_exif_payload_and_timestamp` applies datetime priority `36867` then `36868` then `306`.
-- **TST-008**: MUST verify `_refresh_output_jpg_exif_thumbnail_after_save` preserves source orientation fields and rebuilds EXIF thumbnail bytes from the final quantized RGB uint8 image.
+- **TST-008**: MUST verify `_refresh_output_jpg_exif_thumbnail_after_save` preserves source orientation fields, rebuilds EXIF thumbnail bytes from the exact final quantized RGB uint8 save buffer, and emits display-oriented thumbnail pixels with thumbnail orientation `1`.
 - **TST-009**: MUST verify release workflow gates `build-release` execution on `needs.check-branch.outputs.is_master == "true"`.
 - **TST-010**: MUST verify `_parse_run_options` enforces `--auto-levels <enable|disable>` with `--al-*` coupling and validates `Clip out-of-gamut colors`, `Clip %`, method, and gain-threshold knobs.
 - **TST-011**: MUST verify `_apply_auto_brightness_rgb_float` preserves float I/O and executes the original step order, key-analysis thresholds, Reinhard mapping, and optional desaturation.
@@ -241,7 +243,9 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-028**: MUST verify auto-adjust CLI parsing accepts `enable|disable`, defaults to `enable`, and exposes CLAHE-luma enable, strength, clip-limit, and tile-grid controls with deterministic defaults and validation.
 - **TST-029**: MUST verify `_apply_validated_auto_adjust_pipeline` preserves float I/O and executes `blur -> level -> CLAHE-luma -> sigmoid -> vibrance -> high-pass`.
 - **TST-030**: MUST verify float-domain auto-adjust CLAHE-luma preserves blend semantics and remains within quantization-only deviation from the former uint16 implementation on deterministic fixtures.
-- **TST-031**: MUST verify `_resolve_default_postprocess` returns neutral factors `post_gamma=1.0`, `brightness=1.0`, `contrast=1.0`, and `saturation=1.0` when `--hdr-merge` resolves to `OpenCV`.
+- **TST-031**: MUST verify `_resolve_default_postprocess` resolves `Debevec`, `Robertson`, and `Mertens` OpenCV defaults independently and returns neutral factors `post_gamma=1.0`, `brightness=1.0`, `contrast=1.0`, and `saturation=1.0` for each algorithm.
+- **TST-041**: MUST verify `print_help` renders conversion help in pipeline execution order, colocates per-stage configuration options with the described stage, and keeps canonical `dng2jpg` usage formatting.
+- **TST-042**: MUST verify `print_help` documents every accepted conversion CLI option with allowed values or activation conditions and prints effective defaults for omitted options.
 - **TST-032**: MUST verify `_parse_run_options` accepts `--opencv-merge-algorithm`, `--opencv-tonemap`, and `--opencv-tonemap-gamma`, applies defaults, and rejects invalid OpenCV HDR values.
 - **TST-033**: MUST verify OpenCV backend dispatch selects `MergeDebevec`, `MergeRobertson`, or `MergeMertens` and skips `CalibrateDebevec` and `CalibrateRobertson` preprocessing.
 - **TST-034**: MUST verify optional OpenCV tone mapping defaults to enabled with gamma `2.2` and can be disabled without changing pre-tonemap merged radiance.

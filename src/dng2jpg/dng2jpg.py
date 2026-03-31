@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import textwrap
 import warnings
 import math
 from io import BytesIO
@@ -675,284 +676,245 @@ def _build_two_line_operator_rows(operator_entries):
     return tuple(rows)
 
 
+def _print_help_section(title):
+    """@brief Print one numbered help section title.
+
+    @details Emits one blank separator line followed by one deterministic
+    section title so conversion help stays ordered by pipeline execution step.
+    Complexity: O(1). Side effects: stdout writes only.
+    @param title {str} Section title text already normalized for display order.
+    @return {None} Writes formatted section title to stdout.
+    @satisfies REQ-017, REQ-155
+    """
+
+    print()
+    print(title)
+
+
+def _print_help_option(option_label, description, detail_lines=()):
+    """@brief Print one aligned conversion-help option block.
+
+    @details Renders one option label and wrapped description using a fixed
+    indentation grid, then renders any continuation detail lines under the same
+    description column. Complexity: O(n) in total output characters. Side
+    effects: stdout writes only.
+    @param option_label {str} Left-column option label or positional argument label.
+    @param description {str} Primary description line for the option block.
+    @param detail_lines {tuple[str, ...]|list[str]} Additional wrapped lines aligned under the description column.
+    @return {None} Writes formatted option block to stdout.
+    @satisfies REQ-017, REQ-155, REQ-156
+    """
+
+    label_width = 34
+    prefix = f"  {option_label.ljust(label_width)}"
+    wrap_width = 88
+    wrapped_description = textwrap.wrap(
+        description,
+        width=wrap_width,
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
+    if not wrapped_description:
+        wrapped_description = [""]
+    print(f"{prefix}{wrapped_description[0]}")
+    continuation_prefix = "  " + (" " * label_width)
+    for line in wrapped_description[1:]:
+        print(f"{continuation_prefix}{line}")
+    for detail_line in detail_lines:
+        wrapped_detail = textwrap.wrap(
+            detail_line,
+            width=wrap_width,
+            break_long_words=False,
+            break_on_hyphens=False,
+        )
+        if not wrapped_detail:
+            wrapped_detail = [""]
+        for line in wrapped_detail:
+            print(f"{continuation_prefix}{line}")
+
+
 def print_help(version):
     """@brief Print help text for the `dng2jpg` command.
 
-    @details Documents required positional arguments, required mutually
-    exclusive exposure selectors (`--ev` or `--auto-ev`), optional RAW gamma
-    controls, optional `--ev-zero` and `--auto-zero` selectors, shared
-    postprocessing controls, backend selection including OpenCV algorithm and
-    tone-map knobs, HDR+ controls, luminance-hdr-cli tone-mapping options, and
-    the persistent debug checkpoint flag.
+    @details Renders conversion help in pipeline execution order. Groups each
+    processing stage with the selectors and knobs that configure that stage,
+    documents allowed values and activation conditions for every accepted
+    conversion option, and prints effective omitted-value defaults using aligned
+    indentation and stable table formatting. Complexity: O(n) in emitted
+    characters. Side effects: stdout writes only.
     @param version {str} CLI version label to append in usage output.
     @return {None} Writes help text to stdout.
-    @satisfies DES-008, REQ-056, REQ-063, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-088, REQ-089, REQ-090, REQ-091, REQ-094, REQ-097, REQ-100, REQ-101, REQ-102, REQ-111, REQ-127, REQ-128, REQ-141, REQ-143, REQ-146
+    @satisfies DES-008, REQ-017, REQ-056, REQ-063, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-088, REQ-089, REQ-090, REQ-091, REQ-094, REQ-097, REQ-100, REQ-101, REQ-102, REQ-111, REQ-127, REQ-128, REQ-141, REQ-143, REQ-146, REQ-155, REQ-156
     """
 
-    print(
-        f"Usage: {PROGRAM} <input.dng> <output.jpg> "
-        "[--ev=<value>] [--auto-ev=<enable|disable>] [--ev-zero=<value>] [--auto-zero=<enable|disable>] [--gamma=<a,b>] [--post-gamma=<value>] "
-        "[--auto-zero-pct=<0..100>] [--auto-ev-pct=<0..100>] "
-        f"[--brightness=<value>] [--contrast=<value>] [--saturation=<value>] "
-        "[--auto-brightness=<enable|disable>] "
-        "[--ab-key-value=<value>] [--ab-white-point-pct=<(0,100)>] "
-        "[--ab-key-min=<value>] [--ab-key-max=<value>] "
-        "[--ab-max-auto-boost=<value>] "
-        "[--ab-enable-luminance-preserving-desat[=<0|1|false|true|no|yes|off|on>]] "
-        "[--ab-eps=<value>] "
-        "[--auto-levels=<enable|disable>] "
-        "[--al-clip-pct=<value>] "
-        "[--al-clip-out-of-gamut[=<0|1|false|true|no|yes|off|on>]] "
-        "[--al-highlight-reconstruction-method <Luminance Recovery|CIELab Blending|Blend|Color Propagation|Inpaint Opposed>] "
-        "[--al-gain-threshold=<value>] "
-        "[--jpg-compression=<0..100>] [--auto-adjust <enable|disable>] "
-        "[--aa-blur-sigma=<value>] [--aa-blur-threshold-pct=<0..100>] "
-        "[--aa-level-low-pct=<0..100>] [--aa-level-high-pct=<0..100>] "
-        "[--aa-enable-local-contrast[=<0|1|false|true|no|yes|off|on>]] "
-        "[--aa-local-contrast-strength=<0..1>] "
-        "[--aa-clahe-clip-limit=<value>] "
-        "[--aa-clahe-tile-grid-size=<rows>x<cols>] "
-        "[--aa-sigmoid-contrast=<value>] [--aa-sigmoid-midpoint=<0..1>] "
-        "[--aa-saturation-gamma=<value>] [--aa-highpass-blur-sigma=<value>] "
-        "[--debug] "
-        f"[--hdr-merge <{HDR_MERGE_MODE_LUMINANCE}|{HDR_MERGE_MODE_OPENCV}|{HDR_MERGE_MODE_HDR_PLUS}>] "
-        "[--opencv-merge-algorithm=<Debevec|Robertson|Mertens>] "
-        "[--opencv-tonemap=<0|1|false|true|no|yes|off|on>] "
-        "[--opencv-tonemap-gamma=<value>] "
-        "[--hdrplus-proxy-mode=<rggb|bt709|mean>] "
-        "[--hdrplus-search-radius=<value>] "
-        "[--hdrplus-temporal-factor=<value>] "
-        "[--hdrplus-temporal-min-dist=<value>] "
-        "[--hdrplus-temporal-max-dist=<value>] "
-        f"[--luminance-hdr-model=<name>] [--luminance-hdr-weight=<name>] "
-        f"[--luminance-hdr-response-curve=<name>] [--luminance-tmo=<name>] "
-        f"[--tmo*=<value>] ({version})"
-    )
-    print()
-    print("dng2jpg options:")
-    print("  <input.dng>      - Input DNG file (required).")
-    print("  <output.jpg>     - Output JPG file (required).")
-    print(
-        "  --ev=<value>     - Fixed exposure bracket EV: 0.25 .. MAX_BRACKET in 0.25 steps"
-        " (MAX_BRACKET = ((bits_per_color-8)/2)-abs(ev_zero) from input DNG)."
-    )
-    print(
-        "  --auto-ev=<enable|disable> - Adaptive EV mode (default: enable when --ev is omitted, disable when --ev is provided)."
-    )
-    print(
-        "  --ev-zero=<value> - Central EV for bracket export: -SAFE_ZERO_MAX .. +SAFE_ZERO_MAX in 0.25 steps"
-        " (SAFE_ZERO_MAX = ((bits_per_color-8)/2)-1 from input DNG, default: 0)."
-    )
-    print(
-        "  --auto-zero=<enable|disable> - Auto-resolve EV center from RAW median luminance"
-        " (default: enable when --ev-zero is omitted, disable when --ev-zero is provided)."
-    )
-    print(
-        f"  --auto-zero-pct=<0..100> - Scale auto-resolved EV center by percentage before 0.25-step quantization toward zero (default: {DEFAULT_AUTO_ZERO_PCT:g})."
-    )
-    print(
-        f"  --auto-ev-pct=<0..100>   - Scale adaptive EV bracket by percentage before 0.25-step quantization toward zero (default: {DEFAULT_AUTO_EV_PCT:g})."
-    )
-    print(
-        f"  --gamma=<a,b>    - RAW extraction gamma pair (default: {DEFAULT_GAMMA[0]},{DEFAULT_GAMMA[1]})."
-    )
-    print("                     Example: --gamma=1,1 for linear extraction.")
-    print(
-        "  --post-gamma=<value> - Postprocess gamma correction factor (backend-default when omitted)."
-    )
-    print(
-        "  --brightness=<value> - Postprocess brightness factor (backend-default when omitted)."
-    )
-    print(
-        "  --contrast=<value>   - Postprocess contrast factor (backend-default when omitted)."
-    )
-    print(
-        "  --saturation=<value> - Postprocess saturation factor (backend-default when omitted)."
-    )
-    print(
-        "  --auto-brightness=<enable|disable> - Enable/disable auto-brightness pre-stage before static postprocess factors (default: enable)."
-    )
-    print(
-        "  [auto-brightness knobs] - Effective only when --auto-brightness resolves to enable."
-    )
-    print(
-        "  --ab-key-value=<value> - Manual Reinhard key value a (>0); omit to enable automatic low/normal/high-key selection."
-    )
-    print(
-        f"  --ab-white-point-pct=<(0,100)> - Percentile for robust white point in burn-out compression (default: {DEFAULT_AB_WHITE_POINT_PERCENTILE:g})."
-    )
-    print(
-        f"  --ab-key-min=<value> - Minimum automatic key-value clamp (>0, default: {DEFAULT_AB_A_MIN:g})."
-    )
-    print(
-        f"  --ab-key-max=<value> - Maximum automatic key-value clamp (>0, default: {DEFAULT_AB_A_MAX:g})."
-    )
-    print(
-        f"  --ab-max-auto-boost=<value> - Auto key adaptation factor (>0, default: {DEFAULT_AB_MAX_AUTO_BOOST_FACTOR:g})."
-    )
-    print(
-        f"  --ab-enable-luminance-preserving-desat[=<bool>] - Enable anti-clipping grayscale blending (default: {'true' if DEFAULT_AB_ENABLE_LUMINANCE_PRESERVING_DESAT else 'false'})."
-    )
-    print(
-        f"  --ab-eps=<value> - Positive numerical guard for logarithms and divisions (default: {DEFAULT_AB_EPS:g})."
-    )
-    print(
-        "  --auto-levels=<enable|disable> - Enable/disable auto-levels stage after auto-brightness and before post-gamma/brightness/contrast/saturation (default: enable)."
-    )
-    print(
-        "  [auto-levels knobs] - Effective only when --auto-levels resolves to enable."
-    )
-    print(
-        f"  --al-clip-pct=<value> - Histogram clipping percentage >= 0 (default: {DEFAULT_AL_CLIP_PERCENT:g})."
-    )
-    print(
-        "  --al-clip-out-of-gamut - Normalize overflowing RGB triplets after auto-levels gain/reconstruction."
-    )
-    print(
-        "                     Optional value forms: --al-clip-out-of-gamut=0, --al-clip-out-of-gamut=false, --al-clip-out-of-gamut=yes."
-    )
-    print(
-        "  --al-highlight-reconstruction-method <name> - Enable highlight reconstruction and select one RawTherapee-aligned method."
-    )
-    print(
-        "                     Allowed values: "
-        + ", ".join(_AUTO_LEVELS_HIGHLIGHT_METHODS)
-        + "."
-    )
-    print(
-        f"  --al-gain-threshold=<value> - Inpaint Opposed gain threshold (>0, default: {DEFAULT_AL_GAIN_THRESHOLD:g})."
-    )
-    print(
-        f"  --jpg-compression=<0..100> - JPEG compression level (default: {DEFAULT_JPG_COMPRESSION})."
-    )
-    print(
-        "  --auto-adjust <enable|disable> - Enable/disable the auto-adjust stage (default: enable)."
-    )
-    print(
-        "  [auto-adjust knobs]      - Effective only when --auto-adjust resolves to enable."
-    )
-    print(
-        f"  --aa-blur-sigma=<value>  - Selective blur sigma > 0 (default: {DEFAULT_AA_BLUR_SIGMA:g})."
-    )
-    print(
-        f"  --aa-blur-threshold-pct=<0..100> - Selective blur threshold percent (default: {DEFAULT_AA_BLUR_THRESHOLD_PCT:g})."
-    )
-    print(
-        f"  --aa-level-low-pct=<0..100>  - Level low percentile; must be < --aa-level-high-pct (default: {DEFAULT_AA_LEVEL_LOW_PCT:g})."
-    )
-    print(
-        f"  --aa-level-high-pct=<0..100> - Level high percentile; must be > --aa-level-low-pct (default: {DEFAULT_AA_LEVEL_HIGH_PCT:g})."
-    )
-    print(
-        f"  --aa-enable-local-contrast[=<bool>] - Enable float-domain CLAHE-luma stage in auto-adjust (default: {'true' if DEFAULT_AA_ENABLE_LOCAL_CONTRAST else 'false'})."
-    )
-    print(
-        f"  --aa-local-contrast-strength=<0..1> - CLAHE-luma blend factor for auto-adjust (default: {DEFAULT_AA_LOCAL_CONTRAST_STRENGTH:g})."
-    )
-    print(
-        f"  --aa-clahe-clip-limit=<value> - CLAHE clip limit for auto-adjust local contrast (>0, default: {DEFAULT_AA_CLAHE_CLIP_LIMIT:g})."
-    )
-    print(
-        "  --aa-clahe-tile-grid-size=<rows>x<cols> - CLAHE tile grid size for auto-adjust local contrast"
-        f" (default: {DEFAULT_AA_CLAHE_TILE_GRID_SIZE[0]}x{DEFAULT_AA_CLAHE_TILE_GRID_SIZE[1]})."
-    )
-    print(
-        f"  --aa-sigmoid-contrast=<value> - Sigmoidal contrast slope > 0 (default: {DEFAULT_AA_SIGMOID_CONTRAST:g})."
-    )
-    print(
-        f"  --aa-sigmoid-midpoint=<0..1> - Sigmoidal midpoint in [0,1] (default: {DEFAULT_AA_SIGMOID_MIDPOINT:g})."
-    )
-    print(
-        f"  --aa-saturation-gamma=<value> - HSL saturation gamma > 0 (default: {DEFAULT_AA_SATURATION_GAMMA:g})."
-    )
-    print(
-        f"  --aa-highpass-blur-sigma=<value> - High-pass blur sigma > 0 (default: {DEFAULT_AA_HIGHPASS_BLUR_SIGMA:g})."
-    )
-    print(
-        "  --debug          - Persist TIFF16 checkpoints for executed float pipeline stages in the output JPG directory."
-    )
-    print(
-        f"  --hdr-merge <name> - Select HDR merge backend ({HDR_MERGE_MODE_LUMINANCE}, {HDR_MERGE_MODE_OPENCV}, {HDR_MERGE_MODE_HDR_PLUS}; default: {HDR_MERGE_MODE_OPENCV})."
-    )
-    print(
-        f"  [OpenCV knobs]    - Effective only when --hdr-merge {HDR_MERGE_MODE_OPENCV} is selected."
-    )
-    print(
-        "  --opencv-merge-algorithm=<name> - OpenCV HDR algorithm selector."
-        f" Allowed values: {', '.join(_OPENCV_MERGE_ALGORITHMS)}"
-        f" (default: {DEFAULT_OPENCV_MERGE_ALGORITHM})."
-    )
-    print(
-        f"  --opencv-tonemap=<bool> - Enable simple OpenCV tone mapping for {OPENCV_MERGE_ALGORITHM_DEBEVEC}/{OPENCV_MERGE_ALGORITHM_ROBERTSON}"
-        f" (default: {'true' if DEFAULT_OPENCV_TONEMAP_ENABLED else 'false'})."
-    )
-    print(
-        f"  --opencv-tonemap-gamma=<value> - Positive gamma for OpenCV simple tone mapping (default: {DEFAULT_OPENCV_TONEMAP_GAMMA:g})."
-    )
-    print(
-        f"  [HDR+ knobs]      - Effective only when --hdr-merge {HDR_MERGE_MODE_HDR_PLUS} is selected."
-    )
-    print(
-        "  --hdrplus-proxy-mode=<name> - Scalar proxy mode for RGB->single-channel adaptation."
-        f" Allowed values: {', '.join(_HDRPLUS_PROXY_MODES)} (default: {DEFAULT_HDRPLUS_PROXY_MODE})."
-    )
-    print(
-        f"  --hdrplus-search-radius=<value> - Per-layer alignment search radius > 0 (default: {DEFAULT_HDRPLUS_SEARCH_RADIUS})."
-    )
-    print(
-        f"  --hdrplus-temporal-factor=<value> - Temporal inverse-distance stretch factor > 0 (default: {DEFAULT_HDRPLUS_TEMPORAL_FACTOR:g})."
-    )
-    print(
-        f"  --hdrplus-temporal-min-dist=<value> - Temporal weight floor >= 0 (default: {DEFAULT_HDRPLUS_TEMPORAL_MIN_DIST:g})."
-    )
-    print(
-        f"  --hdrplus-temporal-max-dist=<value> - Temporal cutoff threshold > --hdrplus-temporal-min-dist (default: {DEFAULT_HDRPLUS_TEMPORAL_MAX_DIST:g})."
-    )
-    print(
-        "  [postprocess defaults]"
-        f" - --hdr-merge {HDR_MERGE_MODE_LUMINANCE} (generic): post-gamma={DEFAULT_POST_GAMMA}, brightness={DEFAULT_BRIGHTNESS},"
-        f" contrast={DEFAULT_CONTRAST}, saturation={DEFAULT_SATURATION}."
-    )
-    print(
-        f"                   - --hdr-merge {HDR_MERGE_MODE_LUMINANCE} + --luminance-tmo=reinhard02: "
-        f"post-gamma={DEFAULT_POST_GAMMA}, brightness={DEFAULT_REINHARD02_BRIGHTNESS}, "
-        f"contrast={DEFAULT_REINHARD02_CONTRAST}, saturation={DEFAULT_REINHARD02_SATURATION}."
-    )
-    print(
-        f"                   - --hdr-merge {HDR_MERGE_MODE_LUMINANCE} + --luminance-tmo=mantiuk08: "
-        f"post-gamma={DEFAULT_POST_GAMMA}, brightness={DEFAULT_BRIGHTNESS}, "
-        f"contrast={DEFAULT_MANTIUK08_CONTRAST}, saturation={DEFAULT_SATURATION}."
-    )
-    print(
-        f"                   - --hdr-merge {HDR_MERGE_MODE_LUMINANCE} + other --luminance-tmo (except reinhard02,mantiuk08): "
-        f"post-gamma={DEFAULT_POST_GAMMA}, brightness={DEFAULT_BRIGHTNESS}, "
-        f"contrast={DEFAULT_CONTRAST}, saturation={DEFAULT_SATURATION}."
-    )
-    print(
-        f"                   - --hdr-merge {HDR_MERGE_MODE_OPENCV}: "
-        f"post-gamma={DEFAULT_OPENCV_POST_GAMMA}, brightness={DEFAULT_OPENCV_BRIGHTNESS}, "
-        f"contrast={DEFAULT_OPENCV_CONTRAST}, saturation={DEFAULT_OPENCV_SATURATION}."
-    )
-    print(
-        f"                   - --hdr-merge {HDR_MERGE_MODE_HDR_PLUS}: "
-        f"post-gamma={DEFAULT_POST_GAMMA}, brightness={DEFAULT_BRIGHTNESS}, "
-        f"contrast={DEFAULT_CONTRAST}, saturation={DEFAULT_SATURATION}."
-    )
-    print("  --luminance-hdr-model=<name>")
-    print(
-        f"                   - Luminance HDR model (default: {DEFAULT_LUMINANCE_HDR_MODEL})."
-    )
-    print("  --luminance-hdr-weight=<name>")
-    print(
-        f"                   - Luminance weighting function (default: {DEFAULT_LUMINANCE_HDR_WEIGHT})."
-    )
-    print("  --luminance-hdr-response-curve=<name>")
-    print(
-        f"                   - Luminance response curve (default: {DEFAULT_LUMINANCE_HDR_RESPONSE_CURVE})."
-    )
-    print("  --luminance-tmo=<name>")
-    print(
-        f"                   - Luminance tone mapper (default: {DEFAULT_LUMINANCE_TMO})."
+    postprocess_default_rows = (
+        (
+            HDR_MERGE_MODE_LUMINANCE,
+            "generic",
+            f"{DEFAULT_POST_GAMMA:g} / {DEFAULT_BRIGHTNESS:g} / {DEFAULT_CONTRAST:g} / {DEFAULT_SATURATION:g}",
+        ),
+        (
+            HDR_MERGE_MODE_LUMINANCE,
+            "reinhard02",
+            f"{DEFAULT_POST_GAMMA:g} / {DEFAULT_REINHARD02_BRIGHTNESS:g} / {DEFAULT_REINHARD02_CONTRAST:g} / {DEFAULT_REINHARD02_SATURATION:g}",
+        ),
+        (
+            HDR_MERGE_MODE_LUMINANCE,
+            "mantiuk08",
+            f"{DEFAULT_POST_GAMMA:g} / {DEFAULT_BRIGHTNESS:g} / {DEFAULT_MANTIUK08_CONTRAST:g} / {DEFAULT_SATURATION:g}",
+        ),
+        (
+            HDR_MERGE_MODE_OPENCV,
+            OPENCV_MERGE_ALGORITHM_DEBEVEC,
+            f"{DEFAULT_OPENCV_POST_GAMMA:g} / {DEFAULT_OPENCV_BRIGHTNESS:g} / {DEFAULT_OPENCV_CONTRAST:g} / {DEFAULT_OPENCV_SATURATION:g}",
+        ),
+        (
+            HDR_MERGE_MODE_OPENCV,
+            OPENCV_MERGE_ALGORITHM_ROBERTSON,
+            f"{DEFAULT_OPENCV_POST_GAMMA:g} / {DEFAULT_OPENCV_BRIGHTNESS:g} / {DEFAULT_OPENCV_CONTRAST:g} / {DEFAULT_OPENCV_SATURATION:g}",
+        ),
+        (
+            HDR_MERGE_MODE_OPENCV,
+            OPENCV_MERGE_ALGORITHM_MERTENS,
+            f"{DEFAULT_OPENCV_POST_GAMMA:g} / {DEFAULT_OPENCV_BRIGHTNESS:g} / {DEFAULT_OPENCV_CONTRAST:g} / {DEFAULT_OPENCV_SATURATION:g}",
+        ),
+        (
+            HDR_MERGE_MODE_HDR_PLUS,
+            "generic",
+            f"{DEFAULT_POST_GAMMA:g} / {DEFAULT_BRIGHTNESS:g} / {DEFAULT_CONTRAST:g} / {DEFAULT_SATURATION:g}",
+        ),
+    )
+
+    print(f"Usage: {PROGRAM} <input.dng> <output.jpg> [options] ({version})")
+    print(
+        "       Value options accept both `--option value` and `--option=value` forms."
+    )
+    print(
+        "       Optional-boolean knobs accept bare flag form as `true` or explicit `0|1|false|true|no|yes|off|on`."
+    )
+
+    _print_help_section("Step 1 - Inputs and command surface")
+    _print_help_option(
+        "<input.dng>",
+        "Input DNG path. Required. Existing file with `.dng` suffix.",
+    )
+    _print_help_option(
+        "<output.jpg>",
+        "Output JPG path. Required. Parent directory must already exist.",
+    )
+    _print_help_option(
+        "--help",
+        "Show this conversion help. Top-level `dng2jpg --help` prints management help first, then this conversion help.",
+    )
+
+    _print_help_section("Step 2 - Exposure planning and RAW bracket extraction")
+    _print_help_option(
+        "--ev=<value>",
+        "Fixed bracket EV in `0.25 .. MAX_BRACKET` with `0.25` step, where `MAX_BRACKET=((bits_per_color-8)/2)-abs(ev_zero)`.",
+        ("Overrides enabled `--auto-ev`.",),
+    )
+    _print_help_option(
+        "--auto-ev=<enable|disable>",
+        "Adaptive EV selector from preview luminance statistics.",
+        (
+            "Default: `enable` when `--ev` is omitted; `disable` when `--ev` is provided.",
+        ),
+    )
+    _print_help_option(
+        "--ev-zero=<value>",
+        "Central bracket EV in `-SAFE_ZERO_MAX .. +SAFE_ZERO_MAX` with `0.25` step, where `SAFE_ZERO_MAX=((bits_per_color-8)/2)-1`.",
+        ("Default: `0`.",),
+    )
+    _print_help_option(
+        "--auto-zero=<enable|disable>",
+        "Auto-resolve EV center from RAW preview median luminance.",
+        (
+            "Default: `enable` when `--ev-zero` is omitted; `disable` when `--ev-zero` is provided.",
+            "`--ev-zero` overrides enabled `--auto-zero` with explicit ignored-parameter output.",
+        ),
+    )
+    _print_help_option(
+        "--auto-zero-pct=<0..100>",
+        f"Scale auto-resolved EV center before `0.25`-step quantization toward zero. Default: `{DEFAULT_AUTO_ZERO_PCT:g}`.",
+    )
+    _print_help_option(
+        "--auto-ev-pct=<0..100>",
+        f"Scale adaptive EV bracket before `0.25`-step quantization toward zero. Default: `{DEFAULT_AUTO_EV_PCT:g}`.",
+    )
+    _print_help_option(
+        "--gamma=<a,b>",
+        f"RAW extraction gamma pair. Both values must be positive. Default: `{DEFAULT_GAMMA[0]},{DEFAULT_GAMMA[1]}`.",
+        ("Example: `--gamma=1,1` for linear extraction.",),
+    )
+
+    _print_help_section("Step 3 - HDR backend selection and backend-local configuration")
+    _print_help_option(
+        "--hdr-merge <Luminace-HDR|OpenCV|HDR-Plus>",
+        f"Select HDR merge backend. Default: `{HDR_MERGE_MODE_OPENCV}`.",
+    )
+    _print_help_option(
+        "--opencv-merge-algorithm=<name>",
+        "OpenCV merge algorithm. Effective only when `--hdr-merge OpenCV`.",
+        (
+            f"Allowed values: {', '.join(_OPENCV_MERGE_ALGORITHMS)}.",
+            f"Default: `{DEFAULT_OPENCV_MERGE_ALGORITHM}`.",
+        ),
+    )
+    _print_help_option(
+        "--opencv-tonemap=<bool>",
+        f"Enable simple OpenCV gamma tone mapping for `{OPENCV_MERGE_ALGORITHM_DEBEVEC}` and `{OPENCV_MERGE_ALGORITHM_ROBERTSON}` outputs.",
+        (
+            f"Default: `{'true' if DEFAULT_OPENCV_TONEMAP_ENABLED else 'false'}`.",
+            f"Ignored by `{OPENCV_MERGE_ALGORITHM_MERTENS}`.",
+        ),
+    )
+    _print_help_option(
+        "--opencv-tonemap-gamma=<value>",
+        f"Positive gamma used by OpenCV simple tone mapping. Effective only when OpenCV tone mapping is enabled. Default: `{DEFAULT_OPENCV_TONEMAP_GAMMA:g}`.",
+    )
+    _print_help_option(
+        "--hdrplus-proxy-mode=<name>",
+        "HDR+ scalar proxy mode. Effective only when `--hdr-merge HDR-Plus`.",
+        (
+            f"Allowed values: {', '.join(_HDRPLUS_PROXY_MODES)}.",
+            f"Default: `{DEFAULT_HDRPLUS_PROXY_MODE}`.",
+        ),
+    )
+    _print_help_option(
+        "--hdrplus-search-radius=<value>",
+        f"HDR+ per-layer alignment search radius; integer `> 0`. Effective only when `--hdr-merge HDR-Plus`. Default: `{DEFAULT_HDRPLUS_SEARCH_RADIUS}`.",
+    )
+    _print_help_option(
+        "--hdrplus-temporal-factor=<value>",
+        f"HDR+ temporal inverse-distance stretch factor; `> 0`. Effective only when `--hdr-merge HDR-Plus`. Default: `{DEFAULT_HDRPLUS_TEMPORAL_FACTOR:g}`.",
+    )
+    _print_help_option(
+        "--hdrplus-temporal-min-dist=<value>",
+        f"HDR+ temporal weight floor; `>= 0`. Effective only when `--hdr-merge HDR-Plus`. Default: `{DEFAULT_HDRPLUS_TEMPORAL_MIN_DIST:g}`.",
+    )
+    _print_help_option(
+        "--hdrplus-temporal-max-dist=<value>",
+        f"HDR+ temporal cutoff threshold; must be `> --hdrplus-temporal-min-dist`. Effective only when `--hdr-merge HDR-Plus`. Default: `{DEFAULT_HDRPLUS_TEMPORAL_MAX_DIST:g}`.",
+    )
+    _print_help_option(
+        "--luminance-hdr-model=<name>",
+        f"Luminance HDR model text forwarded to `luminance-hdr-cli`. Effective only when `--hdr-merge {HDR_MERGE_MODE_LUMINANCE}`. Default: `{DEFAULT_LUMINANCE_HDR_MODEL}`.",
+    )
+    _print_help_option(
+        "--luminance-hdr-weight=<name>",
+        f"Luminance weighting function text forwarded to `luminance-hdr-cli`. Effective only when `--hdr-merge {HDR_MERGE_MODE_LUMINANCE}`. Default: `{DEFAULT_LUMINANCE_HDR_WEIGHT}`.",
+    )
+    _print_help_option(
+        "--luminance-hdr-response-curve=<name>",
+        f"Luminance response-curve text forwarded to `luminance-hdr-cli`. Effective only when `--hdr-merge {HDR_MERGE_MODE_LUMINANCE}`. Default: `{DEFAULT_LUMINANCE_HDR_RESPONSE_CURVE}`.",
+    )
+    _print_help_option(
+        "--luminance-tmo=<name>",
+        f"Luminance tone-mapping operator. Effective only when `--hdr-merge {HDR_MERGE_MODE_LUMINANCE}`. Default: `{DEFAULT_LUMINANCE_TMO}`.",
+    )
+    _print_help_option(
+        "--tmo* <value> | --tmo*=<value>",
+        f"Forward explicit `luminance-hdr-cli --tmo*` parameters unchanged. Effective only when `--hdr-merge {HDR_MERGE_MODE_LUMINANCE}`.",
     )
     print()
     print("  Luminance operators:")
@@ -965,13 +927,174 @@ def print_help(version):
     print()
     print("  Luminance operator main CLI controls:")
     _print_box_table(_LUMINANCE_CONTROL_TABLE_HEADERS, _LUMINANCE_CONTROL_TABLE_ROWS)
-    print()
-    print("  --tmo* <value> | --tmo*=<value>")
-    print(
-        "                   - Forward explicit luminance-hdr-cli --tmo* parameters as-is."
+
+    _print_help_section("Step 4 - Auto-brightness stage")
+    _print_help_option(
+        "--auto-brightness=<enable|disable>",
+        "Enable or disable the auto-brightness pre-stage executed before auto-levels and static postprocess.",
+        ("Default: `enable`.",),
     )
-    print("  [platform]       - Command is available on Linux only.")
-    print("  --help           - Show this help message.")
+    _print_help_option(
+        "--ab-key-value=<value>",
+        "Manual Reinhard key value `a`; must be `> 0`.",
+        ("Omit to enable automatic low-key / normal-key / high-key selection.",),
+    )
+    _print_help_option(
+        "--ab-white-point-pct=<(0,100)>",
+        f"Percentile for robust white-point burn-out compression. Effective only when auto-brightness resolves to enable. Default: `{DEFAULT_AB_WHITE_POINT_PERCENTILE:g}`.",
+    )
+    _print_help_option(
+        "--ab-key-min=<value>",
+        f"Minimum automatic key-value clamp; `> 0`. Effective only when auto-brightness resolves to enable. Default: `{DEFAULT_AB_A_MIN:g}`.",
+    )
+    _print_help_option(
+        "--ab-key-max=<value>",
+        f"Maximum automatic key-value clamp; `> 0`. Effective only when auto-brightness resolves to enable. Default: `{DEFAULT_AB_A_MAX:g}`.",
+    )
+    _print_help_option(
+        "--ab-max-auto-boost=<value>",
+        f"Automatic key adaptation factor; `> 0`. Effective only when auto-brightness resolves to enable. Default: `{DEFAULT_AB_MAX_AUTO_BOOST_FACTOR:g}`.",
+    )
+    _print_help_option(
+        "--ab-enable-luminance-preserving-desat[=<bool>]",
+        "Enable luminance-preserving anti-clipping desaturation. Effective only when auto-brightness resolves to enable.",
+        (
+            f"Default: `{'true' if DEFAULT_AB_ENABLE_LUMINANCE_PRESERVING_DESAT else 'false'}`.",
+            "Bare flag form is equivalent to `true`.",
+        ),
+    )
+    _print_help_option(
+        "--ab-eps=<value>",
+        f"Positive numerical guard for logarithms and divisions. Effective only when auto-brightness resolves to enable. Default: `{DEFAULT_AB_EPS:g}`.",
+    )
+
+    _print_help_section("Step 5 - Auto-levels stage")
+    _print_help_option(
+        "--auto-levels=<enable|disable>",
+        "Enable or disable the auto-levels stage executed after auto-brightness and before static postprocess.",
+        ("Default: `enable`.",),
+    )
+    _print_help_option(
+        "--al-clip-pct=<value>",
+        f"Histogram clipping percentage; `>= 0`. Effective only when auto-levels resolves to enable. Default: `{DEFAULT_AL_CLIP_PERCENT:g}`.",
+    )
+    _print_help_option(
+        "--al-clip-out-of-gamut[=<bool>]",
+        "Normalize overflowing RGB triplets after auto-levels gain and highlight reconstruction. Effective only when auto-levels resolves to enable.",
+        (
+            f"Default: `{'true' if DEFAULT_AL_CLIP_OUT_OF_GAMUT else 'false'}`.",
+            "Bare flag form is equivalent to `true`.",
+        ),
+    )
+    _print_help_option(
+        "--al-highlight-reconstruction-method <name>",
+        "Enable highlight reconstruction and select one RawTherapee-aligned method. Effective only when auto-levels resolves to enable.",
+        (
+            "Allowed values: " + ", ".join(_AUTO_LEVELS_HIGHLIGHT_METHODS) + ".",
+            "Default when omitted: highlight reconstruction disabled; default method when enabled without override is `Inpaint Opposed`.",
+        ),
+    )
+    _print_help_option(
+        "--al-gain-threshold=<value>",
+        f"Inpaint Opposed gain threshold; `> 0`. Effective only when auto-levels resolves to enable. Default: `{DEFAULT_AL_GAIN_THRESHOLD:g}`.",
+    )
+
+    _print_help_section("Step 6 - Static postprocess stage")
+    _print_help_option(
+        "--post-gamma=<value>",
+        "Postprocess gamma correction factor; positive float. When omitted, resolves from selected backend and backend variant.",
+    )
+    _print_help_option(
+        "--brightness=<value>",
+        "Postprocess brightness factor; positive float. When omitted, resolves from selected backend and backend variant.",
+    )
+    _print_help_option(
+        "--contrast=<value>",
+        "Postprocess contrast factor; positive float. When omitted, resolves from selected backend and backend variant.",
+    )
+    _print_help_option(
+        "--saturation=<value>",
+        "Postprocess saturation factor; positive float. When omitted, resolves from selected backend and backend variant.",
+    )
+    print()
+    print("  Static postprocess defaults when omitted:")
+    _print_box_table(
+        ("Backend", "Variant", "post-gamma / brightness / contrast / saturation"),
+        postprocess_default_rows,
+    )
+
+    _print_help_section("Step 7 - Auto-adjust stage")
+    _print_help_option(
+        "--auto-adjust=<enable|disable>",
+        "Enable or disable the auto-adjust stage executed after static postprocess and before final JPEG quantization.",
+        ("Default: `enable`.",),
+    )
+    _print_help_option(
+        "--aa-blur-sigma=<value>",
+        f"Selective blur sigma; `> 0`. Effective only when auto-adjust resolves to enable. Default: `{DEFAULT_AA_BLUR_SIGMA:g}`.",
+    )
+    _print_help_option(
+        "--aa-blur-threshold-pct=<0..100>",
+        f"Selective blur threshold percentile. Effective only when auto-adjust resolves to enable. Default: `{DEFAULT_AA_BLUR_THRESHOLD_PCT:g}`.",
+    )
+    _print_help_option(
+        "--aa-level-low-pct=<0..100>",
+        f"Level low percentile; must stay `< --aa-level-high-pct`. Effective only when auto-adjust resolves to enable. Default: `{DEFAULT_AA_LEVEL_LOW_PCT:g}`.",
+    )
+    _print_help_option(
+        "--aa-level-high-pct=<0..100>",
+        f"Level high percentile; must stay `> --aa-level-low-pct`. Effective only when auto-adjust resolves to enable. Default: `{DEFAULT_AA_LEVEL_HIGH_PCT:g}`.",
+    )
+    _print_help_option(
+        "--aa-enable-local-contrast[=<bool>]",
+        "Enable float-domain CLAHE-luma local contrast stage. Effective only when auto-adjust resolves to enable.",
+        (
+            f"Default: `{'true' if DEFAULT_AA_ENABLE_LOCAL_CONTRAST else 'false'}`.",
+            "Bare flag form is equivalent to `true`.",
+        ),
+    )
+    _print_help_option(
+        "--aa-local-contrast-strength=<0..1>",
+        f"CLAHE-luma blend factor. Effective only when auto-adjust resolves to enable. Default: `{DEFAULT_AA_LOCAL_CONTRAST_STRENGTH:g}`.",
+    )
+    _print_help_option(
+        "--aa-clahe-clip-limit=<value>",
+        f"CLAHE clip limit; `> 0`. Effective only when auto-adjust resolves to enable. Default: `{DEFAULT_AA_CLAHE_CLIP_LIMIT:g}`.",
+    )
+    _print_help_option(
+        "--aa-clahe-tile-grid-size=<rows>x<cols>",
+        f"CLAHE tile grid size with both dimensions `>= 1`. Effective only when auto-adjust resolves to enable. Default: `{DEFAULT_AA_CLAHE_TILE_GRID_SIZE[0]}x{DEFAULT_AA_CLAHE_TILE_GRID_SIZE[1]}`.",
+    )
+    _print_help_option(
+        "--aa-sigmoid-contrast=<value>",
+        f"Sigmoidal contrast slope; `> 0`. Effective only when auto-adjust resolves to enable. Default: `{DEFAULT_AA_SIGMOID_CONTRAST:g}`.",
+    )
+    _print_help_option(
+        "--aa-sigmoid-midpoint=<0..1>",
+        f"Sigmoidal midpoint in `[0,1]`. Effective only when auto-adjust resolves to enable. Default: `{DEFAULT_AA_SIGMOID_MIDPOINT:g}`.",
+    )
+    _print_help_option(
+        "--aa-saturation-gamma=<value>",
+        f"HSL saturation gamma denominator; `> 0`. Effective only when auto-adjust resolves to enable. Default: `{DEFAULT_AA_SATURATION_GAMMA:g}`.",
+    )
+    _print_help_option(
+        "--aa-highpass-blur-sigma=<value>",
+        f"High-pass blur sigma; `> 0`. Effective only when auto-adjust resolves to enable. Default: `{DEFAULT_AA_HIGHPASS_BLUR_SIGMA:g}`.",
+    )
+
+    _print_help_section("Step 8 - Final JPEG, EXIF refresh, and debug artifacts")
+    _print_help_option(
+        "--jpg-compression=<0..100>",
+        f"JPEG compression level for the final save stage. Default: `{DEFAULT_JPG_COMPRESSION}`.",
+    )
+    _print_help_option(
+        "--debug",
+        "Persist TIFF16 checkpoints for executed float pipeline stages in the output JPG directory. Does not change the final JPG destination.",
+    )
+    _print_help_option(
+        "[platform]",
+        "Conversion command is available on Linux only.",
+    )
 
 
 def _calculate_max_ev_from_bits(bits_per_color):
@@ -2524,25 +2647,45 @@ def _parse_hdr_merge_option(hdr_merge_raw):
 def _resolve_default_postprocess(
     hdr_merge_mode,
     luminance_tmo,
+    opencv_merge_algorithm=DEFAULT_OPENCV_MERGE_ALGORITHM,
 ):
     """@brief Resolve backend-specific postprocess defaults.
 
-    @details Selects backend-specific defaults. Uses tuned static postprocess
-    factors for `OpenCV`, luminance-operator-specific defaults for
-    `Luminace-HDR`, and neutral defaults for `HDR-Plus` and untuned luminance
-    operators.
+    @details Selects backend-specific defaults. Uses algorithm-specific OpenCV
+    defaults keyed by resolved `Debevec|Robertson|Mertens`, luminance-operator-
+    specific defaults for `Luminace-HDR`, and neutral defaults for `HDR-Plus`
+    and untuned luminance operators. Complexity: O(1). Side effects: none.
     @param hdr_merge_mode {str} Canonical HDR merge mode selector.
     @param luminance_tmo {str} Selected luminance tone-mapping operator.
+    @param opencv_merge_algorithm {str} Resolved OpenCV merge algorithm selector.
     @return {tuple[float, float, float, float]} Defaults in `(post_gamma, brightness, contrast, saturation)` order.
-    @satisfies DES-006, DES-008
+    @satisfies DES-006, DES-008, REQ-145
     """
 
     if hdr_merge_mode == HDR_MERGE_MODE_OPENCV:
-        return (
-            DEFAULT_OPENCV_POST_GAMMA,
-            DEFAULT_OPENCV_BRIGHTNESS,
-            DEFAULT_OPENCV_CONTRAST,
-            DEFAULT_OPENCV_SATURATION,
+        opencv_defaults = {
+            OPENCV_MERGE_ALGORITHM_DEBEVEC: (
+                DEFAULT_OPENCV_POST_GAMMA,
+                DEFAULT_OPENCV_BRIGHTNESS,
+                DEFAULT_OPENCV_CONTRAST,
+                DEFAULT_OPENCV_SATURATION,
+            ),
+            OPENCV_MERGE_ALGORITHM_ROBERTSON: (
+                DEFAULT_OPENCV_POST_GAMMA,
+                DEFAULT_OPENCV_BRIGHTNESS,
+                DEFAULT_OPENCV_CONTRAST,
+                DEFAULT_OPENCV_SATURATION,
+            ),
+            OPENCV_MERGE_ALGORITHM_MERTENS: (
+                DEFAULT_OPENCV_POST_GAMMA,
+                DEFAULT_OPENCV_BRIGHTNESS,
+                DEFAULT_OPENCV_CONTRAST,
+                DEFAULT_OPENCV_SATURATION,
+            ),
+        }
+        return opencv_defaults.get(
+            opencv_merge_algorithm,
+            opencv_defaults[DEFAULT_OPENCV_MERGE_ALGORITHM],
         )
 
     if hdr_merge_mode != HDR_MERGE_MODE_LUMINANCE:
@@ -3319,12 +3462,19 @@ def _parse_run_options(args):
         )
         return None
 
+    opencv_merge_options = _parse_opencv_options(opencv_raw_values)
+    if opencv_merge_options is None:
+        return None
     (
         backend_post_gamma,
         backend_brightness,
         backend_contrast,
         backend_saturation,
-    ) = _resolve_default_postprocess(hdr_merge_mode, luminance_tmo)
+    ) = _resolve_default_postprocess(
+        hdr_merge_mode,
+        luminance_tmo,
+        opencv_merge_algorithm=opencv_merge_options.merge_algorithm,
+    )
     if not post_gamma_set:
         post_gamma = backend_post_gamma
     if not brightness_set:
@@ -3341,9 +3491,6 @@ def _parse_run_options(args):
         return None
     auto_adjust_options = _parse_auto_adjust_options(auto_adjust_raw_values)
     if auto_adjust_options is None:
-        return None
-    opencv_merge_options = _parse_opencv_options(opencv_raw_values)
-    if opencv_merge_options is None:
         return None
     hdrplus_options = _parse_hdrplus_options(hdrplus_raw_values)
     if hdrplus_options is None:

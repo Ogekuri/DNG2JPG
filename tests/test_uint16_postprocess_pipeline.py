@@ -1017,12 +1017,136 @@ def test_parse_run_options_defaults_hdr_merge_to_opencv() -> None:
 def test_resolve_default_postprocess_opencv_uses_updated_static_defaults() -> None:
     """OpenCV backend defaults must resolve to the updated static factors."""
 
-    defaults = dng2jpg_module._resolve_default_postprocess(  # pylint: disable=protected-access
-        dng2jpg_module.HDR_MERGE_MODE_OPENCV,
-        dng2jpg_module.DEFAULT_LUMINANCE_TMO,
+    for algorithm in dng2jpg_module._OPENCV_MERGE_ALGORITHMS:  # pylint: disable=protected-access
+        defaults = dng2jpg_module._resolve_default_postprocess(  # pylint: disable=protected-access
+            dng2jpg_module.HDR_MERGE_MODE_OPENCV,
+            dng2jpg_module.DEFAULT_LUMINANCE_TMO,
+            opencv_merge_algorithm=algorithm,
+        )
+        assert defaults == (1.0, 1.0, 1.0, 1.0)
+
+
+def test_print_help_orders_sections_by_pipeline_step(capsys) -> None:
+    """Help output must follow pipeline step order and colocate stage knobs."""
+
+    dng2jpg_module.print_help("test-version")
+    output = capsys.readouterr().out
+
+    assert output.index("Step 1 - Inputs and command surface") < output.index(
+        "Step 2 - Exposure planning and RAW bracket extraction"
+    )
+    assert output.index(
+        "Step 2 - Exposure planning and RAW bracket extraction"
+    ) < output.index("Step 3 - HDR backend selection and backend-local configuration")
+    assert output.index(
+        "Step 3 - HDR backend selection and backend-local configuration"
+    ) < output.index("Step 4 - Auto-brightness stage")
+    assert output.index("Step 4 - Auto-brightness stage") < output.index(
+        "Step 5 - Auto-levels stage"
+    )
+    assert output.index("Step 5 - Auto-levels stage") < output.index(
+        "Step 6 - Static postprocess stage"
+    )
+    assert output.index("Step 6 - Static postprocess stage") < output.index(
+        "Step 7 - Auto-adjust stage"
+    )
+    assert output.index("Step 7 - Auto-adjust stage") < output.index(
+        "Step 8 - Final JPEG, EXIF refresh, and debug artifacts"
+    )
+    assert output.index("--auto-brightness=<enable|disable>") < output.index(
+        "--ab-key-value=<value>"
+    )
+    assert output.index("--auto-levels=<enable|disable>") < output.index(
+        "--al-clip-pct=<value>"
+    )
+    assert output.index("--hdr-merge <Luminace-HDR|OpenCV|HDR-Plus>") < output.index(
+        "--opencv-merge-algorithm=<name>"
+    )
+    assert output.index("--hdr-merge <Luminace-HDR|OpenCV|HDR-Plus>") < output.index(
+        "--hdrplus-proxy-mode=<name>"
+    )
+    assert output.index("--hdr-merge <Luminace-HDR|OpenCV|HDR-Plus>") < output.index(
+        "--luminance-hdr-model=<name>"
     )
 
-    assert defaults == (1.0, 1.0, 1.0, 1.0)
+
+def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> None:
+    """Help output must enumerate accepted conversion options and omitted defaults."""
+
+    dng2jpg_module.print_help("test-version")
+    output = capsys.readouterr().out
+
+    required_tokens = [
+        "<input.dng>",
+        "<output.jpg>",
+        "--help",
+        "--ev=<value>",
+        "--auto-ev=<enable|disable>",
+        "--ev-zero=<value>",
+        "--auto-zero=<enable|disable>",
+        "--auto-zero-pct=<0..100>",
+        "--auto-ev-pct=<0..100>",
+        "--gamma=<a,b>",
+        "--hdr-merge <Luminace-HDR|OpenCV|HDR-Plus>",
+        "--opencv-merge-algorithm=<name>",
+        "--opencv-tonemap=<bool>",
+        "--opencv-tonemap-gamma=<value>",
+        "--hdrplus-proxy-mode=<name>",
+        "--hdrplus-search-radius=<value>",
+        "--hdrplus-temporal-factor=<value>",
+        "--hdrplus-temporal-min-dist=<value>",
+        "--hdrplus-temporal-max-dist=<value>",
+        "--luminance-hdr-model=<name>",
+        "--luminance-hdr-weight=<name>",
+        "--luminance-hdr-response-curve=<name>",
+        "--luminance-tmo=<name>",
+        "--tmo* <value> | --tmo*=<value>",
+        "--auto-brightness=<enable|disable>",
+        "--ab-key-value=<value>",
+        "--ab-white-point-pct=<(0,100)>",
+        "--ab-key-min=<value>",
+        "--ab-key-max=<value>",
+        "--ab-max-auto-boost=<value>",
+        "--ab-enable-luminance-preserving-desat[=<bool>]",
+        "--ab-eps=<value>",
+        "--auto-levels=<enable|disable>",
+        "--al-clip-pct=<value>",
+        "--al-clip-out-of-gamut[=<bool>]",
+        "--al-highlight-reconstruction-method <name>",
+        "--al-gain-threshold=<value>",
+        "--post-gamma=<value>",
+        "--brightness=<value>",
+        "--contrast=<value>",
+        "--saturation=<value>",
+        "--auto-adjust=<enable|disable>",
+        "--aa-blur-sigma=<value>",
+        "--aa-blur-threshold-pct=<0..100>",
+        "--aa-level-low-pct=<0..100>",
+        "--aa-level-high-pct=<0..100>",
+        "--aa-enable-local-contrast[=<bool>]",
+        "--aa-local-contrast-strength=<0..1>",
+        "--aa-clahe-clip-limit=<value>",
+        "--aa-clahe-tile-grid-size=<rows>x<cols>",
+        "--aa-sigmoid-contrast=<value>",
+        "--aa-sigmoid-midpoint=<0..1>",
+        "--aa-saturation-gamma=<value>",
+        "--aa-highpass-blur-sigma=<value>",
+        "--jpg-compression=<0..100>",
+        "--debug",
+    ]
+    for token in required_tokens:
+        assert token in output
+
+    assert "Value options accept both `--option value` and `--option=value` forms." in output
+    assert "Allowed values: Debevec, Robertson, Mertens." in output
+    assert "Allowed values: rggb, bt709, mean." in output
+    assert "Effective only when `--hdr-merge OpenCV`." in output
+    assert "Effective only when `--hdr-merge HDR-Plus`." in output
+    assert "Effective only when `--hdr-merge Luminace-HDR`." in output
+    assert "Default: `OpenCV`." in output
+    assert "Default: `Robertson`." in output
+    assert "Default: `enable`." in output
+    assert "Static postprocess defaults when omitted:" in output
 
 
 def test_parse_run_options_rejects_unknown_hdr_merge_backend() -> None:
