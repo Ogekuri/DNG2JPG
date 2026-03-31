@@ -459,7 +459,7 @@ class PostprocessOptions:
     @param contrast {float} Contrast enhancement factor.
     @param saturation {float} Saturation enhancement factor.
     @param jpg_compression {int} JPEG compression level in range `[0, 100]`.
-    @param auto_brightness_enabled {bool} `True` when auto-brightness pre-stage is enabled.
+    @param auto_brightness_enabled {bool} `True` when the post-static auto-brightness stage is enabled.
     @param auto_brightness_options {AutoBrightnessOptions} Auto-brightness stage knobs.
     @param auto_levels_enabled {bool} `True` when auto-levels stage is enabled.
     @param auto_levels_options {AutoLevelsOptions} Auto-levels stage knobs.
@@ -938,7 +938,7 @@ def print_help(version):
     _print_help_section("Step 4 - Auto-brightness stage")
     _print_help_option(
         "--auto-brightness=<enable|disable>",
-        "Enable or disable the auto-brightness pre-stage executed before auto-levels and static postprocess.",
+        "Enable or disable the auto-brightness stage executed after static postprocess and before auto-levels.",
         ("Default: `enable`.",),
     )
     _print_help_option(
@@ -978,7 +978,7 @@ def print_help(version):
     _print_help_section("Step 5 - Auto-levels stage")
     _print_help_option(
         "--auto-levels=<enable|disable>",
-        "Enable or disable the auto-levels stage executed after auto-brightness and before static postprocess.",
+        "Enable or disable the auto-levels stage executed after static postprocess and optional auto-brightness.",
         ("Default: `enable`.",),
     )
     _print_help_option(
@@ -8295,9 +8295,9 @@ def _encode_jpg(
     """@brief Encode merged HDR float payload into final JPG output.
 
     @details Accepts one normalized RGB float image from the selected merge
-    backend, executes optional original-order auto-brightness stage, optional
-    auto-levels stage, static post-gamma/brightness/contrast/saturation stage,
-    optional auto-adjust stage, and then performs exactly one float-to-uint8
+    backend, executes static post-gamma/brightness/contrast/saturation stage,
+    optional auto-brightness stage, optional auto-levels stage, optional
+    auto-adjust stage, and then performs exactly one float-to-uint8
     conversion immediately before JPEG save. When debug context is present, the
     function emits persistent TIFF16 checkpoints after each executed stage.
     @param imageio_module {ModuleType} Imported imageio module with `imread` and `imwrite`.
@@ -8331,6 +8331,20 @@ def _encode_jpg(
         np_module=np_module,
         image_data=merged_image_float,
     )
+    image_rgb_float = _apply_static_postprocess_float(
+        np_module=np_module,
+        image_rgb_float=image_rgb_float,
+        postprocess_options=postprocess_options,
+        **(
+            {
+                "imageio_module": imageio_module,
+                "debug_context": debug_context,
+            }
+            if debug_context is not None
+            else {}
+        ),
+    )
+
     if postprocess_options.auto_brightness_enabled:
         image_rgb_float = _apply_auto_brightness_rgb_float(
             np_module=np_module,
@@ -8359,20 +8373,6 @@ def _encode_jpg(
                 stage_suffix="_5.0_auto-levels",
                 image_rgb_float=image_rgb_float,
             )
-
-    image_rgb_float = _apply_static_postprocess_float(
-        np_module=np_module,
-        image_rgb_float=image_rgb_float,
-        postprocess_options=postprocess_options,
-        **(
-            {
-                "imageio_module": imageio_module,
-                "debug_context": debug_context,
-            }
-            if debug_context is not None
-            else {}
-        ),
-    )
 
     if postprocess_options.auto_adjust_enabled:
         if auto_adjust_dependencies is None:

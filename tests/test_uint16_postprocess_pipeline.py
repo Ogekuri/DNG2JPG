@@ -564,7 +564,7 @@ def test_encode_jpg_refreshes_exif_thumbnail_from_final_quantized_rgb_uint8(
 def test_encode_jpg_writes_debug_checkpoints_with_progressive_suffixes(
     monkeypatch, tmp_path
 ) -> None:
-    """Debug mode must persist progressive TIFF checkpoints in output directory."""
+    """Debug mode must persist TIFF checkpoints in post-merge execution order."""
 
     merged_rgb_float = np.array(
         [
@@ -583,8 +583,18 @@ def test_encode_jpg_writes_debug_checkpoints_with_progressive_suffixes(
     )
     call_trace: list[str] = []
 
+    original_static = dng2jpg_module._apply_static_postprocess_float  # pylint: disable=protected-access
     original_auto_brightness = dng2jpg_module._apply_auto_brightness_rgb_float  # pylint: disable=protected-access
     original_auto_levels = dng2jpg_module._apply_auto_levels_float  # pylint: disable=protected-access
+
+    def _tracked_static(*, np_module, image_rgb_float, postprocess_options, **kwargs):
+        call_trace.append("static")
+        return original_static(
+            np_module=np_module,
+            image_rgb_float=image_rgb_float,
+            postprocess_options=postprocess_options,
+            **kwargs,
+        )
 
     def _tracked_auto_brightness(*, np_module, image_rgb_float, auto_brightness_options):
         call_trace.append("auto-brightness")
@@ -602,6 +612,7 @@ def test_encode_jpg_writes_debug_checkpoints_with_progressive_suffixes(
             auto_levels_options=auto_levels_options,
         )
 
+    monkeypatch.setattr(dng2jpg_module, "_apply_static_postprocess_float", _tracked_static)
     monkeypatch.setattr(
         dng2jpg_module,
         "_apply_auto_brightness_rgb_float",
@@ -632,15 +643,15 @@ def test_encode_jpg_writes_debug_checkpoints_with_progressive_suffixes(
         debug_context=debug_context,
     )
 
-    assert call_trace == ["auto-brightness", "auto-levels"]
+    assert call_trace == ["static", "auto-brightness", "auto-levels"]
     written_paths = [Path(path) for path, _image in imageio_module.writes]
     assert written_paths == [
-        tmp_path / "sample_4.0_auto-brightness.tiff",
-        tmp_path / "sample_5.0_auto-levels.tiff",
         tmp_path / "sample_3.1_static_correction_gamma.tiff",
         tmp_path / "sample_3.2_static_correction_brightness.tiff",
         tmp_path / "sample_3.3_static_correction_contrast.tiff",
         tmp_path / "sample_3.4_static_correction_saturation.tiff",
+        tmp_path / "sample_4.0_auto-brightness.tiff",
+        tmp_path / "sample_5.0_auto-levels.tiff",
     ]
     for _path, image in imageio_module.writes:
         assert image.dtype == np.uint16

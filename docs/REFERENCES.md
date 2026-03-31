@@ -306,7 +306,7 @@ import numpy as np_module  # type: ignore
 - @param contrast {float} Contrast enhancement factor.
 - @param saturation {float} Saturation enhancement factor.
 - @param jpg_compression {int} JPEG compression level in range `[0, 100]`.
-- @param auto_brightness_enabled {bool} `True` when auto-brightness pre-stage is enabled.
+- @param auto_brightness_enabled {bool} `True` when the post-static auto-brightness stage is enabled.
 - @param auto_brightness_options {AutoBrightnessOptions} Auto-brightness stage knobs.
 - @param auto_levels_enabled {bool} `True` when auto-levels stage is enabled.
 - @param auto_levels_options {AutoLevelsOptions} Auto-levels stage knobs.
