@@ -66,6 +66,20 @@ DEFAULT_AL_CLIP_PERCENT = 0.02
 DEFAULT_AL_CLIP_OUT_OF_GAMUT = True
 DEFAULT_AL_GAIN_THRESHOLD = 1.0
 DEFAULT_AL_HISTCOMPR = 3
+_AUTO_LEVELS_CODE_BIN_COUNT = 1 << 16
+_AUTO_LEVELS_CODE_MAX = float(_AUTO_LEVELS_CODE_BIN_COUNT - 1)
+_AUTO_LEVELS_RT_MIDGRAY = 0.1842
+_AUTO_LEVELS_LUMINANCE_WEIGHTS = (
+    0.2126729,
+    0.7151521,
+    0.0721750,
+)
+_AUTO_LEVELS_BLEND_CLIP_THRESHOLD = 0.95
+_AUTO_LEVELS_BLEND_FIX_THRESHOLD = 0.5
+_AUTO_LEVELS_BLEND_SATURATION_THRESHOLD = 0.5
+_AUTO_LEVELS_COLOR_PROPAGATION_DARK_FLOOR = 0.25
+_AUTO_LEVELS_INPAINT_GAIN_MULTIPLIER = 1.2
+_AUTO_LEVELS_INPAINT_CLIP_RATIO = 0.987
 _AUTO_LEVELS_HIGHLIGHT_METHODS = (
     "Luminance Recovery",
     "CIELab Blending",
@@ -395,10 +409,10 @@ class AutoLevelsOptions:
     """@brief Hold `--auto-levels` knob values.
 
     @details Encapsulates validated histogram-based auto-levels controls ported
-    from the attached RawTherapee-oriented source and adapted for RGB uint16
-    stage execution in the current post-merge pipeline.
+    from the attached RawTherapee-oriented source and adapted for normalized
+    RGB float stage execution in the current post-merge pipeline.
     @param clip_percent {float} Histogram clipping percentage in `[0, +inf)`.
-    @param clip_out_of_gamut {bool} `True` to normalize overflowing RGB triplets back into uint16 gamut after gain/reconstruction.
+    @param clip_out_of_gamut {bool} `True` to normalize overflowing RGB triplets back into normalized gamut after gain/reconstruction.
     @param histcompr {int} Histogram compression shift in `[0, 15]`.
     @param highlight_reconstruction_enabled {bool} `True` when highlight reconstruction is enabled.
     @param highlight_reconstruction_method {str} Highlight reconstruction method selector.
@@ -5926,13 +5940,147 @@ def _rt_igamma2(np_module, values):
     )
 
 
+def _auto_levels_index_to_normalized_value(histogram_value, histcompr):
+    """@brief Convert one compressed histogram coordinate to normalized scale.
+
+    @details Maps one RawTherapee histogram bin coordinate or derived statistic
+    from the fixed `2^16` histogram family to normalized `[0,1]` intensity
+    units using the exact lower-edge scaling of the original code domain. This
+    helper centralizes pure scale conversion and keeps algorithmic thresholds in
+    `_compute_auto_levels_from_histogram(...)` domain-independent.
+    @param histogram_value {int|float} Histogram index or statistic expressed in compressed-bin units.
+    @param histcompr {int} Histogram compression shift in `[0, 15]`.
+    @return {float} Normalized value in `[0, +inf)`.
+    @satisfies REQ-100, REQ-117, REQ-118
+    """
+
+    return float(histogram_value) * float(1 << histcompr) / _AUTO_LEVELS_CODE_MAX
+
+
+def _auto_levels_normalized_to_legacy_code_value(value):
+    """@brief Convert one normalized auto-levels scalar to legacy code scale.
+
+    @details Multiplies one normalized scalar by the legacy `2^16-1` ceiling.
+    Scope is restricted to compatibility mirrors returned by
+    `_compute_auto_levels_from_histogram(...)` and to transitional adapter
+    paths. Production auto-levels math must remain in normalized float units.
+    @param value {int|float} Normalized scalar.
+    @return {float} Legacy code-domain scalar.
+    @note Scope: compatibility-only.
+    @satisfies REQ-100, REQ-118
+    """
+
+    return float(value) * _AUTO_LEVELS_CODE_MAX
+
+
+def _auto_levels_normalized_to_legacy_code(np_module, values):
+    """@brief Convert normalized auto-levels tensors to legacy code scale.
+
+    @details Multiplies normalized float tensors by the legacy `2^16-1`
+    ceiling. This helper exists only for compatibility adapters that preserve
+    deterministic legacy unit-test hooks while the production path remains
+    float-native.
+    @param np_module {ModuleType} Imported numpy module.
+    @param values {object} Normalized scalar or tensor.
+    @return {object} Float64 tensor on legacy code scale.
+    @note Scope: compatibility-only.
+    @satisfies REQ-100
+    """
+
+    return np_module.asarray(values, dtype=np_module.float64) * _AUTO_LEVELS_CODE_MAX
+
+
+def _auto_levels_legacy_code_to_normalized(np_module, values):
+    """@brief Convert legacy code-domain tensors to normalized float scale.
+
+    @details Divides legacy `2^16-1`-scaled float tensors by the code ceiling.
+    Scope is restricted to transitional compatibility adapters and legacy unit
+    test hooks. Production auto-levels math must not depend on this helper.
+    @param np_module {ModuleType} Imported numpy module.
+    @param values {object} Legacy code-domain scalar or tensor.
+    @return {object} Float64 tensor on normalized scale.
+    @note Scope: compatibility-only.
+    @satisfies REQ-100
+    """
+
+    return np_module.asarray(values, dtype=np_module.float64) / _AUTO_LEVELS_CODE_MAX
+
+
+def _pack_auto_levels_metrics(
+    *,
+    expcomp,
+    gain,
+    black,
+    brightness,
+    contrast,
+    hlcompr,
+    hlcomprthresh,
+    whiteclip,
+    rawmax,
+    shc,
+    median,
+    average,
+    overex,
+    ospread,
+):
+    """@brief Assemble normalized and compatibility auto-levels metrics.
+
+    @details Stores the authoritative normalized-domain metrics under
+    `*_normalized` keys while mirroring the historical code-domain values under
+    legacy key names so existing callers and deterministic tests remain stable
+    during the float-native migration. Algorithmic controls (`expcomp`,
+    `brightness`, `contrast`, `hlcompr`, `ospread`) remain unscaled because
+    they are not pure code-domain quantities.
+    @param expcomp {float} Exposure compensation in EV.
+    @param gain {float} Exposure gain factor.
+    @param black {float} Normalized clipped black point.
+    @param brightness {int} RawTherapee brightness control.
+    @param contrast {int} RawTherapee contrast control.
+    @param hlcompr {int} RawTherapee highlight-compression control.
+    @param hlcomprthresh {int} RawTherapee highlight-compression threshold control.
+    @param whiteclip {float} Normalized clipped white point.
+    @param rawmax {float} Normalized maximum occupied histogram coordinate.
+    @param shc {float} Normalized clipped shadow coordinate.
+    @param median {float} Normalized histogram median.
+    @param average {float} Normalized histogram average.
+    @param overex {int} Overexposure classification flag from RawTherapee logic.
+    @param ospread {float} Octile spread metric.
+    @return {dict[str, int|float]} Metrics dictionary with normalized and compatibility fields.
+    @satisfies REQ-100, REQ-117, REQ-118
+    """
+
+    return {
+        "expcomp": float(expcomp),
+        "gain": float(gain),
+        "black_normalized": float(black),
+        "brightness": int(brightness),
+        "contrast": int(contrast),
+        "hlcompr": int(hlcompr),
+        "hlcomprthresh": int(hlcomprthresh),
+        "whiteclip_normalized": float(whiteclip),
+        "rawmax_normalized": float(rawmax),
+        "shc_normalized": float(shc),
+        "median_normalized": float(median),
+        "average_normalized": float(average),
+        "overex": int(overex),
+        "ospread": float(ospread),
+        "black": int(_auto_levels_normalized_to_legacy_code_value(black)),
+        "whiteclip": int(_auto_levels_normalized_to_legacy_code_value(whiteclip)),
+        "rawmax": int(_auto_levels_normalized_to_legacy_code_value(rawmax)),
+        "shc": int(_auto_levels_normalized_to_legacy_code_value(shc)),
+        "median": int(_auto_levels_normalized_to_legacy_code_value(median)),
+        "average": float(_auto_levels_normalized_to_legacy_code_value(average)),
+    }
+
+
 def _build_autoexp_histogram_rgb_float(np_module, image_rgb_float, histcompr):
     """@brief Build RGB auto-levels histogram from normalized float image tensor.
 
     @details Builds one RawTherapee-compatible luminance histogram from the
-    post-merge RGB float tensor by mapping normalized values to the repository
-    16-bit working scale, applying BT.709 luminance, compressing bins with
-    `hist_size = 65536 >> histcompr`, and clipping indices deterministically.
+    post-merge RGB float tensor directly in normalized units, applies the
+    RawTherapee BT.709 luminance coefficients, maps luminance to the fixed
+    `2^(16-histcompr)` histogram family without creating an intermediate
+    `*65535` working tensor, and clips indices deterministically.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} RGB float tensor in `[0,1]`.
     @param histcompr {int} Histogram compression shift in `[0, 15]`.
@@ -5940,20 +6088,21 @@ def _build_autoexp_histogram_rgb_float(np_module, image_rgb_float, histcompr):
     @satisfies REQ-100, REQ-117
     """
 
-    hist_size = 65536 >> histcompr
-    scale = 1.0 / float(1 << histcompr)
+    hist_size = _AUTO_LEVELS_CODE_BIN_COUNT >> histcompr
+    bin_width = float(1 << histcompr) / _AUTO_LEVELS_CODE_MAX
     normalized = _normalize_float_rgb_image(
         np_module=np_module,
         image_data=image_rgb_float,
     ).astype(np_module.float64)
-    working_rgb = normalized * 65535.0
     luminance = (
-        0.2126729 * working_rgb[..., 0]
-        + 0.7151521 * working_rgb[..., 1]
-        + 0.0721750 * working_rgb[..., 2]
+        _AUTO_LEVELS_LUMINANCE_WEIGHTS[0] * normalized[..., 0]
+        + _AUTO_LEVELS_LUMINANCE_WEIGHTS[1] * normalized[..., 1]
+        + _AUTO_LEVELS_LUMINANCE_WEIGHTS[2] * normalized[..., 2]
     )
     histogram_index = np_module.clip(
-        (luminance * scale).astype(np_module.int64), 0, hist_size - 1
+        (luminance / bin_width).astype(np_module.int64),
+        0,
+        hist_size - 1,
     )
     return np_module.bincount(
         histogram_index.ravel(), minlength=hist_size
@@ -5973,15 +6122,20 @@ def _build_autoexp_histogram_rgb_uint16(np_module, image_rgb_uint16, histcompr):
     @satisfies REQ-100, REQ-117
     """
 
-    hist_size = 65536 >> histcompr
+    hist_size = _AUTO_LEVELS_CODE_BIN_COUNT >> histcompr
     scale = 1.0 / float(1 << histcompr)
     luminance = (
-        0.2126729 * image_rgb_uint16[..., 0].astype(np_module.float64)
-        + 0.7151521 * image_rgb_uint16[..., 1].astype(np_module.float64)
-        + 0.0721750 * image_rgb_uint16[..., 2].astype(np_module.float64)
+        _AUTO_LEVELS_LUMINANCE_WEIGHTS[0]
+        * image_rgb_uint16[..., 0].astype(np_module.float64)
+        + _AUTO_LEVELS_LUMINANCE_WEIGHTS[1]
+        * image_rgb_uint16[..., 1].astype(np_module.float64)
+        + _AUTO_LEVELS_LUMINANCE_WEIGHTS[2]
+        * image_rgb_uint16[..., 2].astype(np_module.float64)
     )
     histogram_index = np_module.clip(
-        (luminance * scale).astype(np_module.int64), 0, hist_size - 1
+        (luminance * scale).astype(np_module.int64),
+        0,
+        hist_size - 1,
     )
     return np_module.bincount(
         histogram_index.ravel(), minlength=hist_size
@@ -5994,7 +6148,10 @@ def _compute_auto_levels_from_histogram(np_module, histogram, histcompr, clip_pe
     @details Ports `get_autoexp_from_histogram` from attached source as-is in
     numeric behavior for one luminance histogram: octile spread, white/black
     clip, exposure compensation, brightness/contrast, and highlight compression
-    metrics.
+    metrics. All scale-dependent intermediates are derived in normalized units.
+    The returned dictionary exposes normalized-domain metrics under
+    `*_normalized` keys and preserves legacy code-domain mirrors under the
+    historical key names for deterministic compatibility.
     @param np_module {ModuleType} Imported numpy module.
     @param histogram {object} Flattened histogram tensor.
     @param histcompr {int} Histogram compression shift.
@@ -6003,57 +6160,58 @@ def _compute_auto_levels_from_histogram(np_module, histogram, histcompr, clip_pe
     @satisfies REQ-100, REQ-117, REQ-118
     """
 
-    rt_maxval = 65535.0
-    rt_midgray = 0.1842
     histogram_flat = np_module.asarray(histogram, dtype=np_module.float64).ravel()
-    expected = 65536 >> histcompr
-    if histogram_flat.size != expected:
+    hist_size = _AUTO_LEVELS_CODE_BIN_COUNT >> histcompr
+    if histogram_flat.size != hist_size:
         raise ValueError(
-            f"histogram size must be {expected} for histcompr={histcompr}"
+            f"histogram size must be {hist_size} for histcompr={histcompr}"
         )
 
     total = float(histogram_flat.sum())
     weighted = float(
-        np_module.dot(histogram_flat, np_module.arange(expected, dtype=np_module.float64))
+        np_module.dot(
+            histogram_flat,
+            np_module.arange(hist_size, dtype=np_module.float64),
+        )
     )
-    average = weighted / total if total > 0 else 0.0
+    average_index = weighted / total if total > 0 else 0.0
     if total <= 0.0:
-        return {
-            "expcomp": 0.0,
-            "gain": 1.0,
-            "black": 0,
-            "brightness": 0,
-            "contrast": 0,
-            "hlcompr": 0,
-            "hlcomprthresh": 0,
-            "whiteclip": 0,
-            "rawmax": 0,
-            "shc": 0,
-            "median": 0,
-            "average": 0.0,
-            "overex": 0,
-            "ospread": 0.0,
-        }
+        return _pack_auto_levels_metrics(
+            expcomp=0.0,
+            gain=1.0,
+            black=0.0,
+            brightness=0,
+            contrast=0,
+            hlcompr=0,
+            hlcomprthresh=0,
+            whiteclip=0.0,
+            rawmax=0.0,
+            shc=0.0,
+            median=0.0,
+            average=0.0,
+            overex=0,
+            ospread=0.0,
+        )
 
     cdf = np_module.cumsum(histogram_flat)
-    median = int(np_module.searchsorted(cdf, total / 2.0, side="left"))
-    if median == 0 or average < 1.0:
-        return {
-            "expcomp": 0.0,
-            "gain": 1.0,
-            "black": 0,
-            "brightness": 0,
-            "contrast": 0,
-            "hlcompr": 0,
-            "hlcomprthresh": 0,
-            "whiteclip": 0,
-            "rawmax": 0,
-            "shc": 0,
-            "median": median << histcompr,
-            "average": average * (1 << histcompr),
-            "overex": 0,
-            "ospread": 0.0,
-        }
+    median_index = int(np_module.searchsorted(cdf, total / 2.0, side="left"))
+    if median_index == 0 or average_index < 1.0:
+        return _pack_auto_levels_metrics(
+            expcomp=0.0,
+            gain=1.0,
+            black=0.0,
+            brightness=0,
+            contrast=0,
+            hlcompr=0,
+            hlcomprthresh=0,
+            whiteclip=0.0,
+            rawmax=0.0,
+            shc=0.0,
+            median=_auto_levels_index_to_normalized_value(median_index, histcompr),
+            average=_auto_levels_index_to_normalized_value(average_index, histcompr),
+            overex=0,
+            ospread=0.0,
+        )
 
     octile = np_module.zeros(8, dtype=np_module.float64)
     ospread = 0.0
@@ -6061,8 +6219,8 @@ def _compute_auto_levels_from_histogram(np_module, histogram, histcompr, clip_pe
     high_sum = 0.0
     octile_count = 0
     histogram_index = 0
-    average_index = min(int(average), expected)
-    while histogram_index < average_index:
+    average_loop_limit = min(int(average_index), hist_size)
+    while histogram_index < average_loop_limit:
         if octile_count < 8:
             octile[octile_count] += histogram_flat[histogram_index]
             if octile[octile_count] > total / 8.0 or (
@@ -6072,7 +6230,7 @@ def _compute_auto_levels_from_histogram(np_module, histogram, histcompr, clip_pe
                 octile_count += 1
         low_sum += histogram_flat[histogram_index]
         histogram_index += 1
-    while histogram_index < expected:
+    while histogram_index < hist_size:
         if octile_count < 8:
             octile[octile_count] += histogram_flat[histogram_index]
             if octile[octile_count] > total / 8.0 or (
@@ -6084,25 +6242,25 @@ def _compute_auto_levels_from_histogram(np_module, histogram, histcompr, clip_pe
         histogram_index += 1
 
     if low_sum == 0 or high_sum == 0:
-        return {
-            "expcomp": 0.0,
-            "gain": 1.0,
-            "black": 0,
-            "brightness": 0,
-            "contrast": 0,
-            "hlcompr": 0,
-            "hlcomprthresh": 0,
-            "whiteclip": 0,
-            "rawmax": 0,
-            "shc": 0,
-            "median": median << histcompr,
-            "average": average * (1 << histcompr),
-            "overex": 0,
-            "ospread": 0.0,
-        }
+        return _pack_auto_levels_metrics(
+            expcomp=0.0,
+            gain=1.0,
+            black=0.0,
+            brightness=0,
+            contrast=0,
+            hlcompr=0,
+            hlcomprthresh=0,
+            whiteclip=0.0,
+            rawmax=0.0,
+            shc=0.0,
+            median=_auto_levels_index_to_normalized_value(median_index, histcompr),
+            average=_auto_levels_index_to_normalized_value(average_index, histcompr),
+            overex=0,
+            ospread=0.0,
+        )
 
     overex = 0
-    guard = math.log1p(float(expected))
+    guard = math.log1p(float(hist_size))
     if octile[6] > guard:
         octile[6] = 1.5 * octile[5] - 0.5 * octile[4]
         overex = 2
@@ -6122,60 +6280,68 @@ def _compute_auto_levels_from_histogram(np_module, histogram, histcompr, clip_pe
         ospread += (octile[octile_index + 1] - octile[octile_index]) / denominator
     ospread /= 5.0
     if ospread <= 0.0:
-        return {
-            "expcomp": 0.0,
-            "gain": 1.0,
-            "black": 0,
-            "brightness": 0,
-            "contrast": 0,
-            "hlcompr": 0,
-            "hlcomprthresh": 0,
-            "whiteclip": 0,
-            "rawmax": 0,
-            "shc": 0,
-            "median": median << histcompr,
-            "average": average * (1 << histcompr),
-            "overex": overex,
-            "ospread": ospread,
-        }
+        return _pack_auto_levels_metrics(
+            expcomp=0.0,
+            gain=1.0,
+            black=0.0,
+            brightness=0,
+            contrast=0,
+            hlcompr=0,
+            hlcomprthresh=0,
+            whiteclip=0.0,
+            rawmax=0.0,
+            shc=0.0,
+            median=_auto_levels_index_to_normalized_value(median_index, histcompr),
+            average=_auto_levels_index_to_normalized_value(average_index, histcompr),
+            overex=overex,
+            ospread=ospread,
+        )
 
     clipped = 0.0
-    rawmax = expected - 1
-    while rawmax > 1 and histogram_flat[rawmax] + clipped <= 0.0:
-        clipped += histogram_flat[rawmax]
-        rawmax -= 1
+    rawmax_index = hist_size - 1
+    while rawmax_index > 1 and histogram_flat[rawmax_index] + clipped <= 0.0:
+        clipped += histogram_flat[rawmax_index]
+        rawmax_index -= 1
 
     clippable = int(total * clip_percent / 100.0)
     clipped = 0.0
-    whiteclip = expected - 1
-    while whiteclip > 1 and histogram_flat[whiteclip] + clipped <= clippable:
-        clipped += histogram_flat[whiteclip]
-        whiteclip -= 1
+    whiteclip_index = hist_size - 1
+    while (
+        whiteclip_index > 1
+        and histogram_flat[whiteclip_index] + clipped <= clippable
+    ):
+        clipped += histogram_flat[whiteclip_index]
+        whiteclip_index -= 1
 
     clipped = 0.0
-    shc = 0
-    while shc < whiteclip - 1 and histogram_flat[shc] + clipped <= clippable:
-        clipped += histogram_flat[shc]
-        shc += 1
+    shc_index = 0
+    while (
+        shc_index < whiteclip_index - 1
+        and histogram_flat[shc_index] + clipped <= clippable
+    ):
+        clipped += histogram_flat[shc_index]
+        shc_index += 1
 
-    rawmax <<= histcompr
-    whiteclip <<= histcompr
-    average *= (1 << histcompr)
-    median <<= histcompr
-    shc <<= histcompr
+    rawmax = _auto_levels_index_to_normalized_value(rawmax_index, histcompr)
+    whiteclip = _auto_levels_index_to_normalized_value(whiteclip_index, histcompr)
+    average = _auto_levels_index_to_normalized_value(average_index, histcompr)
+    median = _auto_levels_index_to_normalized_value(median_index, histcompr)
+    shc = _auto_levels_index_to_normalized_value(shc_index, histcompr)
 
     expcomp1 = math.log(
-        rt_midgray * rt_maxval / max(average - shc + rt_midgray * shc, 1e-12)
+        _AUTO_LEVELS_RT_MIDGRAY
+        / max(average - shc + _AUTO_LEVELS_RT_MIDGRAY * shc, 1e-12)
     ) / math.log(2.0)
+    hist_log_span = math.log(float(hist_size), 2.0) - 0.5
     if overex == 0:
         expcomp2 = 0.5 * (
-            (15.5 - histcompr - (2.0 * octile_7 - octile_6))
-            + math.log(rt_maxval / rawmax) / math.log(2.0)
+            (hist_log_span - (2.0 * octile_7 - octile_6))
+            - math.log(max(rawmax, 1e-12), 2.0)
         )
     else:
         expcomp2 = 0.5 * (
-            (15.5 - histcompr - (2.0 * octile[7] - octile[6]))
-            + math.log(rt_maxval / rawmax) / math.log(2.0)
+            (hist_log_span - (2.0 * octile[7] - octile[6]))
+            - math.log(max(rawmax, 1e-12), 2.0)
         )
     if abs(expcomp1) - abs(expcomp2) > 1.0:
         denominator = abs(expcomp1) + abs(expcomp2)
@@ -6186,32 +6352,39 @@ def _compute_auto_levels_from_histogram(np_module, histogram, histcompr, clip_pe
         expcomp = 0.5 * expcomp1 + 0.5 * expcomp2
 
     gain = math.exp(expcomp * math.log(2.0))
-    corr = math.sqrt(gain * rt_maxval / rawmax)
-    black = int(shc * corr)
+    corr = math.sqrt(gain / max(rawmax, 1e-12))
+    black = shc * corr
     hlcomprthresh = 0
-    comp = (gain * whiteclip / rt_maxval - 1.0) * 2.3
+    comp = (gain * whiteclip - 1.0) * 2.3
     hlcompr = int(100.0 * comp / (max(0.0, expcomp) + 1.0))
     hlcompr = max(0, min(100, hlcompr))
 
-    midtmp = gain * math.sqrt(median * average) / rt_maxval
+    midtmp = gain * math.sqrt(median * average)
     if midtmp < 0.1:
-        brightness = int((rt_midgray - midtmp) * 15.0 / max(midtmp, 1e-12))
+        brightness = int(
+            (_AUTO_LEVELS_RT_MIDGRAY - midtmp) * 15.0 / max(midtmp, 1e-12)
+        )
     else:
         brightness = int(
-            (rt_midgray - midtmp) / max(0.10833 - 0.0833 * midtmp, 1e-12) * 15.0
+            (_AUTO_LEVELS_RT_MIDGRAY - midtmp)
+            / max(0.10833 - 0.0833 * midtmp, 1e-12)
+            * 15.0
         )
     brightness = int(0.25 * max(0, brightness))
 
     contrast = int(50.0 * (1.1 - ospread))
     contrast = max(0, min(100, contrast))
-    whiteclip_gamma = float(int(_rt_gamma2(np_module, whiteclip * corr / rt_maxval) * rt_maxval))
+    whiteclip_gamma = (
+        math.floor(float(_rt_gamma2(np_module, whiteclip * corr)) * _AUTO_LEVELS_CODE_MAX)
+        / _AUTO_LEVELS_CODE_MAX
+    )
 
     gavg = 0.0
     value = 0.0
-    increment = corr * (1 << histcompr)
-    for histogram_index in range(expected):
+    increment = corr * (float(1 << histcompr) / _AUTO_LEVELS_CODE_MAX)
+    for histogram_index in range(hist_size):
         gavg += histogram_flat[histogram_index] * float(
-            _rt_gamma2(np_module, value / rt_maxval) * rt_maxval
+            _rt_gamma2(np_module, value)
         )
         value += increment
     gavg /= total
@@ -6220,36 +6393,86 @@ def _compute_auto_levels_from_histogram(np_module, histogram, histcompr, clip_pe
         if whiteclip_gamma < max_whiteclip:
             whiteclip_gamma = max_whiteclip
 
-    whiteclip_gamma = float(_rt_igamma2(np_module, whiteclip_gamma / rt_maxval) * rt_maxval)
-    black = int((rt_maxval * black) / whiteclip_gamma) if whiteclip_gamma > 0 else 0
+    whiteclip_gamma = float(_rt_igamma2(np_module, whiteclip_gamma))
+    black = black / whiteclip_gamma if whiteclip_gamma > 0 else 0.0
     expcomp = max(-5.0, min(12.0, float(expcomp)))
     brightness = max(-100, min(100, int(brightness)))
-    return {
-        "expcomp": float(expcomp),
-        "gain": float(gain),
-        "black": int(black),
-        "brightness": int(brightness),
-        "contrast": int(contrast),
-        "hlcompr": int(hlcompr),
-        "hlcomprthresh": int(hlcomprthresh),
-        "whiteclip": int(whiteclip),
-        "rawmax": int(rawmax),
-        "shc": int(shc),
-        "median": int(median),
-        "average": float(average),
-        "overex": int(overex),
-        "ospread": float(ospread),
-    }
+    return _pack_auto_levels_metrics(
+        expcomp=float(expcomp),
+        gain=float(gain),
+        black=black,
+        brightness=int(brightness),
+        contrast=int(contrast),
+        hlcompr=int(hlcompr),
+        hlcomprthresh=int(hlcomprthresh),
+        whiteclip=whiteclip,
+        rawmax=rawmax,
+        shc=shc,
+        median=median,
+        average=average,
+        overex=int(overex),
+        ospread=float(ospread),
+    )
+
+
+def _call_auto_levels_compat_helper(
+    np_module,
+    primary_callable,
+    legacy_name,
+    scaled_argument_names,
+    **kwargs,
+):
+    """@brief Invoke float-native helper while honoring patched legacy aliases.
+
+    @details Selects the float-native helper for normal execution. If a legacy
+    `_uint16` alias has been monkeypatched away from its built-in compatibility
+    shim, converts designated normalized arguments to legacy code scale,
+    delegates to the patched callable, and maps the returned tensor back to
+    normalized scale. This preserves deterministic legacy unit-test hooks
+    without reintroducing code-domain math into the production auto-levels
+    pipeline.
+    @param np_module {ModuleType} Imported numpy module.
+    @param primary_callable {object} Float-native helper callable.
+    @param legacy_name {str} Legacy module attribute name.
+    @param scaled_argument_names {set[str]} Keyword names requiring normalized<->legacy scaling in compatibility mode.
+    @param kwargs {dict[str, object]} Helper keyword arguments.
+    @return {object} Normalized RGB float tensor returned by the selected helper.
+    @satisfies REQ-100, REQ-102, REQ-119, REQ-120
+    """
+
+    legacy_callable = globals().get(legacy_name)
+    default_legacy = _AUTO_LEVELS_LEGACY_HELPER_DEFAULTS.get(legacy_name)
+    if legacy_callable is not None and legacy_callable is not default_legacy:
+        legacy_kwargs = {}
+        for key, value in kwargs.items():
+            if key in scaled_argument_names:
+                legacy_kwargs[key] = _auto_levels_normalized_to_legacy_code(
+                    np_module=np_module,
+                    values=value,
+                )
+            elif key == "maxval":
+                legacy_kwargs[key] = _auto_levels_normalized_to_legacy_code_value(
+                    value
+                )
+            else:
+                legacy_kwargs[key] = value
+        legacy_result = legacy_callable(np_module=np_module, **legacy_kwargs)
+        return _auto_levels_legacy_code_to_normalized(
+            np_module=np_module,
+            values=legacy_result,
+        )
+    return primary_callable(np_module=np_module, **kwargs)
 
 
 def _apply_auto_levels_float(np_module, image_rgb_float, auto_levels_options):
     """@brief Apply auto-levels stage on RGB float tensor.
 
     @details Executes the RawTherapee-compatible histogram analysis on a
-    float-backed 16-bit working scale, applies gain derived from exposure
-    compensation, conditionally runs highlight reconstruction, optionally
-    normalizes overflowing RGB triplets back into gamut, and returns normalized
-    RGB float output.
+    normalized RGB float tensor, applies gain derived from exposure
+    compensation, conditionally runs float-native highlight reconstruction,
+    optionally normalizes overflowing RGB triplets back into gamut, and returns
+    normalized RGB float output without any internal `*65535` or `/65535`
+    staging.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} RGB float tensor.
     @param auto_levels_options {AutoLevelsOptions} Parsed auto-levels options.
@@ -6273,65 +6496,82 @@ def _apply_auto_levels_float(np_module, image_rgb_float, auto_levels_options):
         clip_percent=auto_levels_options.clip_percent,
     )
     gain = float(auto_levels_metrics["gain"])
-    image_float = normalized_input.astype(np_module.float64) * 65535.0 * gain
+    image_float = normalized_input.astype(np_module.float64) * gain
     if auto_levels_options.highlight_reconstruction_enabled:
         method = auto_levels_options.highlight_reconstruction_method
         if method == "Luminance Recovery":
-            image_float = _hlrecovery_luminance_uint16(
+            image_float = _call_auto_levels_compat_helper(
                 np_module=np_module,
+                primary_callable=_hlrecovery_luminance_float,
+                legacy_name="_hlrecovery_luminance_uint16",
+                scaled_argument_names={"image_rgb"},
                 image_rgb=image_float,
-                maxval=65535.0,
+                maxval=1.0,
             )
         elif method == "CIELab Blending":
-            image_float = _hlrecovery_cielab_uint16(
+            image_float = _call_auto_levels_compat_helper(
                 np_module=np_module,
+                primary_callable=_hlrecovery_cielab_float,
+                legacy_name="_hlrecovery_cielab_uint16",
+                scaled_argument_names={"image_rgb"},
                 image_rgb=image_float,
-                maxval=65535.0,
+                maxval=1.0,
             )
         elif method == "Blend":
-            channel_max = np_module.max(image_float, axis=(0, 1))
-            image_float = _hlrecovery_blend_uint16(
+            image_float = _call_auto_levels_compat_helper(
                 np_module=np_module,
+                primary_callable=_hlrecovery_blend_float,
+                legacy_name="_hlrecovery_blend_uint16",
+                scaled_argument_names={"image_rgb", "hlmax"},
                 image_rgb=image_float,
-                hlmax=channel_max,
-                maxval=65535.0,
+                hlmax=np_module.max(image_float, axis=(0, 1)),
+                maxval=1.0,
             )
         elif method == "Color Propagation":
-            image_float = _hlrecovery_color_propagation_uint16(
+            image_float = _call_auto_levels_compat_helper(
                 np_module=np_module,
+                primary_callable=_hlrecovery_color_propagation_float,
+                legacy_name="_hlrecovery_color_propagation_uint16",
+                scaled_argument_names={"image_rgb"},
                 image_rgb=image_float,
-                maxval=65535.0,
+                maxval=1.0,
             )
         elif method == "Inpaint Opposed":
-            image_float = _hlrecovery_inpaint_opposed_uint16(
+            image_float = _call_auto_levels_compat_helper(
                 np_module=np_module,
+                primary_callable=_hlrecovery_inpaint_opposed_float,
+                legacy_name="_hlrecovery_inpaint_opposed_uint16",
+                scaled_argument_names={"image_rgb"},
                 image_rgb=image_float,
                 gain_threshold=auto_levels_options.gain_threshold,
-                maxval=65535.0,
+                maxval=1.0,
             )
         else:
             raise ValueError(f"Unsupported highlight reconstruction method: {method}")
     if auto_levels_options.clip_out_of_gamut:
-        image_float = _clip_auto_levels_out_of_gamut_uint16(
+        image_float = _call_auto_levels_compat_helper(
             np_module=np_module,
+            primary_callable=_clip_auto_levels_out_of_gamut_float,
+            legacy_name="_clip_auto_levels_out_of_gamut_uint16",
+            scaled_argument_names={"image_rgb"},
             image_rgb=image_float,
-            maxval=65535.0,
+            maxval=1.0,
         )
     return np_module.clip(
-        image_float / 65535.0,
+        image_float,
         0.0,
         1.0,
     ).astype(np_module.float32)
 
 
-def _clip_auto_levels_out_of_gamut_uint16(np_module, image_rgb, maxval=65535.0):
-    """@brief Normalize overflowing RGB triplets back into uint16 gamut.
+def _clip_auto_levels_out_of_gamut_float(np_module, image_rgb, maxval=1.0):
+    """@brief Normalize overflowing RGB triplets back into normalized gamut.
 
     @details Computes per-pixel maximum channel value, derives one scale factor
     for overflowing pixels, and preserves RGB ratios while bounding the triplet
     to `maxval`.
     @param np_module {ModuleType} Imported numpy module.
-    @param image_rgb {object} RGB float tensor on uint16 scale.
+    @param image_rgb {object} RGB float tensor on normalized scale.
     @param maxval {float} Maximum allowed channel value.
     @return {object} RGB float tensor with no channel above `maxval`.
     @satisfies REQ-120
@@ -6343,13 +6583,44 @@ def _clip_auto_levels_out_of_gamut_uint16(np_module, image_rgb, maxval=65535.0):
     return rgb * scale
 
 
-def _hlrecovery_luminance_uint16(np_module, image_rgb, maxval=65535.0):
-    """@brief Apply Luminance highlight reconstruction on uint16-like RGB tensor.
+def _clip_auto_levels_out_of_gamut_uint16(
+    np_module, image_rgb, maxval=_AUTO_LEVELS_CODE_MAX
+):
+    """@brief Compatibility adapter for the legacy gamut-clip helper name.
+
+    @details Converts legacy code-domain float tensors to normalized scale,
+    delegates to `_clip_auto_levels_out_of_gamut_float(...)`, and rescales the
+    result back to legacy code units. This shim exists only for transitional
+    internal references and deterministic legacy unit-test hooks.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb {object} RGB float tensor on legacy code scale.
+    @param maxval {float} Maximum allowed legacy code-domain value.
+    @return {object} RGB float tensor on legacy code scale.
+    @deprecated Use `_clip_auto_levels_out_of_gamut_float`.
+    @satisfies REQ-120
+    """
+
+    clipped = _clip_auto_levels_out_of_gamut_float(
+        np_module=np_module,
+        image_rgb=_auto_levels_legacy_code_to_normalized(
+            np_module=np_module,
+            values=image_rgb,
+        ),
+        maxval=float(maxval) / _AUTO_LEVELS_CODE_MAX,
+    )
+    return _auto_levels_normalized_to_legacy_code(
+        np_module=np_module,
+        values=clipped,
+    )
+
+
+def _hlrecovery_luminance_float(np_module, image_rgb, maxval=1.0):
+    """@brief Apply Luminance highlight reconstruction on normalized RGB tensor.
 
     @details Ports luminance method from attached source in RGB domain with
     clipped-channel chroma ratio scaling and masked reconstruction.
     @param np_module {ModuleType} Imported numpy module.
-    @param image_rgb {object} RGB float tensor on uint16 scale.
+    @param image_rgb {object} RGB float tensor on normalized scale.
     @param maxval {float} Maximum channel value.
     @return {object} Highlight-reconstructed RGB float tensor.
     @satisfies REQ-102
@@ -6375,7 +6646,8 @@ def _hlrecovery_luminance_uint16(np_module, image_rgb, maxval=65535.0):
     neq_mask = (red != green) & (green != blue)
     denominator = np_module.maximum(chroma_c * chroma_c + chroma_h * chroma_h, 1e-20)
     ratio = np_module.sqrt(
-        (chroma_c_clip * chroma_c_clip + chroma_h_clip * chroma_h_clip) / denominator
+        (chroma_c_clip * chroma_c_clip + chroma_h_clip * chroma_h_clip)
+        / denominator
     )
     ratio = np_module.where(neq_mask, ratio, 1.0)
     chroma_c2 = chroma_c * ratio
@@ -6389,15 +6661,44 @@ def _hlrecovery_luminance_uint16(np_module, image_rgb, maxval=65535.0):
     return output
 
 
-def _hlrecovery_cielab_uint16(
-    np_module, image_rgb, maxval=65535.0, xyz_cam=None, cam_xyz=None
+def _hlrecovery_luminance_uint16(np_module, image_rgb, maxval=_AUTO_LEVELS_CODE_MAX):
+    """@brief Compatibility adapter for legacy luminance recovery helper name.
+
+    @details Converts legacy code-domain float tensors to normalized scale,
+    delegates to `_hlrecovery_luminance_float(...)`, and rescales the result
+    back to legacy code units. This shim exists only for transitional internal
+    references and deterministic legacy unit-test hooks.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb {object} RGB float tensor on legacy code scale.
+    @param maxval {float} Maximum legacy code-domain value.
+    @return {object} Highlight-reconstructed RGB float tensor on legacy code scale.
+    @deprecated Use `_hlrecovery_luminance_float`.
+    @satisfies REQ-102
+    """
+
+    recovered = _hlrecovery_luminance_float(
+        np_module=np_module,
+        image_rgb=_auto_levels_legacy_code_to_normalized(
+            np_module=np_module,
+            values=image_rgb,
+        ),
+        maxval=float(maxval) / _AUTO_LEVELS_CODE_MAX,
+    )
+    return _auto_levels_normalized_to_legacy_code(
+        np_module=np_module,
+        values=recovered,
+    )
+
+
+def _hlrecovery_cielab_float(
+    np_module, image_rgb, maxval=1.0, xyz_cam=None, cam_xyz=None
 ):
     """@brief Apply CIELab blending highlight reconstruction on RGB tensor.
 
     @details Ports CIELab blending method from attached source with Lab-space
     channel repair under clipped highlights.
     @param np_module {ModuleType} Imported numpy module.
-    @param image_rgb {object} RGB float tensor on uint16 scale.
+    @param image_rgb {object} RGB float tensor on normalized scale.
     @param maxval {float} Maximum channel value.
     @param xyz_cam {object|None} Optional XYZ conversion matrix.
     @param cam_xyz {object|None} Optional inverse matrix.
@@ -6473,13 +6774,48 @@ def _hlrecovery_cielab_uint16(
     return output
 
 
-def _hlrecovery_blend_uint16(np_module, image_rgb, hlmax, maxval=65535.0):
+def _hlrecovery_cielab_uint16(
+    np_module, image_rgb, maxval=_AUTO_LEVELS_CODE_MAX, xyz_cam=None, cam_xyz=None
+):
+    """@brief Compatibility adapter for legacy CIELab helper name.
+
+    @details Converts legacy code-domain float tensors to normalized scale,
+    delegates to `_hlrecovery_cielab_float(...)`, and rescales the result back
+    to legacy code units. This shim exists only for transitional internal
+    references and deterministic legacy unit-test hooks.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb {object} RGB float tensor on legacy code scale.
+    @param maxval {float} Maximum legacy code-domain value.
+    @param xyz_cam {object|None} Optional XYZ conversion matrix.
+    @param cam_xyz {object|None} Optional inverse matrix.
+    @return {object} Highlight-reconstructed RGB float tensor on legacy code scale.
+    @deprecated Use `_hlrecovery_cielab_float`.
+    @satisfies REQ-102
+    """
+
+    recovered = _hlrecovery_cielab_float(
+        np_module=np_module,
+        image_rgb=_auto_levels_legacy_code_to_normalized(
+            np_module=np_module,
+            values=image_rgb,
+        ),
+        maxval=float(maxval) / _AUTO_LEVELS_CODE_MAX,
+        xyz_cam=xyz_cam,
+        cam_xyz=cam_xyz,
+    )
+    return _auto_levels_normalized_to_legacy_code(
+        np_module=np_module,
+        values=recovered,
+    )
+
+
+def _hlrecovery_blend_float(np_module, image_rgb, hlmax, maxval=1.0):
     """@brief Apply Blend highlight reconstruction on RGB tensor.
 
     @details Ports blend method from attached source with quadratic channel blend
     and desaturation phase driven by clipping metrics.
     @param np_module {ModuleType} Imported numpy module.
-    @param image_rgb {object} RGB float tensor on uint16 scale.
+    @param image_rgb {object} RGB float tensor on normalized scale.
     @param hlmax {object} Channel maxima vector with shape `(3,)`.
     @param maxval {float} Maximum channel value.
     @return {object} Highlight-reconstructed RGB float tensor.
@@ -6512,13 +6848,13 @@ def _hlrecovery_blend_uint16(np_module, image_rgb, hlmax, maxval=65535.0):
     blue = output[..., 2]
     minpt = float(np_module.min(hlmax_values))
     maxave = float(np_module.mean(hlmax_values))
-    clipthresh = 0.95
-    fixthresh = 0.5
-    satthresh = 0.5
     clip = np_module.minimum(maxave, hlmax_values)
-    clippt = clipthresh * maxval
-    fixpt = fixthresh * minpt
-    desatpt = satthresh * maxave + (1.0 - satthresh) * maxval
+    clippt = _AUTO_LEVELS_BLEND_CLIP_THRESHOLD * maxval
+    fixpt = _AUTO_LEVELS_BLEND_FIX_THRESHOLD * minpt
+    desatpt = (
+        _AUTO_LEVELS_BLEND_SATURATION_THRESHOLD * maxave
+        + (1.0 - _AUTO_LEVELS_BLEND_SATURATION_THRESHOLD) * maxval
+    )
     clipped_mask = (red > clippt) | (green > clippt) | (blue > clippt)
     if not np_module.any(clipped_mask):
         return output
@@ -6564,7 +6900,10 @@ def _hlrecovery_blend_uint16(np_module, image_rgb, hlmax, maxval=65535.0):
     blue_s2 = output[..., 2]
     lightness2 = (red_s2 + green_s2 + blue_s2) / 3.0
     desat_mask = lightness2 > desatpt
-    lfrac = np_module.maximum(0.0, (maxave - lightness2) / max(maxave - desatpt, 1e-20))
+    lfrac = np_module.maximum(
+        0.0,
+        (maxave - lightness2) / max(maxave - desatpt, 1e-20),
+    )
     chroma_c2 = lfrac * 1.732050808 * (red_s2 - green_s2)
     chroma_h2 = lfrac * (2.0 * blue_s2 - red_s2 - green_s2)
     rec_red = lightness2 - chroma_h2 / 6.0 + chroma_c2 / 3.464101615
@@ -6576,7 +6915,43 @@ def _hlrecovery_blend_uint16(np_module, image_rgb, hlmax, maxval=65535.0):
     return output
 
 
-def _dilate_mask_uint16(np_module, mask):
+def _hlrecovery_blend_uint16(
+    np_module, image_rgb, hlmax, maxval=_AUTO_LEVELS_CODE_MAX
+):
+    """@brief Compatibility adapter for legacy Blend helper name.
+
+    @details Converts legacy code-domain float tensors to normalized scale,
+    delegates to `_hlrecovery_blend_float(...)`, and rescales the result back
+    to legacy code units. This shim exists only for transitional internal
+    references and deterministic legacy unit-test hooks.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb {object} RGB float tensor on legacy code scale.
+    @param hlmax {object} Legacy code-domain channel maxima vector.
+    @param maxval {float} Maximum legacy code-domain value.
+    @return {object} Highlight-reconstructed RGB float tensor on legacy code scale.
+    @deprecated Use `_hlrecovery_blend_float`.
+    @satisfies REQ-102
+    """
+
+    recovered = _hlrecovery_blend_float(
+        np_module=np_module,
+        image_rgb=_auto_levels_legacy_code_to_normalized(
+            np_module=np_module,
+            values=image_rgb,
+        ),
+        hlmax=_auto_levels_legacy_code_to_normalized(
+            np_module=np_module,
+            values=hlmax,
+        ),
+        maxval=float(maxval) / _AUTO_LEVELS_CODE_MAX,
+    )
+    return _auto_levels_normalized_to_legacy_code(
+        np_module=np_module,
+        values=recovered,
+    )
+
+
+def _dilate_mask_float(np_module, mask):
     """@brief Expand one boolean mask by one Chebyshev pixel.
 
     @details Pads the mask by one pixel and OR-combines the `3x3` neighborhood
@@ -6599,7 +6974,7 @@ def _dilate_mask_uint16(np_module, mask):
     return dilated
 
 
-def _box_mean_3x3_uint16(np_module, image_2d):
+def _box_mean_3x3_float(np_module, image_2d):
     """@brief Compute one deterministic `3x3` box mean over a 2D float tensor.
 
     @details Uses edge padding and exact neighborhood averaging to approximate
@@ -6623,7 +6998,7 @@ def _box_mean_3x3_uint16(np_module, image_2d):
     return window_sum / 9.0
 
 
-def _hlrecovery_color_propagation_uint16(np_module, image_rgb, maxval=65535.0):
+def _hlrecovery_color_propagation_float(np_module, image_rgb, maxval=1.0):
     """@brief Apply Color Propagation highlight reconstruction on RGB tensor.
 
     @details Approximates RawTherapee `Color` recovery in post-merge RGB space:
@@ -6631,7 +7006,7 @@ def _hlrecovery_color_propagation_uint16(np_module, image_rgb, maxval=65535.0):
     reference from `3x3` means, derive one border chrominance offset, and fill
     clipped samples deterministically.
     @param np_module {ModuleType} Imported numpy module.
-    @param image_rgb {object} RGB float tensor on uint16 scale.
+    @param image_rgb {object} RGB float tensor on normalized scale.
     @param maxval {float} Maximum channel value.
     @return {object} Highlight-reconstructed RGB float tensor.
     @satisfies REQ-102, REQ-119
@@ -6639,8 +7014,8 @@ def _hlrecovery_color_propagation_uint16(np_module, image_rgb, maxval=65535.0):
 
     rgb = np_module.asarray(image_rgb, dtype=np_module.float64)
     output = rgb.copy()
-    clip_level = 0.95 * maxval
-    dark_floor = 0.25 * clip_level
+    clip_level = _AUTO_LEVELS_BLEND_CLIP_THRESHOLD * maxval
+    dark_floor = _AUTO_LEVELS_COLOR_PROPAGATION_DARK_FLOOR * clip_level
     for channel_index in range(3):
         channel = output[..., channel_index]
         channel_mask = channel >= clip_level
@@ -6648,10 +7023,10 @@ def _hlrecovery_color_propagation_uint16(np_module, image_rgb, maxval=65535.0):
             continue
         other_indices = [index for index in range(3) if index != channel_index]
         reference = 0.5 * (
-            _box_mean_3x3_uint16(np_module, output[..., other_indices[0]])
-            + _box_mean_3x3_uint16(np_module, output[..., other_indices[1]])
+            _box_mean_3x3_float(np_module, output[..., other_indices[0]])
+            + _box_mean_3x3_float(np_module, output[..., other_indices[1]])
         )
-        border_mask = _dilate_mask_uint16(np_module, channel_mask) & (~channel_mask)
+        border_mask = _dilate_mask_float(np_module, channel_mask) & (~channel_mask)
         border_mask &= channel > dark_floor
         border_mask &= channel < clip_level
         chroma_offset = 0.0
@@ -6668,8 +7043,39 @@ def _hlrecovery_color_propagation_uint16(np_module, image_rgb, maxval=65535.0):
     return output
 
 
-def _hlrecovery_inpaint_opposed_uint16(
-    np_module, image_rgb, gain_threshold, maxval=65535.0
+def _hlrecovery_color_propagation_uint16(
+    np_module, image_rgb, maxval=_AUTO_LEVELS_CODE_MAX
+):
+    """@brief Compatibility adapter for legacy Color Propagation helper name.
+
+    @details Converts legacy code-domain float tensors to normalized scale,
+    delegates to `_hlrecovery_color_propagation_float(...)`, and rescales the
+    result back to legacy code units. This shim exists only for transitional
+    internal references and deterministic legacy unit-test hooks.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb {object} RGB float tensor on legacy code scale.
+    @param maxval {float} Maximum legacy code-domain value.
+    @return {object} Highlight-reconstructed RGB float tensor on legacy code scale.
+    @deprecated Use `_hlrecovery_color_propagation_float`.
+    @satisfies REQ-102, REQ-119
+    """
+
+    recovered = _hlrecovery_color_propagation_float(
+        np_module=np_module,
+        image_rgb=_auto_levels_legacy_code_to_normalized(
+            np_module=np_module,
+            values=image_rgb,
+        ),
+        maxval=float(maxval) / _AUTO_LEVELS_CODE_MAX,
+    )
+    return _auto_levels_normalized_to_legacy_code(
+        np_module=np_module,
+        values=recovered,
+    )
+
+
+def _hlrecovery_inpaint_opposed_float(
+    np_module, image_rgb, gain_threshold, maxval=1.0
 ):
     """@brief Apply Inpaint Opposed highlight reconstruction on RGB tensor.
 
@@ -6679,7 +7085,7 @@ def _hlrecovery_inpaint_opposed_uint16(
     one border chrominance offset, and inpaint only pixels above the clip
     threshold.
     @param np_module {ModuleType} Imported numpy module.
-    @param image_rgb {object} RGB float tensor on uint16 scale.
+    @param image_rgb {object} RGB float tensor on normalized scale.
     @param gain_threshold {float} Positive Inpaint Opposed gain threshold.
     @param maxval {float} Maximum channel value.
     @return {object} Highlight-reconstructed RGB float tensor.
@@ -6688,8 +7094,8 @@ def _hlrecovery_inpaint_opposed_uint16(
 
     rgb = np_module.asarray(image_rgb, dtype=np_module.float64)
     output = rgb.copy()
-    gain = 1.2 * float(gain_threshold)
-    clip_level = (0.987 / max(gain, 1e-12)) * maxval
+    gain = _AUTO_LEVELS_INPAINT_GAIN_MULTIPLIER * float(gain_threshold)
+    clip_level = (_AUTO_LEVELS_INPAINT_CLIP_RATIO / max(gain, 1e-12)) * maxval
     clip_dark_levels = (0.03 * clip_level, 0.125 * clip_level, 0.03 * clip_level)
     for channel_index in range(3):
         channel = output[..., channel_index]
@@ -6698,14 +7104,14 @@ def _hlrecovery_inpaint_opposed_uint16(
             continue
         local_means = []
         for source_channel in range(3):
-            local_mean = _box_mean_3x3_uint16(np_module, output[..., source_channel])
+            local_mean = _box_mean_3x3_float(np_module, output[..., source_channel])
             local_means.append(np_module.cbrt(np_module.maximum(local_mean, 0.0)))
         other_indices = [index for index in range(3) if index != channel_index]
         reference = np_module.power(
             0.5 * (local_means[other_indices[0]] + local_means[other_indices[1]]),
             3.0,
         )
-        border_mask = _dilate_mask_uint16(np_module, channel_mask) & (~channel_mask)
+        border_mask = _dilate_mask_float(np_module, channel_mask) & (~channel_mask)
         border_mask &= channel > clip_dark_levels[channel_index]
         border_mask &= channel < clip_level
         chroma_offset = 0.0
@@ -6720,6 +7126,49 @@ def _hlrecovery_inpaint_opposed_uint16(
             channel,
         )
     return output
+
+
+def _hlrecovery_inpaint_opposed_uint16(
+    np_module, image_rgb, gain_threshold, maxval=_AUTO_LEVELS_CODE_MAX
+):
+    """@brief Compatibility adapter for legacy Inpaint Opposed helper name.
+
+    @details Converts legacy code-domain float tensors to normalized scale,
+    delegates to `_hlrecovery_inpaint_opposed_float(...)`, and rescales the
+    result back to legacy code units. This shim exists only for transitional
+    internal references and deterministic legacy unit-test hooks.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb {object} RGB float tensor on legacy code scale.
+    @param gain_threshold {float} Positive Inpaint Opposed gain threshold.
+    @param maxval {float} Maximum legacy code-domain value.
+    @return {object} Highlight-reconstructed RGB float tensor on legacy code scale.
+    @deprecated Use `_hlrecovery_inpaint_opposed_float`.
+    @satisfies REQ-102, REQ-119
+    """
+
+    recovered = _hlrecovery_inpaint_opposed_float(
+        np_module=np_module,
+        image_rgb=_auto_levels_legacy_code_to_normalized(
+            np_module=np_module,
+            values=image_rgb,
+        ),
+        gain_threshold=gain_threshold,
+        maxval=float(maxval) / _AUTO_LEVELS_CODE_MAX,
+    )
+    return _auto_levels_normalized_to_legacy_code(
+        np_module=np_module,
+        values=recovered,
+    )
+
+
+_AUTO_LEVELS_LEGACY_HELPER_DEFAULTS = {
+    "_clip_auto_levels_out_of_gamut_uint16": _clip_auto_levels_out_of_gamut_uint16,
+    "_hlrecovery_luminance_uint16": _hlrecovery_luminance_uint16,
+    "_hlrecovery_cielab_uint16": _hlrecovery_cielab_uint16,
+    "_hlrecovery_blend_uint16": _hlrecovery_blend_uint16,
+    "_hlrecovery_color_propagation_uint16": _hlrecovery_color_propagation_uint16,
+    "_hlrecovery_inpaint_opposed_uint16": _hlrecovery_inpaint_opposed_uint16,
+}
 
 
 def _apply_auto_brightness_rgb_float(
