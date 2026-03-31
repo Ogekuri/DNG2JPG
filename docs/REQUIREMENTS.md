@@ -1,8 +1,8 @@
 ---
 title: "DNG2JPG Requirements"
 description: Software requirements specification derived from implemented behavior
-version: "0.3.0"
-date: "2026-03-30"
+version: "0.4.0"
+date: "2026-03-31"
 author: "GitHub Copilot CLI (req-recreate)"
 scope:
   paths:
@@ -99,6 +99,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **DES-006**: MUST resolve backend-specific default postprocess factors from selected `--hdr-merge` mode and, for `Luminace-HDR`, from resolved tone-mapping operator.
 - **DES-008**: MUST default OpenCV backend static postprocess factors to `post_gamma=1.1`, `brightness=1.05`, `contrast=1.3`, and `saturation=1.10`.
 - **DES-007**: MUST process conversion as a one-shot process model without spawning explicit application-managed threads.
+- **DES-009**: MUST serialize `--debug` checkpoints from normalized RGB float stage buffers into persistent TIFF16 files outside the temporary workspace lifecycle.
 
 ### 3.2 Functions
 - **REQ-001**: MUST print conversion help and exit successfully when conversion command receives no arguments.
@@ -200,6 +201,10 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-132**: MUST execute static postprocess gamma, brightness, contrast, and saturation directly on RGB float tensors without uint16 or other quantized intermediates.
 - **REQ-133**: MUST perform exactly one float-to-uint8 quantization immediately before final JPEG save.
 - **REQ-134**: MUST preserve legacy post-gamma, brightness, contrast, and saturation equations and parameter semantics in the float-domain port; output differences MUST derive only from removed quantization.
+- **REQ-146**: MUST accept `--debug` as a flag that enables persistent TIFF checkpoint emission for executed pipeline stages without changing the final JPG destination.
+- **REQ-147**: MUST write each debug TIFF from normalized RGB float `[0,1]` data using filename `<input-dng-stem><stage-suffix>.tiff` in the resolved output JPG directory.
+- **REQ-148**: MUST use monotonically increasing numeric stage suffixes with phase labels covering bracket extraction (`ev_min`, `ev_zero`, `ev_max`), HDR merge, static postprocess, auto-brightness, auto-levels, and auto-adjust checkpoints when those stages execute.
+- **REQ-149**: MUST preserve debug TIFF files after command completion while keeping temporary workspace cleanup behavior unchanged for non-debug intermediates.
 
 ## 4. Test Requirements
 
@@ -239,6 +244,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-034**: MUST verify optional OpenCV tone mapping defaults to enabled with gamma `1.0` and can be disabled without changing pre-tonemap merge radiance.
 - **TST-035**: MUST verify OpenCV zero-centered exposure reference preserves the uniform exposure correction embedded by non-zero extracted `ev_zero`.
 - **TST-036**: MUST verify OpenCV backend preserves RGB float input/output boundaries and confines backend-local quantization to OpenCV merge adaptation boundaries only.
+- **TST-037**: MUST verify `_parse_run_options` accepts `--debug` and enables persistent debug checkpoint configuration without changing existing positional or backend parsing.
+- **TST-038**: MUST verify debug checkpoint writers emit progressive TIFF filenames for extraction, merge, static postprocess, auto-brightness, auto-levels, and auto-adjust outputs in the output directory.
 
 ## 5. Evidence Matrix
 
@@ -361,6 +368,11 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-132 | `src/dng2jpg/dng2jpg.py::_apply_static_postprocess_float`, `_apply_post_gamma_float`, `_apply_brightness_float`, `_apply_contrast_float`, `_apply_saturation_float`; excerpt: executes static postprocess directly on RGB float tensors without quantized intermediates. |
 | REQ-133 | `src/dng2jpg/dng2jpg.py::_encode_jpg`; excerpt: performs the only float-to-uint8 quantization immediately before Pillow JPEG save. |
 | REQ-134 | `src/dng2jpg/dng2jpg.py::_apply_post_gamma_float`, `_apply_brightness_float`, `_apply_contrast_float`, `_apply_saturation_float`; excerpt: preserves the legacy transfer equations and parameter semantics in float domain. |
+| DES-009 | `src/dng2jpg/dng2jpg.py::DebugArtifactContext`, `_write_debug_rgb_float_tiff`; excerpt: serializes float checkpoints as persistent TIFF16 outputs outside the temporary workspace. |
+| REQ-146 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `print_help`, `run`; excerpt: parses `--debug`, documents the flag, and enables persistent checkpoint orchestration. |
+| REQ-147 | `src/dng2jpg/dng2jpg.py::_write_debug_rgb_float_tiff`, `run`; excerpt: writes `<input-dng-stem><stage-suffix>.tiff` into the output JPG directory from normalized RGB float payloads. |
+| REQ-148 | `src/dng2jpg/dng2jpg.py::run`, `_apply_static_postprocess_float`, `_encode_jpg`, `_apply_validated_auto_adjust_pipeline`; excerpt: emits progressive numeric stage suffixes across extraction, merge, postprocess, and optional stage checkpoints. |
+| REQ-149 | `src/dng2jpg/dng2jpg.py::run`; excerpt: keeps debug TIFF outputs outside `TemporaryDirectory(...)` while still cleaning the temporary workspace after execution. |
 | TST-001 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; branches for exposure precedence, hdr-merge parsing, and deterministic parse failures. |
 | TST-002 | `src/dng2jpg/dng2jpg.py::run`; branches for unsupported OS and dependency failures returning `1`. |
 | TST-003 | `src/dng2jpg/dng2jpg.py::run`; success branch prints `HDR JPG created: ...` and returns `0`. |
@@ -397,3 +409,5 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | TST-034 | `tests/test_uint16_postprocess_pipeline.py::test_run_opencv_hdr_merge_dispatches_debevec_path_with_tonemap`, `test_run_opencv_hdr_merge_skips_tonemap_for_mertens`; verifies tone-map default path for radiance modes and skip path for Mertens. |
 | TST-035 | `tests/test_uint16_postprocess_pipeline.py::test_build_ev_times_from_ev_zero_and_delta_matches_bracket_sequence`, `test_run_opencv_hdr_merge_dispatches_debevec_path_with_tonemap`; verifies zero-centered OpenCV exposure reference preserves extracted non-zero `ev_zero` as embedded pixel correction. |
 | TST-036 | `tests/test_uint16_postprocess_pipeline.py::test_run_opencv_hdr_merge_adapts_mertens_inputs_to_uint8`, `test_run_opencv_hdr_merge_dispatches_debevec_path_with_tonemap`, `test_run_opencv_hdr_merge_dispatches_robertson_path`; verifies RGB float boundaries remain external while OpenCV merge adaptation stays backend-local. |
+| TST-037 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_enables_debug_flag`; verifies `--debug` parsing preserves existing positional and backend parsing. |
+| TST-038 | `tests/test_uint16_postprocess_pipeline.py::test_encode_jpg_writes_debug_checkpoints_with_progressive_suffixes`; verifies persistent TIFF checkpoint filenames and output-directory placement. |

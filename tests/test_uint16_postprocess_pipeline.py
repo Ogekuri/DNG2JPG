@@ -237,6 +237,7 @@ def _build_postprocess_options():
         auto_brightness_enabled=False,
         auto_levels_enabled=False,
         auto_adjust_enabled=False,
+        debug_enabled=False,
     )
 
 
@@ -558,6 +559,92 @@ def test_encode_jpg_refreshes_exif_thumbnail_from_final_quantized_rgb_uint8(
     assert first_ifd[274] == 1
     assert fake_piexif.dump_input["thumbnail"] == b"thumb-bytes"
     assert fake_piexif.inserted == (b"updated-exif", str(tmp_path / "out.jpg"))
+
+
+def test_encode_jpg_writes_debug_checkpoints_with_progressive_suffixes(
+    monkeypatch, tmp_path
+) -> None:
+    """Debug mode must persist progressive TIFF checkpoints in output directory."""
+
+    merged_rgb_float = np.array(
+        [
+            [[0.10, 0.20, 0.30], [0.40, 0.50, 0.60]],
+            [[0.70, 0.80, 0.90], [0.95, 0.65, 0.35]],
+        ],
+        dtype=np.float32,
+    )
+    imageio_module = _FakeImageIoModule(
+        merged_rgb_u16=(merged_rgb_float * 65535.0).astype(np.uint16)
+    )
+    pil_module = _FakePilModule()
+    debug_context = dng2jpg_module.DebugArtifactContext(  # pylint: disable=protected-access
+        output_dir=tmp_path,
+        input_stem="sample",
+    )
+    call_trace: list[str] = []
+
+    original_auto_brightness = dng2jpg_module._apply_auto_brightness_rgb_float  # pylint: disable=protected-access
+    original_auto_levels = dng2jpg_module._apply_auto_levels_float  # pylint: disable=protected-access
+
+    def _tracked_auto_brightness(*, np_module, image_rgb_float, auto_brightness_options):
+        call_trace.append("auto-brightness")
+        return original_auto_brightness(
+            np_module=np_module,
+            image_rgb_float=image_rgb_float,
+            auto_brightness_options=auto_brightness_options,
+        )
+
+    def _tracked_auto_levels(*, np_module, image_rgb_float, auto_levels_options):
+        call_trace.append("auto-levels")
+        return original_auto_levels(
+            np_module=np_module,
+            image_rgb_float=image_rgb_float,
+            auto_levels_options=auto_levels_options,
+        )
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_apply_auto_brightness_rgb_float",
+        _tracked_auto_brightness,
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_apply_auto_levels_float",
+        _tracked_auto_levels,
+    )
+    dng2jpg_module._encode_jpg(  # pylint: disable=protected-access
+        imageio_module=imageio_module,
+        pil_image_module=pil_module,
+        merged_image_float=merged_rgb_float,
+        output_jpg=tmp_path / "out.jpg",
+        postprocess_options=dng2jpg_module.PostprocessOptions(
+            post_gamma=1.05,
+            brightness=1.02,
+            contrast=1.01,
+            saturation=1.03,
+            jpg_compression=25,
+            auto_brightness_enabled=True,
+            auto_levels_enabled=True,
+            auto_adjust_enabled=False,
+            debug_enabled=True,
+        ),
+        numpy_module=np,
+        debug_context=debug_context,
+    )
+
+    assert call_trace == ["auto-brightness", "auto-levels"]
+    written_paths = [Path(path) for path, _image in imageio_module.writes]
+    assert written_paths == [
+        tmp_path / "sample_4.0_auto-brightness.tiff",
+        tmp_path / "sample_5.0_auto-levels.tiff",
+        tmp_path / "sample_3.1_static_correction_gamma.tiff",
+        tmp_path / "sample_3.2_static_correction_brightness.tiff",
+        tmp_path / "sample_3.3_static_correction_contrast.tiff",
+        tmp_path / "sample_3.4_static_correction_saturation.tiff",
+    ]
+    for _path, image in imageio_module.writes:
+        assert image.dtype == np.uint16
+        assert image.shape[-1] == 3
 
 
 def test_parse_run_options_accepts_remaining_auto_brightness_controls() -> None:
@@ -1043,6 +1130,24 @@ def test_parse_run_options_disables_auto_adjust_and_rejects_knobs() -> None:
         ]
     )
     assert parsed_with_knob is None
+
+
+def test_parse_run_options_enables_debug_flag() -> None:
+    """Parser must accept `--debug` without changing backend parsing."""
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        [
+            "input.dng",
+            "output.jpg",
+            "--ev=1",
+            "--hdr-merge=OpenCV",
+            "--debug",
+        ]
+    )
+
+    assert parsed is not None
+    assert parsed[5].debug_enabled is True
+    assert parsed[7] is True
 
 
 def test_collect_missing_external_executables_reports_luminance_dependency(
@@ -1913,3 +2018,110 @@ def test_run_hdr_plus_merge_preserves_float_internal_and_float_io(monkeypatch) -
         rtol=1e-6,
         atol=1e-6,
     )
+
+
+def test_run_debug_writes_extraction_and_merge_checkpoints(monkeypatch, tmp_path) -> None:
+    """`run` must persist extraction and merge debug checkpoints when enabled."""
+
+    input_dng = tmp_path / "scene.dng"
+    input_dng.write_bytes(b"fake-dng")
+    output_jpg = tmp_path / "scene.jpg"
+    raw_pixels = np.array(
+        [
+            [[1000, 2000, 3000], [4000, 5000, 6000]],
+            [[7000, 8000, 9000], [10000, 11000, 12000]],
+        ],
+        dtype=np.uint16,
+    )
+
+    class _FakeRawHandle:
+        def __init__(self) -> None:
+            self.raw_image_visible = np.zeros((2, 2), dtype=np.uint16)
+            self.white_level = int(16383)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            del exc_type, exc, tb
+
+        def postprocess(
+            self,
+            *,
+            bright,
+            output_bps,
+            use_camera_wb,
+            no_auto_bright,
+            gamma,
+            user_flip,
+        ) -> np.ndarray:
+            del output_bps, use_camera_wb, no_auto_bright, gamma, user_flip
+            return np.clip(raw_pixels.astype(np.float32) * float(bright), 0.0, 65535.0).astype(
+                np.uint16
+            )
+
+    class _FakeRawPyModule:
+        LibRawError = RuntimeError
+
+        @staticmethod
+        def imread(_path: str) -> _FakeRawHandle:
+            return _FakeRawHandle()
+
+    fake_imageio_module = _FakeImageIoModule(
+        merged_rgb_u16=np.full((2, 2, 3), 32768, dtype=np.uint16)
+    )
+    fake_pil_module = _FakePilModule()
+    debug_calls: list[tuple[str, str]] = []
+
+    def _fake_write_debug(
+        *,
+        imageio_module,
+        np_module,
+        debug_context,
+        stage_suffix,
+        image_rgb_float,
+    ):
+        del imageio_module, np_module, image_rgb_float
+        debug_calls.append((debug_context.input_stem, stage_suffix))
+        return debug_context.output_dir / f"{debug_context.input_stem}{stage_suffix}.tiff"
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_load_image_dependencies",
+        lambda: (_FakeRawPyModule(), fake_imageio_module, fake_pil_module),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_extract_dng_exif_payload_and_timestamp",
+        lambda **_kwargs: (None, None, 1),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_resolve_auto_adjust_dependencies",
+        lambda: (_FakeOpenCvModule(), np),
+    )
+    monkeypatch.setattr(dng2jpg_module, "_write_debug_rgb_float_tiff", _fake_write_debug)
+    monkeypatch.setattr(dng2jpg_module, "_encode_jpg", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_sync_output_file_timestamps_from_exif",
+        lambda **_kwargs: None,
+    )
+
+    exit_code = dng2jpg_module.run(
+        [
+            str(input_dng),
+            str(output_jpg),
+            "--ev=1",
+            "--hdr-merge=OpenCV",
+            "--debug",
+        ]
+    )
+
+    assert exit_code == 0
+    assert debug_calls == [
+        ("scene", "_1.1_ev_min-1.0"),
+        ("scene", "_1.2_ev_zero+0.0"),
+        ("scene", "_1.3_ev_max+1.0"),
+        ("scene", "_2.0_hdr-merge"),
+    ]

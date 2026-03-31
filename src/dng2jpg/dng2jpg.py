@@ -5,9 +5,11 @@
 (`ev_zero-ev`, `ev_zero`, `ev_zero+ev`), merges them through selected
 `luminance-hdr-cli`, selected OpenCV (`Debevec`, `Robertson`, `Mertens`), or
 selected HDR+ tile-based flow with deterministic parameters, then writes final
-JPG to user-selected output path. Temporary artifacts are isolated in a
-temporary directory and removed automatically on success and failure.
-    @satisfies PRJ-003, DES-008, REQ-055, REQ-056, REQ-057, REQ-058, REQ-059, REQ-060, REQ-061, REQ-062, REQ-063, REQ-064, REQ-065, REQ-066, REQ-067, REQ-068, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-079, REQ-080, REQ-081, REQ-088, REQ-089, REQ-090, REQ-091, REQ-092, REQ-093, REQ-094, REQ-095, REQ-096, REQ-097, REQ-098, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-141, REQ-142, REQ-143, REQ-144, REQ-145
+JPG to user-selected output path. Temporary workspace artifacts are isolated in
+a temporary directory and removed automatically on success and failure, while
+optional debug checkpoints persist in the output directory when `--debug` is
+enabled.
+    @satisfies PRJ-003, DES-008, DES-009, REQ-055, REQ-056, REQ-057, REQ-058, REQ-059, REQ-060, REQ-061, REQ-062, REQ-063, REQ-064, REQ-065, REQ-066, REQ-067, REQ-068, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-074, REQ-075, REQ-077, REQ-078, REQ-079, REQ-080, REQ-081, REQ-088, REQ-089, REQ-090, REQ-091, REQ-092, REQ-093, REQ-094, REQ-095, REQ-096, REQ-097, REQ-098, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-141, REQ-142, REQ-143, REQ-144, REQ-145, REQ-146, REQ-149
 """
 
 import os
@@ -461,8 +463,9 @@ class PostprocessOptions:
     @param auto_levels_options {AutoLevelsOptions} Auto-levels stage knobs.
     @param auto_adjust_enabled {bool} `True` when the auto-adjust stage is enabled.
     @param auto_adjust_options {AutoAdjustOptions} Knobs for the sole auto-adjust implementation.
+    @param debug_enabled {bool} `True` when persistent debug TIFF checkpoints are enabled.
     @return {None} Immutable dataclass container.
-    @satisfies REQ-050, REQ-065, REQ-066, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-088, REQ-089, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105
+    @satisfies REQ-050, REQ-065, REQ-066, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-088, REQ-089, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-146
     """
 
     post_gamma: float
@@ -478,6 +481,25 @@ class PostprocessOptions:
     auto_levels_options: AutoLevelsOptions = field(default_factory=AutoLevelsOptions)
     auto_adjust_enabled: bool = DEFAULT_AUTO_ADJUST_ENABLED
     auto_adjust_options: AutoAdjustOptions = field(default_factory=AutoAdjustOptions)
+    debug_enabled: bool = False
+
+
+@dataclass(frozen=True)
+class DebugArtifactContext:
+    """@brief Hold persistent debug-checkpoint output metadata.
+
+    @details Stores the source input stem and destination directory used to emit
+    debug TIFF checkpoints outside the temporary workspace. The suffix counter
+    remains external so orchestration can map checkpoints to exact pipeline
+    stages in execution order.
+    @param output_dir {Path} Destination directory for persistent debug TIFF files.
+    @param input_stem {str} Source DNG stem used as the filename prefix.
+    @return {None} Immutable debug output metadata container.
+    @satisfies DES-009, REQ-146, REQ-147, REQ-149
+    """
+
+    output_dir: Path
+    input_stem: str
 
 
 @dataclass(frozen=True)
@@ -659,10 +681,11 @@ def print_help(version):
     exclusive exposure selectors (`--ev` or `--auto-ev`), optional RAW gamma
     controls, optional `--ev-zero` and `--auto-zero` selectors, shared
     postprocessing controls, backend selection including OpenCV algorithm and
-    tone-map knobs, HDR+ controls, and luminance-hdr-cli tone-mapping options.
+    tone-map knobs, HDR+ controls, luminance-hdr-cli tone-mapping options, and
+    the persistent debug checkpoint flag.
     @param version {str} CLI version label to append in usage output.
     @return {None} Writes help text to stdout.
-    @satisfies DES-008, REQ-056, REQ-063, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-088, REQ-089, REQ-090, REQ-091, REQ-094, REQ-097, REQ-100, REQ-101, REQ-102, REQ-111, REQ-127, REQ-128, REQ-141, REQ-143
+    @satisfies DES-008, REQ-056, REQ-063, REQ-069, REQ-070, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-088, REQ-089, REQ-090, REQ-091, REQ-094, REQ-097, REQ-100, REQ-101, REQ-102, REQ-111, REQ-127, REQ-128, REQ-141, REQ-143, REQ-146
     """
 
     print(
@@ -690,6 +713,7 @@ def print_help(version):
         "[--aa-clahe-tile-grid-size=<rows>x<cols>] "
         "[--aa-sigmoid-contrast=<value>] [--aa-sigmoid-midpoint=<0..1>] "
         "[--aa-saturation-gamma=<value>] [--aa-highpass-blur-sigma=<value>] "
+        "[--debug] "
         f"[--hdr-merge <{HDR_MERGE_MODE_LUMINANCE}|{HDR_MERGE_MODE_OPENCV}|{HDR_MERGE_MODE_HDR_PLUS}>] "
         "[--opencv-merge-algorithm=<Debevec|Robertson|Mertens>] "
         "[--opencv-tonemap=<0|1|false|true|no|yes|off|on>] "
@@ -842,6 +866,9 @@ def print_help(version):
     )
     print(
         f"  --aa-highpass-blur-sigma=<value> - High-pass blur sigma > 0 (default: {DEFAULT_AA_HIGHPASS_BLUR_SIGMA:g})."
+    )
+    print(
+        "  --debug          - Persist TIFF16 checkpoints for executed float pipeline stages in the output JPG directory."
     )
     print(
         f"  --hdr-merge <name> - Select HDR merge backend ({HDR_MERGE_MODE_LUMINANCE}, {HDR_MERGE_MODE_OPENCV}, {HDR_MERGE_MODE_HDR_PLUS}; default: {HDR_MERGE_MODE_OPENCV})."
@@ -2564,11 +2591,12 @@ def _parse_run_options(args):
     (`--hdr-merge=<Luminace-HDR|OpenCV|HDR-Plus>` default `OpenCV`),
     OpenCV backend controls, HDR+ backend controls, and luminance backend controls
     including explicit `--tmo*` passthrough options and optional
-    auto-adjust enable selector (`--auto-adjust <enable|disable>`); rejects
-    unknown options and invalid arity.
+    auto-adjust enable selector (`--auto-adjust <enable|disable>`), plus
+    optional `--debug` persistent checkpoint emission; rejects unknown options
+    and invalid arity.
     @param args {list[str]} Raw command argument vector.
     @return {tuple[Path, Path, float|None, bool, tuple[float, float], PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, bool, float, float]|None} Parsed `(input, output, ev, auto_ev, gamma, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, auto_zero_enabled, auto_zero_pct, auto_ev_pct)` tuple; `None` on parse failure.
-    @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143
+    @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146
     """
 
     positional = []
@@ -2595,6 +2623,7 @@ def _parse_run_options(args):
     auto_levels_raw_values = {}
     auto_adjust_enabled = DEFAULT_AUTO_ADJUST_ENABLED
     auto_adjust_raw_values = {}
+    debug_enabled = False
     hdr_merge_mode = HDR_MERGE_MODE_OPENCV
     opencv_raw_values = {}
     hdrplus_raw_values = {}
@@ -2674,6 +2703,11 @@ def _parse_run_options(args):
                 return None
             opencv_raw_values[option_name] = option_value
             idx += consume_count
+            continue
+
+        if token == "--debug":
+            debug_enabled = True
+            idx += 1
             continue
 
         if token == "--auto-adjust":
@@ -3336,6 +3370,7 @@ def _parse_run_options(args):
             auto_levels_options=auto_levels_options,
             auto_adjust_enabled=auto_adjust_enabled,
             auto_adjust_options=auto_adjust_options,
+            debug_enabled=debug_enabled,
         ),
         enable_luminance,
         enable_opencv,
@@ -5217,6 +5252,80 @@ def _write_rgb_float_tiff16(imageio_module, np_module, output_path, image_rgb_fl
     )
 
 
+def _write_debug_rgb_float_tiff(
+    imageio_module,
+    np_module,
+    debug_context,
+    stage_suffix,
+    image_rgb_float,
+):
+    """@brief Persist one debug checkpoint TIFF from normalized RGB float data.
+
+    @details Serializes one normalized RGB float `[0,1]` tensor into TIFF16
+    using the persistent debug output directory and canonical filename pattern
+    `<input-stem><stage-suffix>.tiff`. The helper keeps checkpoint files outside
+    the temporary workspace lifecycle so they survive command completion.
+    @param imageio_module {ModuleType} Imported imageio module with `imwrite`.
+    @param np_module {ModuleType} Imported numpy module.
+    @param debug_context {DebugArtifactContext|None} Persistent debug output metadata; `None` disables emission.
+    @param stage_suffix {str} Progressive stage suffix such as `_2.0_hdr-merge`.
+    @param image_rgb_float {object} RGB float tensor on normalized `[0,1]` scale.
+    @return {Path|None} Written TIFF path; `None` when debug output is disabled.
+    @satisfies DES-009, REQ-147, REQ-149
+    """
+
+    if debug_context is None:
+        return None
+    debug_context.output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = debug_context.output_dir / f"{debug_context.input_stem}{stage_suffix}.tiff"
+    _write_rgb_float_tiff16(
+        imageio_module=imageio_module,
+        np_module=np_module,
+        output_path=output_path,
+        image_rgb_float=image_rgb_float,
+    )
+    return output_path
+
+
+def _build_debug_artifact_context(output_jpg, input_dng, postprocess_options):
+    """@brief Build persistent debug output metadata for one command invocation.
+
+    @details Returns `None` when debug mode is disabled. When enabled, the
+    helper derives the output directory from the final JPG destination and uses
+    the source DNG stem as the canonical debug filename prefix.
+    @param output_jpg {Path} Final JPG destination path.
+    @param input_dng {Path} Source DNG input path.
+    @param postprocess_options {PostprocessOptions} Parsed postprocess controls including debug flag.
+    @return {DebugArtifactContext|None} Persistent debug output metadata or `None` when debug mode is disabled.
+    @satisfies REQ-146, REQ-147, REQ-149
+    """
+
+    if not postprocess_options.debug_enabled:
+        return None
+    return DebugArtifactContext(
+        output_dir=output_jpg.parent,
+        input_stem=input_dng.stem,
+    )
+
+
+def _format_debug_ev_suffix_value(ev_value):
+    """@brief Format one EV value token for debug checkpoint filenames.
+
+    @details Emits a signed decimal representation that preserves quarter-step
+    EV precision while keeping integer-valued stops on one decimal place for
+    stable filenames such as `+1.0`, `+0.5`, or `-0.25`.
+    @param ev_value {float} EV value expressed in stop units.
+    @return {str} Signed decimal token for debug filename suffixes.
+    @satisfies REQ-147, REQ-148
+    """
+
+    normalized_value = 0.0 if abs(float(ev_value)) < 1e-9 else float(ev_value)
+    formatted = f"{normalized_value:+.2f}".rstrip("0")
+    if formatted.endswith("."):
+        formatted += "0"
+    return formatted
+
+
 def _materialize_bracket_tiffs_from_float(
     imageio_module,
     np_module,
@@ -5447,18 +5556,27 @@ def _apply_saturation_float(np_module, image_rgb_float, saturation_factor):
     return np_module.clip(adjusted, 0.0, 1.0).astype(np_module.float32)
 
 
-def _apply_static_postprocess_float(np_module, image_rgb_float, postprocess_options):
+def _apply_static_postprocess_float(
+    np_module,
+    image_rgb_float,
+    postprocess_options,
+    imageio_module=None,
+    debug_context=None,
+):
     """@brief Execute static postprocess chain with float-only stage internals.
 
     @details Accepts one normalized RGB float tensor, preserves the legacy
     gamma/brightness/contrast/saturation equations and stage order, executes
-    all intermediate calculations in float domain, and eliminates the prior
+    all intermediate calculations in float domain, optionally emits persistent
+    debug TIFF checkpoints after each static substage, and eliminates the prior
     float->uint16->float adaptation cycle from this step.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} RGB float tensor.
     @param postprocess_options {PostprocessOptions} Parsed postprocess controls.
+    @param imageio_module {ModuleType|None} Optional imageio module used for debug TIFF checkpoint emission.
+    @param debug_context {DebugArtifactContext|None} Optional persistent debug output metadata.
     @return {object} RGB float tensor after static postprocess chain.
-    @satisfies REQ-012, REQ-013, REQ-132, REQ-134
+    @satisfies REQ-012, REQ-013, REQ-132, REQ-134, REQ-148
     """
 
     processed = _normalize_float_rgb_image(
@@ -5470,21 +5588,54 @@ def _apply_static_postprocess_float(np_module, image_rgb_float, postprocess_opti
         image_rgb_float=processed,
         gamma_value=postprocess_options.post_gamma,
     )
+    if imageio_module is not None and debug_context is not None:
+        _write_debug_rgb_float_tiff(
+            imageio_module=imageio_module,
+            np_module=np_module,
+            debug_context=debug_context,
+            stage_suffix="_3.1_static_correction_gamma",
+            image_rgb_float=processed,
+        )
     processed = _apply_brightness_float(
         np_module=np_module,
         image_rgb_float=processed,
         brightness_factor=postprocess_options.brightness,
     )
+    if imageio_module is not None and debug_context is not None:
+        _write_debug_rgb_float_tiff(
+            imageio_module=imageio_module,
+            np_module=np_module,
+            debug_context=debug_context,
+            stage_suffix="_3.2_static_correction_brightness",
+            image_rgb_float=processed,
+        )
     processed = _apply_contrast_float(
         np_module=np_module,
         image_rgb_float=processed,
         contrast_factor=postprocess_options.contrast,
     )
-    return _apply_saturation_float(
+    if imageio_module is not None and debug_context is not None:
+        _write_debug_rgb_float_tiff(
+            imageio_module=imageio_module,
+            np_module=np_module,
+            debug_context=debug_context,
+            stage_suffix="_3.3_static_correction_contrast",
+            image_rgb_float=processed,
+        )
+    processed = _apply_saturation_float(
         np_module=np_module,
         image_rgb_float=processed,
         saturation_factor=postprocess_options.saturation,
     )
+    if imageio_module is not None and debug_context is not None:
+        _write_debug_rgb_float_tiff(
+            imageio_module=imageio_module,
+            np_module=np_module,
+            debug_context=debug_context,
+            stage_suffix="_3.4_static_correction_saturation",
+            image_rgb_float=processed,
+        )
+    return processed
 
 
 def _to_linear_srgb(np_module, image_srgb):
@@ -7793,19 +7944,24 @@ def _apply_validated_auto_adjust_pipeline(
     cv2_module,
     np_module,
     auto_adjust_options,
+    imageio_module=None,
+    debug_context=None,
 ):
     """@brief Execute the validated auto-adjust pipeline.
 
     @details Accepts one normalized RGB float image, executes selective blur,
     adaptive levels, float-domain CLAHE-luma, sigmoidal contrast, HSL
     saturation gamma, and high-pass/overlay stages entirely in float domain,
-    and returns normalized RGB float output without any file round-trip.
+    optionally persists progressive debug checkpoints, and returns normalized
+    RGB float output without any file round-trip.
     @param image_rgb_float {object} RGB float tensor.
     @param cv2_module {ModuleType} Imported cv2 module.
     @param np_module {ModuleType} Imported numpy module.
     @param auto_adjust_options {AutoAdjustOptions} Shared auto-adjust knob values.
+    @param imageio_module {ModuleType|None} Optional imageio module used for debug TIFF checkpoint emission.
+    @param debug_context {DebugArtifactContext|None} Optional persistent debug output metadata.
     @return {object} RGB float tensor after auto-adjust.
-    @satisfies REQ-051, REQ-075, REQ-106, REQ-123, REQ-136, REQ-137
+    @satisfies REQ-051, REQ-075, REQ-106, REQ-123, REQ-136, REQ-137, REQ-148
     """
 
     rgb_float = _normalize_float_rgb_image(
@@ -7818,27 +7974,67 @@ def _apply_validated_auto_adjust_pipeline(
         sigma=auto_adjust_options.blur_sigma,
         threshold_percent=auto_adjust_options.blur_threshold_pct,
     )
+    if imageio_module is not None and debug_context is not None:
+        _write_debug_rgb_float_tiff(
+            imageio_module=imageio_module,
+            np_module=np_module,
+            debug_context=debug_context,
+            stage_suffix="_6.1_auto-adjust_blur",
+            image_rgb_float=rgb_float,
+        )
     rgb_float = _level_per_channel_adaptive(
         np_module,
         rgb_float,
         low_pct=auto_adjust_options.level_low_pct,
         high_pct=auto_adjust_options.level_high_pct,
     )
+    if imageio_module is not None and debug_context is not None:
+        _write_debug_rgb_float_tiff(
+            imageio_module=imageio_module,
+            np_module=np_module,
+            debug_context=debug_context,
+            stage_suffix="_6.2_auto-adjust_level",
+            image_rgb_float=rgb_float,
+        )
     rgb_float = _apply_clahe_luma_rgb_float(
         cv2_module=cv2_module,
         np_module=np_module,
         image_rgb_float=rgb_float,
         auto_adjust_options=auto_adjust_options,
     )
+    if imageio_module is not None and debug_context is not None:
+        _write_debug_rgb_float_tiff(
+            imageio_module=imageio_module,
+            np_module=np_module,
+            debug_context=debug_context,
+            stage_suffix="_6.3_auto-adjust_clahe-luma",
+            image_rgb_float=rgb_float,
+        )
     rgb_float = _sigmoidal_contrast(
         np_module,
         rgb_float,
         contrast=auto_adjust_options.sigmoid_contrast,
         midpoint=auto_adjust_options.sigmoid_midpoint,
     )
+    if imageio_module is not None and debug_context is not None:
+        _write_debug_rgb_float_tiff(
+            imageio_module=imageio_module,
+            np_module=np_module,
+            debug_context=debug_context,
+            stage_suffix="_6.4_auto-adjust_sigmoid",
+            image_rgb_float=rgb_float,
+        )
     rgb_float = _vibrance_hsl_gamma(
         np_module, rgb_float, saturation_gamma=auto_adjust_options.saturation_gamma
     )
+    if imageio_module is not None and debug_context is not None:
+        _write_debug_rgb_float_tiff(
+            imageio_module=imageio_module,
+            np_module=np_module,
+            debug_context=debug_context,
+            stage_suffix="_6.5_auto-adjust_vibrance",
+            image_rgb_float=rgb_float,
+        )
     high_pass_gray = _high_pass_math_gray(
         cv2_module,
         np_module,
@@ -7846,7 +8042,16 @@ def _apply_validated_auto_adjust_pipeline(
         blur_sigma=auto_adjust_options.highpass_blur_sigma,
     )
     rgb_float = _overlay_composite(np_module, rgb_float, high_pass_gray)
-    return np_module.clip(rgb_float, 0.0, 1.0).astype(np_module.float32)
+    rgb_float = np_module.clip(rgb_float, 0.0, 1.0).astype(np_module.float32)
+    if imageio_module is not None and debug_context is not None:
+        _write_debug_rgb_float_tiff(
+            imageio_module=imageio_module,
+            np_module=np_module,
+            debug_context=debug_context,
+            stage_suffix="_6.6_auto-adjust_high-pass",
+            image_rgb_float=rgb_float,
+        )
+    return rgb_float
 
 
 def _load_piexif_dependency():
@@ -7878,6 +8083,7 @@ def _encode_jpg(
     piexif_module=None,
     source_exif_payload=None,
     source_orientation=1,
+    debug_context=None,
 ):
     """@brief Encode merged HDR float payload into final JPG output.
 
@@ -7885,7 +8091,8 @@ def _encode_jpg(
     backend, executes optional original-order auto-brightness stage, optional
     auto-levels stage, static post-gamma/brightness/contrast/saturation stage,
     optional auto-adjust stage, and then performs exactly one float-to-uint8
-    conversion immediately before JPEG save.
+    conversion immediately before JPEG save. When debug context is present, the
+    function emits persistent TIFF16 checkpoints after each executed stage.
     @param imageio_module {ModuleType} Imported imageio module with `imread` and `imwrite`.
     @param pil_image_module {ModuleType} Imported Pillow image module.
     @param merged_image_float {object} Merged RGB float image produced by selected backend.
@@ -7896,9 +8103,10 @@ def _encode_jpg(
     @param piexif_module {ModuleType|None} Optional piexif module for EXIF thumbnail refresh.
     @param source_exif_payload {bytes|None} Serialized EXIF payload copied from input DNG.
     @param source_orientation {int} Source EXIF orientation value in range `1..8`.
+    @param debug_context {DebugArtifactContext|None} Optional persistent debug output metadata.
     @return {None} Side effects only.
     @exception RuntimeError Raised when numpy or auto-adjust dependencies are missing.
-    @satisfies REQ-012, REQ-013, REQ-014, REQ-041, REQ-050, REQ-069, REQ-073, REQ-074, REQ-075, REQ-078, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-106, REQ-123, REQ-132, REQ-133, REQ-134
+    @satisfies REQ-012, REQ-013, REQ-014, REQ-041, REQ-050, REQ-069, REQ-073, REQ-074, REQ-075, REQ-078, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-106, REQ-123, REQ-132, REQ-133, REQ-134, REQ-148
     """
 
     if numpy_module is not None:
@@ -7922,17 +8130,41 @@ def _encode_jpg(
             image_rgb_float=image_rgb_float,
             auto_brightness_options=postprocess_options.auto_brightness_options,
         )
+        if debug_context is not None:
+            _write_debug_rgb_float_tiff(
+                imageio_module=imageio_module,
+                np_module=np_module,
+                debug_context=debug_context,
+                stage_suffix="_4.0_auto-brightness",
+                image_rgb_float=image_rgb_float,
+            )
     if postprocess_options.auto_levels_enabled:
         image_rgb_float = _apply_auto_levels_float(
             np_module=np_module,
             image_rgb_float=image_rgb_float,
             auto_levels_options=postprocess_options.auto_levels_options,
         )
+        if debug_context is not None:
+            _write_debug_rgb_float_tiff(
+                imageio_module=imageio_module,
+                np_module=np_module,
+                debug_context=debug_context,
+                stage_suffix="_5.0_auto-levels",
+                image_rgb_float=image_rgb_float,
+            )
 
     image_rgb_float = _apply_static_postprocess_float(
         np_module=np_module,
         image_rgb_float=image_rgb_float,
         postprocess_options=postprocess_options,
+        **(
+            {
+                "imageio_module": imageio_module,
+                "debug_context": debug_context,
+            }
+            if debug_context is not None
+            else {}
+        ),
     )
 
     if postprocess_options.auto_adjust_enabled:
@@ -7944,6 +8176,14 @@ def _encode_jpg(
             cv2_module=cv2_module,
             np_module=np_module,
             auto_adjust_options=postprocess_options.auto_adjust_options,
+            **(
+                {
+                    "imageio_module": imageio_module,
+                    "debug_context": debug_context,
+                }
+                if debug_context is not None
+                else {}
+            ),
         )
 
     final_image_rgb_uint8 = _to_uint8_image_array(
@@ -8032,12 +8272,13 @@ def run(args):
     resolves static or adaptive EV selector around resolved center using
     bit-derived EV ceilings, extracts three normalized RGB float brackets,
     executes the selected HDR backend with float input/output interfaces,
-    executes the float-interface post-merge pipeline, writes the final JPG, and
-    guarantees temporary artifact cleanup through isolated temporary directory
-    lifecycle.
+    executes the float-interface post-merge pipeline, optionally emits
+    persistent debug TIFF checkpoints for executed stages, writes the final
+    JPG, and guarantees temporary artifact cleanup through isolated temporary
+    directory lifecycle.
     @param args {list[str]} Command argument vector excluding command token.
     @return {int} `0` on success; `1` on parse/validation/dependency/processing failure.
-    @satisfies PRJ-001, CTN-001, CTN-004, CTN-005, REQ-010, REQ-011, REQ-012, REQ-013, REQ-014, REQ-015, REQ-050, REQ-052, REQ-100, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-127, REQ-128, REQ-129, REQ-131, REQ-132, REQ-133, REQ-134, REQ-138, REQ-139, REQ-140
+    @satisfies PRJ-001, CTN-001, CTN-004, CTN-005, REQ-010, REQ-011, REQ-012, REQ-013, REQ-014, REQ-015, REQ-050, REQ-052, REQ-100, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-127, REQ-128, REQ-129, REQ-131, REQ-132, REQ-133, REQ-134, REQ-138, REQ-139, REQ-140, REQ-146, REQ-147, REQ-148, REQ-149
     """
 
     if not _is_supported_runtime_os():
@@ -8078,6 +8319,11 @@ def run(args):
     if output_parent and not output_parent.exists():
         print_error(f"Output directory does not exist: {output_parent}")
         return 1
+    debug_context = _build_debug_artifact_context(
+        output_jpg=output_jpg,
+        input_dng=input_dng,
+        postprocess_options=postprocess_options,
+    )
 
     missing_external_executables = _collect_missing_external_executables(
         enable_luminance=enable_luminance,
@@ -8122,7 +8368,8 @@ def run(args):
         f"jpg-compression={postprocess_options.jpg_compression}, "
         f"auto-brightness={'enabled' if postprocess_options.auto_brightness_enabled else 'disabled'}, "
         f"auto-levels={'enabled' if postprocess_options.auto_levels_enabled else 'disabled'}, "
-        f"auto-adjust={'enabled' if postprocess_options.auto_adjust_enabled else 'disabled'}"
+        f"auto-adjust={'enabled' if postprocess_options.auto_adjust_enabled else 'disabled'}, "
+        f"debug={'enabled' if postprocess_options.debug_enabled else 'disabled'}"
     )
     if postprocess_options.auto_brightness_enabled:
         resolved_ab_key = postprocess_options.auto_brightness_options.key_value
@@ -8271,6 +8518,29 @@ def run(args):
                     multipliers=multipliers,
                     gamma_value=gamma_value,
                 )
+                if debug_context is not None:
+                    extraction_suffixes = (
+                        "_1.1_ev_min"
+                        + _format_debug_ev_suffix_value(
+                            resolved_ev_zero - effective_ev_value
+                        ),
+                        "_1.2_ev_zero"
+                        + _format_debug_ev_suffix_value(resolved_ev_zero),
+                        "_1.3_ev_max"
+                        + _format_debug_ev_suffix_value(
+                            resolved_ev_zero + effective_ev_value
+                        ),
+                    )
+                    for stage_suffix, bracket_image_float in zip(
+                        extraction_suffixes, bracket_images_float
+                    ):
+                        _write_debug_rgb_float_tiff(
+                            imageio_module=imageio_module,
+                            np_module=numpy_module,
+                            debug_context=debug_context,
+                            stage_suffix=stage_suffix,
+                            image_rgb_float=bracket_image_float,
+                        )
             if enable_luminance:
                 merged_image_float = _run_luminance_hdr_cli(
                     bracket_images_float=bracket_images_float,
@@ -8297,6 +8567,14 @@ def run(args):
                 )
             else:
                 raise RuntimeError("No HDR merge backend enabled")
+            if debug_context is not None:
+                _write_debug_rgb_float_tiff(
+                    imageio_module=imageio_module,
+                    np_module=numpy_module,
+                    debug_context=debug_context,
+                    stage_suffix="_2.0_hdr-merge",
+                    image_rgb_float=merged_image_float,
+                )
             _encode_jpg(
                 imageio_module=imageio_module,
                 pil_image_module=pil_image_module,
@@ -8308,6 +8586,7 @@ def run(args):
                 piexif_module=piexif_module,
                 source_exif_payload=source_exif_payload,
                 source_orientation=source_orientation,
+                debug_context=debug_context,
             )
             _sync_output_file_timestamps_from_exif(
                 output_jpg=output_jpg,
