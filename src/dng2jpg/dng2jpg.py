@@ -3539,33 +3539,35 @@ def _apply_orientation_transform(pil_image_module, pil_image, source_orientation
 
 
 def _build_oriented_thumbnail_jpeg_bytes(
-    pil_image_module, output_jpg, source_orientation
+    pil_image_module, final_image_rgb_uint8, source_orientation
 ):
-    """@brief Build refreshed JPEG thumbnail bytes from final JPG output.
+    """@brief Build refreshed JPEG thumbnail bytes from final quantized JPG pixels.
 
-    @details Opens final JPG pixels, applies source-orientation-aware transform,
-    scales to bounded thumbnail size, and serializes deterministic JPEG thumbnail
-    payload for EXIF embedding.
+    @details Creates a Pillow image from the final RGB uint8 array that is saved
+    as the output JPG, applies source-orientation-aware transform, scales to the
+    bounded thumbnail size, and serializes deterministic JPEG thumbnail payload
+    for EXIF embedding without re-reading the output file.
     @param pil_image_module {ModuleType} Imported Pillow Image module.
-    @param output_jpg {Path} Final JPG path.
+    @param final_image_rgb_uint8 {numpy.ndarray} Final RGB uint8 array used for JPG save.
     @param source_orientation {int} EXIF orientation value in range `1..8`.
     @return {bytes} Serialized JPEG thumbnail payload.
-    @exception OSError Raised when final JPG cannot be read.
-    @satisfies REQ-077, REQ-078
+    @satisfies REQ-041, REQ-078
     """
 
-    with pil_image_module.open(str(output_jpg)) as output_image:
-        thumbnail_image = _apply_orientation_transform(
-            pil_image_module=pil_image_module,
-            pil_image=output_image,
-            source_orientation=source_orientation,
-        )
-        if getattr(thumbnail_image, "mode", "") not in ("RGB", "L"):
-            thumbnail_image = thumbnail_image.convert("RGB")
-        thumbnail_image.thumbnail(_THUMBNAIL_MAX_SIZE)
-        buffer = BytesIO()
-        thumbnail_image.save(buffer, format="JPEG", quality=85, optimize=True)
-        return buffer.getvalue()
+    output_image = pil_image_module.fromarray(final_image_rgb_uint8)
+    if getattr(output_image, "mode", "") != "RGB":
+        output_image = output_image.convert("RGB")
+    thumbnail_image = _apply_orientation_transform(
+        pil_image_module=pil_image_module,
+        pil_image=output_image,
+        source_orientation=source_orientation,
+    )
+    if getattr(thumbnail_image, "mode", "") not in ("RGB", "L"):
+        thumbnail_image = thumbnail_image.convert("RGB")
+    thumbnail_image.thumbnail(_THUMBNAIL_MAX_SIZE)
+    buffer = BytesIO()
+    thumbnail_image.save(buffer, format="JPEG", quality=85, optimize=True)
+    return buffer.getvalue()
 
 
 def _coerce_exif_int_like_value(raw_value):
@@ -3749,23 +3751,25 @@ def _refresh_output_jpg_exif_thumbnail_after_save(
     pil_image_module,
     piexif_module,
     output_jpg,
+    final_image_rgb_uint8,
     source_exif_payload,
     source_orientation,
 ):
     """@brief Refresh output JPG EXIF thumbnail while preserving source orientation.
 
-    @details Loads source EXIF payload, regenerates thumbnail from final JPG
-    pixels with orientation-aware transform, preserves source orientation in main
-    EXIF IFD, sets thumbnail orientation to identity, and re-inserts updated EXIF
-    payload into output JPG.
+    @details Loads source EXIF payload, regenerates thumbnail from the final
+    quantized RGB uint8 image used for JPG save, preserves source orientation in
+    main EXIF IFD, sets thumbnail orientation to identity, and re-inserts updated
+    EXIF payload into output JPG before any filesystem timestamp synchronization.
     @param pil_image_module {ModuleType} Imported Pillow Image module.
     @param piexif_module {ModuleType} Imported piexif module.
     @param output_jpg {Path} Final JPG path.
+    @param final_image_rgb_uint8 {numpy.ndarray} Final RGB uint8 array used for JPG save.
     @param source_exif_payload {bytes} Serialized EXIF payload from source DNG.
     @param source_orientation {int} Source EXIF orientation value in range `1..8`.
     @return {None} Side effects only.
     @exception RuntimeError Raised when EXIF thumbnail refresh fails.
-    @satisfies REQ-066, REQ-077, REQ-078
+    @satisfies REQ-014, REQ-041, REQ-078
     """
 
     if source_exif_payload is None:
@@ -3777,7 +3781,7 @@ def _refresh_output_jpg_exif_thumbnail_after_save(
                 exif_dict[ifd_name] = {}
         thumbnail_payload = _build_oriented_thumbnail_jpeg_bytes(
             pil_image_module=pil_image_module,
-            output_jpg=output_jpg,
+            final_image_rgb_uint8=final_image_rgb_uint8,
             source_orientation=source_orientation,
         )
         orientation_tag = piexif_module.ImageIFD.Orientation
@@ -3818,12 +3822,13 @@ def _sync_output_file_timestamps_from_exif(output_jpg, exif_timestamp):
     """@brief Synchronize output JPG atime/mtime from optional EXIF timestamp.
 
     @details Provides one dedicated call site for filesystem timestamp sync and
-    applies update only when EXIF datetime parsing produced a valid POSIX value.
+    applies update only when EXIF datetime parsing produced a valid POSIX value
+    after refreshed EXIF metadata has already been written to the output JPG.
     @param output_jpg {Path} Output JPG path.
     @param exif_timestamp {float|None} Source EXIF-derived POSIX timestamp.
     @return {None} Side effects only.
     @exception OSError Raised when filesystem metadata update fails.
-    @satisfies REQ-074, REQ-077
+    @satisfies REQ-014, REQ-074, REQ-077
     """
 
     if exif_timestamp is None:
@@ -7893,7 +7898,7 @@ def _encode_jpg(
     @param source_orientation {int} Source EXIF orientation value in range `1..8`.
     @return {None} Side effects only.
     @exception RuntimeError Raised when numpy or auto-adjust dependencies are missing.
-    @satisfies REQ-012, REQ-013, REQ-050, REQ-069, REQ-073, REQ-074, REQ-075, REQ-078, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-106, REQ-123, REQ-132, REQ-133, REQ-134
+    @satisfies REQ-012, REQ-013, REQ-014, REQ-041, REQ-050, REQ-069, REQ-073, REQ-074, REQ-075, REQ-078, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-106, REQ-123, REQ-132, REQ-133, REQ-134
     """
 
     if numpy_module is not None:
@@ -7941,8 +7946,11 @@ def _encode_jpg(
             auto_adjust_options=postprocess_options.auto_adjust_options,
         )
 
-    image_rgb_uint8 = _to_uint8_image_array(np_module=np_module, image_data=image_rgb_float)
-    pil_image = pil_image_module.fromarray(image_rgb_uint8)
+    final_image_rgb_uint8 = _to_uint8_image_array(
+        np_module=np_module,
+        image_data=image_rgb_float,
+    )
+    pil_image = pil_image_module.fromarray(final_image_rgb_uint8)
     if getattr(pil_image, "mode", "") != "RGB":
         pil_image = pil_image.convert("RGB")
 
@@ -7961,6 +7969,7 @@ def _encode_jpg(
             pil_image_module=pil_image_module,
             piexif_module=piexif_module,
             output_jpg=output_jpg,
+            final_image_rgb_uint8=final_image_rgb_uint8,
             source_exif_payload=source_exif_payload,
             source_orientation=source_orientation,
         )

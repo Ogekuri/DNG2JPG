@@ -472,6 +472,94 @@ def test_encode_jpg_quantizes_once_at_final_boundary(monkeypatch, tmp_path) -> N
     assert call_trace.index("to_uint8") > call_trace.index("static")
 
 
+
+def test_encode_jpg_refreshes_exif_thumbnail_from_final_quantized_rgb_uint8(
+    monkeypatch, tmp_path
+) -> None:
+    """EXIF thumbnail refresh must reuse the final quantized RGB uint8 save image."""
+
+    merged_rgb_float = np.array(
+        [
+            [[0.05, 0.15, 0.25], [0.35, 0.45, 0.55]],
+            [[0.65, 0.75, 0.85], [0.95, 0.4, 0.2]],
+        ],
+        dtype=np.float32,
+    )
+    pil_module = _FakePilModule()
+    imageio_module = _FakeImageIoModule(
+        merged_rgb_u16=(merged_rgb_float * 65535.0).astype(np.uint16)
+    )
+    captured_thumbnail_inputs: list[np.ndarray] = []
+
+    class _FakePiexifModule:
+        class ImageIFD:
+            Orientation = 274
+
+        def __init__(self) -> None:
+            self.loaded_payload: bytes | None = None
+            self.dump_input: dict[str, object] | None = None
+            self.inserted: tuple[bytes, str] | None = None
+            self.TAGS = {}
+
+        def load(self, payload: bytes) -> dict[str, object]:
+            self.loaded_payload = payload
+            return {
+                "0th": {},
+                "Exif": {},
+                "GPS": {},
+                "Interop": {},
+                "1st": {},
+                "thumbnail": None,
+            }
+
+        def dump(self, exif_dict: dict[str, object]) -> bytes:
+            self.dump_input = exif_dict
+            return b"updated-exif"
+
+        def insert(self, exif_bytes: bytes, output_path: str) -> None:
+            self.inserted = (exif_bytes, output_path)
+
+    fake_piexif = _FakePiexifModule()
+
+    def _fake_build_thumbnail(*, pil_image_module, final_image_rgb_uint8, source_orientation):
+        assert pil_image_module is pil_module
+        assert source_orientation == 6
+        captured_thumbnail_inputs.append(np.array(final_image_rgb_uint8, copy=True))
+        return b"thumb-bytes"
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_build_oriented_thumbnail_jpeg_bytes",
+        _fake_build_thumbnail,
+    )
+
+    dng2jpg_module._encode_jpg(  # pylint: disable=protected-access
+        imageio_module=imageio_module,
+        pil_image_module=pil_module,
+        merged_image_float=merged_rgb_float,
+        output_jpg=tmp_path / "out.jpg",
+        postprocess_options=_build_postprocess_options(),
+        numpy_module=np,
+        piexif_module=fake_piexif,
+        source_exif_payload=b"source-exif",
+        source_orientation=6,
+    )
+
+    assert pil_module.last_image is not None
+    assert len(captured_thumbnail_inputs) == 1
+    np.testing.assert_array_equal(captured_thumbnail_inputs[0], pil_module.last_image.array)
+    assert fake_piexif.loaded_payload == b"source-exif"
+    assert fake_piexif.dump_input is not None
+    zero_ifd = fake_piexif.dump_input["0th"]
+    first_ifd = fake_piexif.dump_input["1st"]
+    assert isinstance(zero_ifd, dict)
+    assert isinstance(first_ifd, dict)
+    assert zero_ifd[274] == 6
+    assert first_ifd[274] == 1
+    assert fake_piexif.dump_input["thumbnail"] == b"thumb-bytes"
+    assert fake_piexif.inserted == (b"updated-exif", str(tmp_path / "out.jpg"))
+
+
 def test_parse_run_options_accepts_remaining_auto_brightness_controls() -> None:
     """Parser must expose the surviving float-domain auto-brightness controls."""
 

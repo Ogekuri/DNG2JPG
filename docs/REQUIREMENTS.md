@@ -95,7 +95,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **DES-002**: MUST model runtime options with immutable dataclasses `AutoAdjustOptions`, `AutoBrightnessOptions`, `PostprocessOptions`, `LuminanceOptions`, and `AutoEvInputs`.
 - **DES-003**: MUST derive supported EV and EV-zero quantized values from detected DNG bit depth using `0.25` EV step constraints.
 - **DES-004**: MUST isolate intermediate processing artifacts in temporary directories and cleanup automatically after command completion.
-- **DES-005**: MUST preserve source EXIF payload into output JPEG and refresh EXIF thumbnail/orientation metadata when EXIF payload exists.
+- **DES-005**: MUST preserve source EXIF payload into output JPEG, rebuild EXIF thumbnail from final quantized JPG pixels, and write refreshed EXIF metadata before filesystem timestamp synchronization when EXIF payload exists.
 - **DES-006**: MUST resolve backend-specific default postprocess factors from selected `--hdr-merge` mode and, for `Luminace-HDR`, from resolved tone-mapping operator.
 - **DES-008**: MUST default OpenCV backend static postprocess factors to `post_gamma=1.1`, `brightness=1.05`, `contrast=1.3`, and `saturation=1.10`.
 - **DES-007**: MUST process conversion as a one-shot process model without spawning explicit application-managed threads.
@@ -115,7 +115,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-012**: MUST exchange normalized OpenCV-compatible RGB float tensors `[0,1]` between merge, auto-brightness, auto-levels, static postprocess, auto-adjust, and final-save preparation stages.
 - **REQ-013**: MUST execute optional auto-brightness, optional auto-levels, post-gamma, brightness, contrast, and saturation in this exact order on RGB float stage interfaces before any optional auto-adjust stage.
 - **REQ-106**: MUST execute optional auto-adjust stage after static postprocess and before final JPEG quantization/write, preserve RGB float input/output interfaces, and confine any required float-to-uint16 or TIFF16 conversions to the auto-adjust step itself.
-- **REQ-014**: MUST synchronize output file timestamps from EXIF datetime when EXIF datetime metadata is available.
+- **REQ-014**: MUST synchronize output file timestamps from EXIF datetime only after refreshed EXIF metadata has been written when EXIF datetime metadata is available.
 - **REQ-015**: MUST return `1` on parse, validation, dependency, and processing errors, and return `0` on successful processing.
 - **REQ-016**: MUST execute GitHub latest-release version checks with an idle-time cache JSON file and print version status or check errors.
 - **REQ-141**: MUST use idle-delay `3600` seconds after successful latest-release checks and idle-delay `86400` seconds after any latest-release check error.
@@ -143,7 +143,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-038**: MUST fail EXIF-preserving encode path when source EXIF payload exists and `piexif` is unavailable.
 - **REQ-039**: MUST extract source EXIF timestamp with priority `DateTimeOriginal` then `DateTimeDigitized` then `DateTime`.
 - **REQ-040**: MUST preserve source EXIF orientation in output `0th` IFD and set thumbnail orientation to `1`.
-- **REQ-041**: MUST regenerate EXIF thumbnail from output JPEG pixels when source EXIF payload exists.
+- **REQ-041**: MUST regenerate EXIF thumbnail from the final quantized RGB uint8 image that is saved as the output JPEG when source EXIF payload exists.
 - **REQ-042**: MUST normalize integer-like EXIF values before `piexif.dump` and drop out-of-range integers for constrained integer tag types.
 - **REQ-043**: MUST gate release build-and-publish job on `check-branch` output `is_master == "true"`.
 - **REQ-044**: MUST trigger release workflow on `workflow_dispatch` and push tags matching `v[0-9]+.[0-9]+.[0-9]+`.
@@ -210,7 +210,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-005**: MUST verify `_resolve_ev_value` clamps adaptive EV to bit-derived selector bounds and rejects unsupported static EV for the detected bit depth.
 - **TST-006**: MUST verify `_run_luminance_hdr_cli` builds deterministic argument order and includes any `--tmo*` passthrough pairs unchanged.
 - **TST-007**: MUST verify `_extract_dng_exif_payload_and_timestamp` applies datetime priority `36867` then `36868` then `306`.
-- **TST-008**: MUST verify `_refresh_output_jpg_exif_thumbnail_after_save` preserves source orientation in `0th` IFD and sets `1st` IFD orientation to `1`.
+- **TST-008**: MUST verify `_refresh_output_jpg_exif_thumbnail_after_save` preserves source orientation fields and rebuilds EXIF thumbnail bytes from the final quantized RGB uint8 image.
 - **TST-009**: MUST verify release workflow gates `build-release` execution on `needs.check-branch.outputs.is_master == "true"`.
 - **TST-010**: MUST verify `_parse_run_options` enforces `--auto-levels <enable|disable>` with `--al-*` coupling and validates `Clip out-of-gamut colors`, `Clip %`, method, and gain-threshold knobs.
 - **TST-011**: MUST verify `_apply_auto_brightness_rgb_float` preserves float I/O and executes the original step order, key-analysis thresholds, Reinhard mapping, and optional desaturation.
@@ -259,7 +259,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | DES-002 | `src/dng2jpg/dng2jpg.py` dataclasses; evidence: `AutoAdjustOptions`, `AutoBrightnessOptions`, `PostprocessOptions`, `LuminanceOptions`, `AutoEvInputs`. |
 | DES-003 | `src/dng2jpg/dng2jpg.py::_derive_supported_ev_values`, `_derive_supported_ev_zero_values`; excerpt: uses `EV_STEP = 0.25`. |
 | DES-004 | `src/dng2jpg/dng2jpg.py::run`, `_run_luminance_hdr_cli`; excerpt: isolates intermediate artifacts under the command temporary workspace and backend-local subdirectories. |
-| DES-005 | `src/dng2jpg/dng2jpg.py::_extract_dng_exif_payload_and_timestamp`, `_refresh_output_jpg_exif_thumbnail_after_save`, `_encode_jpg`. |
+| DES-005 | `src/dng2jpg/dng2jpg.py::_extract_dng_exif_payload_and_timestamp`, `_refresh_output_jpg_exif_thumbnail_after_save`, `_build_oriented_thumbnail_jpeg_bytes`, `_encode_jpg`, `_sync_output_file_timestamps_from_exif`. |
 | DES-006 | `src/dng2jpg/dng2jpg.py::_resolve_default_postprocess`; excerpt: backend and TMO-specific defaults. |
 | DES-008 | `src/dng2jpg/dng2jpg.py::_resolve_default_postprocess`; excerpt: OpenCV backend defaults `post_gamma=1.1`, `brightness=1.05`, `contrast=1.3`, `saturation=1.10`. |
 | DES-007 | `docs/WORKFLOW.md`; excerpt: execution-unit model shows process-based flows and "no explicit threads detected". |
@@ -276,7 +276,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-011 | `src/dng2jpg/dng2jpg.py::_run_luminance_hdr_cli`; excerpt: deterministic luminance args, `--ldrTiff 16b`, and backend-local TIFF artifact handling. |
 | REQ-012 | `src/dng2jpg/dng2jpg.py::_encode_jpg`, `_apply_static_postprocess_float`; excerpt: keeps merge/postprocess/auto-adjust/final-save buffers on normalized RGB float interfaces. |
 | REQ-013 | `src/dng2jpg/dng2jpg.py::_encode_jpg`; excerpt: auto-brightness executes before auto-levels and postprocess factors; optional auto-adjust executes before final JPEG save. |
-| REQ-014 | `src/dng2jpg/dng2jpg.py::_sync_output_file_timestamps_from_exif`; excerpt: applies `os.utime` when EXIF timestamp exists. |
+| REQ-014 | `src/dng2jpg/dng2jpg.py::_encode_jpg`, `_sync_output_file_timestamps_from_exif`; excerpt: writes refreshed EXIF metadata before applying `os.utime` from EXIF timestamp. |
 | REQ-015 | `src/dng2jpg/dng2jpg.py::run`; excerpt: parse/dependency/processing failures return `1`, success returns `0`. |
 | REQ-016 | `src/dng2jpg/core.py::_check_online_version`, `_write_version_cache`; excerpt: GitHub latest-release check uses idle-time cache JSON and prints status or error output. |
 | REQ-141 | `src/dng2jpg/core.py::_check_online_version`; excerpt: success path uses `3600` seconds and error paths use `86400` seconds when calculating idle-delay. |
@@ -304,7 +304,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-038 | `src/dng2jpg/dng2jpg.py::run`, `_load_piexif_dependency`; excerpt: fails when source EXIF exists and piexif is missing. |
 | REQ-039 | `src/dng2jpg/dng2jpg.py::_extract_dng_exif_payload_and_timestamp`; excerpt: datetime tag precedence `36867` > `36868` > `306`. |
 | REQ-040 | `src/dng2jpg/dng2jpg.py::_refresh_output_jpg_exif_thumbnail_after_save`; excerpt: source orientation in `0th`, thumbnail orientation `1` in `1st`. |
-| REQ-041 | `src/dng2jpg/dng2jpg.py::_build_oriented_thumbnail_jpeg_bytes`; excerpt: regenerated thumbnail from output JPG. |
+| REQ-041 | `src/dng2jpg/dng2jpg.py::_build_oriented_thumbnail_jpeg_bytes`, `_encode_jpg`; excerpt: regenerates thumbnail from the final quantized RGB uint8 image that is saved as the output JPG. |
 | REQ-042 | `src/dng2jpg/dng2jpg.py::_normalize_ifd_integer_like_values_for_piexif_dump`; excerpt: normalize/drop unsupported integer-like values. |
 | REQ-043 | `.github/workflows/release-uvx.yml`; excerpt: `if: needs.check-branch.outputs.is_master == 'true'`. |
 | REQ-044 | `.github/workflows/release-uvx.yml`; excerpt: triggers on `workflow_dispatch` and semantic tag pattern. |
@@ -368,7 +368,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | TST-005 | `src/dng2jpg/dng2jpg.py::_resolve_ev_value`; adaptive clamp and static EV validity checks. |
 | TST-006 | `src/dng2jpg/dng2jpg.py::_run_luminance_hdr_cli`; deterministic argv generation including passthrough. |
 | TST-007 | `src/dng2jpg/dng2jpg.py::_extract_dng_exif_payload_and_timestamp`; explicit EXIF datetime tag priority loop. |
-| TST-008 | `src/dng2jpg/dng2jpg.py::_refresh_output_jpg_exif_thumbnail_after_save`; orientation handling in `0th` and `1st` IFDs. |
+| TST-008 | `tests/test_uint16_postprocess_pipeline.py::test_encode_jpg_refreshes_exif_thumbnail_from_final_quantized_rgb_uint8`; verifies EXIF orientation fields and thumbnail bytes derive from final quantized RGB uint8 save image. |
 | TST-009 | `.github/workflows/release-uvx.yml`; release job condition depends on `is_master` gate output. |
 | TST-010 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; branch checks for `--auto-levels <enable|disable>` coupling and `--al-*` knob validations. |
 | TST-011 | `tests/test_uint16_postprocess_pipeline.py::test_apply_auto_brightness_rgb_float_executes_original_stage_order`; verifies float-interface auto-brightness stage order and optional desaturation without CLAHE local contrast. |
