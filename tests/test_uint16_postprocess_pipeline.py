@@ -1203,8 +1203,6 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
         "--ev=<value>",
         "--auto-ev=<enable|disable>",
         "--ev-zero=<value>",
-        "--auto-zero=<enable|disable>",
-        "--auto-zero-pct=<0..100>",
         "--auto-ev-pct=<0..100>",
         "--gamma=<a,b>",
         "--hdr-merge <Luminace-HDR|OpenCV|HDR-Plus>",
@@ -1256,6 +1254,8 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
     ]
     for token in required_tokens:
         assert token in output
+    assert "--auto-zero=<enable|disable>" not in output
+    assert "--auto-zero-pct=<0..100>" not in output
 
     assert "Value options accept both `--option value` and `--option=value` forms." in output
     assert "Allowed values: Debevec, Robertson, Mertens." in output
@@ -1279,8 +1279,8 @@ def test_parse_run_options_rejects_unknown_hdr_merge_backend() -> None:
     assert parsed is None
 
 
-def test_parse_run_options_auto_ev_defaults_and_override_behavior(capsys) -> None:
-    """`--auto-ev` defaults and `--ev` override must be deterministic."""
+def test_parse_run_options_auto_ev_defaults_and_disable_behavior(capsys) -> None:
+    """`--auto-ev` must default to enabled and require another mode when disabled."""
 
     parsed_default_auto = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         ["input.dng", "output.jpg"]
@@ -1293,40 +1293,72 @@ def test_parse_run_options_auto_ev_defaults_and_override_behavior(capsys) -> Non
         ["input.dng", "output.jpg", "--auto-ev=disable"]
     )
     assert parsed_disabled_without_ev is None
+    captured = capsys.readouterr()
+    assert "No exposure mode selected: provide --ev or --auto-ev enable." in captured.err
 
-    parsed_override = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+
+def test_parse_run_options_rejects_auto_ev_with_static_ev(capsys) -> None:
+    """`--auto-ev` and `--ev` must be mutually exclusive."""
+
+    parsed_conflict = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         ["input.dng", "output.jpg", "--ev=1", "--auto-ev=enable"]
     )
-    assert parsed_override is not None
-    assert parsed_override[2] == 1.0
-    assert parsed_override[3] is False
+    assert parsed_conflict is None
     captured = capsys.readouterr()
-    assert "Ignoring --auto-ev because --ev is specified." in captured.out
+    assert "--auto-ev cannot be combined with --ev" in captured.err
 
 
-def test_parse_run_options_auto_zero_defaults_and_override_behavior(capsys) -> None:
-    """`--auto-zero` defaults and `--ev-zero` override must be deterministic."""
+def test_parse_run_options_static_ev_defaults_ev_zero_to_zero() -> None:
+    """Static `--ev` without `--ev-zero` must default the center to zero."""
 
-    parsed_default_auto_zero = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg"]
+    parsed_static = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--ev=1.25"]
     )
-    assert parsed_default_auto_zero is not None
-    assert parsed_default_auto_zero[13] is True
+    assert parsed_static is not None
+    assert parsed_static[2] == 1.25
+    assert parsed_static[3] is False
+    assert parsed_static[12] == 0.0
 
-    parsed_default_manual_zero = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+
+def test_parse_run_options_static_ev_preserves_manual_ev_zero() -> None:
+    """Static `--ev` with `--ev-zero` must preserve the manual center."""
+
+    parsed_static = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--ev=1.25", "--ev-zero=0.5"]
+    )
+    assert parsed_static is not None
+    assert parsed_static[2] == 1.25
+    assert parsed_static[3] is False
+    assert parsed_static[12] == 0.5
+
+
+def test_parse_run_options_rejects_ev_zero_without_ev(capsys) -> None:
+    """`--ev-zero` must require static `--ev` mode."""
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         ["input.dng", "output.jpg", "--ev-zero=0.5"]
     )
-    assert parsed_default_manual_zero is not None
-    assert parsed_default_manual_zero[12] == 0.5
-    assert parsed_default_manual_zero[13] is False
-
-    parsed_override_zero = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--ev-zero=0.5", "--auto-zero=enable"]
-    )
-    assert parsed_override_zero is not None
-    assert parsed_override_zero[13] is False
+    assert parsed is None
     captured = capsys.readouterr()
-    assert "Ignoring --auto-zero because --ev-zero is specified." in captured.out
+    assert "--ev-zero requires --ev" in captured.err
+
+
+def test_parse_run_options_rejects_removed_auto_zero_options(capsys) -> None:
+    """Removed auto-zero CLI options must fail explicitly."""
+
+    parsed_auto_zero = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--auto-zero=enable"]
+    )
+    assert parsed_auto_zero is None
+    captured = capsys.readouterr()
+    assert "Removed option: --auto-zero" in captured.err
+
+    parsed_auto_zero_pct = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--auto-zero-pct=50"]
+    )
+    assert parsed_auto_zero_pct is None
+    captured = capsys.readouterr()
+    assert "Removed option: --auto-zero-pct" in captured.err
 
 
 def test_parse_run_options_requires_explicit_auto_brightness_value() -> None:
@@ -1385,7 +1417,6 @@ def test_parse_run_options_enables_debug_flag() -> None:
             "input.dng",
             "output.jpg",
             "--ev=1",
-            "--auto-zero=disable",
             "--hdr-merge=OpenCV",
             "--debug",
         ]
@@ -1478,63 +1509,160 @@ def test_extract_dng_exif_payload_and_timestamp_reads_nested_exif_ifd_exposure_t
     assert timestamp is not None
 
 
-def test_resolve_ev_zero_selects_minimum_candidate_and_applies_percentage() -> None:
-    """Auto-zero must select the minimum candidate, scale it, and enforce safe bounds."""
+def test_optimize_joint_ev_zero_and_delta_reduces_span_vs_legacy_minimum_center() -> None:
+    """Joint auto EV must reduce span against the legacy minimum-center baseline."""
 
-    class _FakeRawHandle:
-        pass
-
-    fake_image = np.array(
-        [
-            [[0.10, 0.20, 0.30], [0.40, 0.50, 0.60]],
-            [[0.70, 0.80, 0.90], [0.25, 0.35, 0.45]],
-        ],
-        dtype=np.float32,
+    bits_per_color = 16
+    base_max_ev = dng2jpg_module._calculate_max_ev_from_bits(  # pylint: disable=protected-access
+        bits_per_color
     )
-    fake_cv2 = _FakeOpenCvModule()
-    resolved_ev_zero = dng2jpg_module._resolve_ev_zero(  # pylint: disable=protected-access
-        raw_handle=_FakeRawHandle(),
-        ev_zero=0.0,
-        auto_zero_enabled=True,
-        auto_zero_pct=50.0,
-        base_max_ev=3.0,
-        supported_ev_values_for_auto_zero=(0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0),
-        auto_zero_dependencies=(fake_cv2, np),
-        base_rgb_float=fake_image,
+    preview_stats = (0.04, 0.20, 0.60)
+    evaluations = dng2jpg_module.AutoZeroEvaluation(  # pylint: disable=protected-access
+        miglior_ev=-2.0,
+        ev_ettr=0.0,
+        ev_dettaglio=0.0,
     )
 
-    evaluations = dng2jpg_module._calculate_auto_zero_evaluations(  # pylint: disable=protected-access
-        cv2_module=fake_cv2,
-        np_module=np,
-        image_rgb_float=fake_image,
+    solution = dng2jpg_module._optimize_joint_ev_zero_and_delta(  # pylint: disable=protected-access
+        bits_per_color=bits_per_color,
+        base_max_ev=base_max_ev,
+        preview_luminance_stats=preview_stats,
+        auto_ev_pct=100.0,
+        evaluations=evaluations,
     )
-    expected_selected = min(
-        evaluations.miglior_ev,
-        evaluations.ev_ettr,
-        evaluations.ev_dettaglio,
+
+    safe_zero_max = dng2jpg_module._calculate_safe_ev_zero_max(  # pylint: disable=protected-access
+        base_max_ev
     )
-    expected_scaled = dng2jpg_module._apply_auto_percentage_scaling(  # pylint: disable=protected-access
-        max(-2.0, min(2.0, expected_selected)),
-        50.0,
+    supported_zero_values = dng2jpg_module._derive_supported_signed_ev_zero_values(  # pylint: disable=protected-access
+        base_max_ev
     )
-    assert resolved_ev_zero == expected_scaled
+    anchors = dng2jpg_module._build_joint_auto_ev_regularization_anchors(  # pylint: disable=protected-access
+        evaluations=evaluations,
+        safe_ev_zero_max=safe_zero_max,
+    )
+    legacy_center = dng2jpg_module._quantize_ev_to_supported(  # pylint: disable=protected-access
+        max(
+            -safe_zero_max,
+            min(
+                safe_zero_max,
+                min(
+                    evaluations.miglior_ev,
+                    evaluations.ev_ettr,
+                    evaluations.ev_dettaglio,
+                ),
+            ),
+        ),
+        supported_zero_values,
+    )
+    legacy_solution = dng2jpg_module._evaluate_joint_auto_ev_candidate(  # pylint: disable=protected-access
+        bits_per_color=bits_per_color,
+        ev_zero_candidate=legacy_center,
+        anchors=anchors,
+        p_low=preview_stats[0],
+        p_high=preview_stats[2],
+        auto_ev_pct=100.0,
+    )
+
+    assert solution.ev_delta < legacy_solution.ev_delta
+    assert abs(solution.ev_zero) < abs(legacy_center)
+    triplet = (
+        round(solution.ev_zero - solution.ev_delta, 2),
+        solution.ev_zero,
+        round(solution.ev_zero + solution.ev_delta, 2),
+    )
+    assert round(triplet[1] - triplet[0], 2) == solution.ev_delta
+    assert round(triplet[2] - triplet[1], 2) == solution.ev_delta
 
 
-def test_resolve_ev_zero_rejects_manual_value_outside_safe_bounds() -> None:
-    """Manual EV-zero must reject values above the bit-derived safe ceiling."""
+def test_optimize_joint_ev_zero_and_delta_uses_deterministic_tie_breaks(
+    monkeypatch,
+) -> None:
+    """Joint auto EV must prefer the lower numeric center on a full tie."""
 
-    class _FakeRawHandle:
-        pass
+    evaluations = dng2jpg_module.AutoZeroEvaluation(  # pylint: disable=protected-access
+        miglior_ev=0.0,
+        ev_ettr=0.0,
+        ev_dettaglio=0.0,
+    )
 
-    with np.testing.assert_raises(ValueError):
-        dng2jpg_module._resolve_ev_zero(  # pylint: disable=protected-access
-            raw_handle=_FakeRawHandle(),
-            ev_zero=2.25,
-            auto_zero_enabled=False,
-            auto_zero_pct=100.0,
-            base_max_ev=3.0,
-            supported_ev_values_for_auto_zero=(0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0),
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_derive_supported_signed_ev_zero_values",
+        lambda _base_max_ev: (-0.25, 0.25),
+    )
+
+    def _fake_evaluate_candidate(  # pylint: disable=protected-access
+        *,
+        bits_per_color,
+        ev_zero_candidate,
+        anchors,
+        p_low,
+        p_high,
+        auto_ev_pct,
+    ):
+        del bits_per_color, anchors, p_low, p_high, auto_ev_pct
+        return dng2jpg_module.JointAutoEvSolution(
+            ev_zero=ev_zero_candidate,
+            ev_delta=0.25,
+            required_delta=0.25,
+            shadow_need=0.0,
+            highlight_need=0.0,
+            uncovered_shadow=0.0,
+            uncovered_highlight=0.0,
+            zero_reg=0.25,
+            score=1.0,
+            anchors=(0.0, 0.0, 0.0),
         )
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_evaluate_joint_auto_ev_candidate",
+        _fake_evaluate_candidate,
+    )
+
+    solution = dng2jpg_module._optimize_joint_ev_zero_and_delta(  # pylint: disable=protected-access
+        bits_per_color=16,
+        base_max_ev=4.0,
+        preview_luminance_stats=(0.05, 0.5, 0.9),
+        auto_ev_pct=100.0,
+        evaluations=evaluations,
+    )
+
+    assert solution.ev_zero == -0.25
+
+
+def test_optimize_joint_ev_zero_and_delta_applies_auto_ev_pct_scaling() -> None:
+    """`--auto-ev-pct` must reduce the effective automatic bracket delta."""
+
+    evaluations = dng2jpg_module.AutoZeroEvaluation(  # pylint: disable=protected-access
+        miglior_ev=0.0,
+        ev_ettr=0.0,
+        ev_dettaglio=0.0,
+    )
+    preview_stats = (0.01, 0.2, 0.89)
+
+    full_solution = dng2jpg_module._optimize_joint_ev_zero_and_delta(  # pylint: disable=protected-access
+        bits_per_color=16,
+        base_max_ev=4.0,
+        preview_luminance_stats=preview_stats,
+        auto_ev_pct=100.0,
+        evaluations=evaluations,
+    )
+    scaled_solution = dng2jpg_module._optimize_joint_ev_zero_and_delta(  # pylint: disable=protected-access
+        bits_per_color=16,
+        base_max_ev=4.0,
+        preview_luminance_stats=preview_stats,
+        auto_ev_pct=50.0,
+        evaluations=evaluations,
+    )
+
+    assert scaled_solution.ev_delta < full_solution.ev_delta
+    assert scaled_solution.required_delta >= scaled_solution.ev_delta
+    assert (
+        scaled_solution.uncovered_shadow + scaled_solution.uncovered_highlight
+        >= full_solution.uncovered_shadow + full_solution.uncovered_highlight
+    )
 
 
 def test_run_opencv_hdr_merge_keeps_mertens_inputs_as_float32() -> None:
@@ -2653,7 +2781,6 @@ def test_run_debug_writes_extraction_and_merge_checkpoints(monkeypatch, tmp_path
             str(input_dng),
             str(output_jpg),
             "--ev=1",
-            "--auto-zero=disable",
             "--hdr-merge=OpenCV",
             "--debug",
         ]
@@ -2668,8 +2795,8 @@ def test_run_debug_writes_extraction_and_merge_checkpoints(monkeypatch, tmp_path
     ]
 
 
-def test_run_auto_zero_prints_candidate_diagnostics(monkeypatch, tmp_path, capsys) -> None:
-    """Auto-zero runtime must print all candidate evaluations and the selection."""
+def test_run_auto_ev_prints_joint_candidate_diagnostics(monkeypatch, tmp_path, capsys) -> None:
+    """Automatic runtime must print heuristic anchors and the selected joint solution."""
 
     input_dng = tmp_path / "scene.dng"
     input_dng.write_bytes(b"fake-dng")
@@ -2746,19 +2873,116 @@ def test_run_auto_zero_prints_candidate_diagnostics(monkeypatch, tmp_path, capsy
         [
             str(input_dng),
             str(output_jpg),
-            "--auto-zero=enable",
-            "--auto-zero-pct=100",
-            "--ev=1",
+            "--auto-ev=enable",
             "--hdr-merge=OpenCV",
         ]
     )
 
     assert exit_code == 0
     output = capsys.readouterr().out
-    assert "Auto-zero candidate miglior_ev:" in output
-    assert "Auto-zero candidate ev_ettr:" in output
-    assert "Auto-zero candidate ev_dettaglio:" in output
-    assert "Auto-zero selected EV:" in output
+    assert "Using exposure mode: auto" in output
+    assert "Auto-EV heuristic miglior_ev:" in output
+    assert "Auto-EV heuristic ev_ettr:" in output
+    assert "Auto-EV heuristic ev_dettaglio:" in output
+    assert "Auto-EV regularization anchors:" in output
+    assert "Auto-EV selected joint solution:" in output
+    assert "Export EV triplet:" in output
+
+
+def test_run_static_ev_uses_manual_center_and_reports_static_mode(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    """Static runtime must preserve manual center and avoid automatic diagnostics."""
+
+    input_dng = tmp_path / "scene.dng"
+    input_dng.write_bytes(b"fake-dng")
+    output_jpg = tmp_path / "scene.jpg"
+    raw_pixels = np.array(
+        [
+            [[1000, 2000, 3000], [4000, 5000, 6000]],
+            [[7000, 8000, 9000], [10000, 11000, 12000]],
+        ],
+        dtype=np.uint16,
+    )
+
+    class _FakeRawHandle:
+        def __init__(self) -> None:
+            self.raw_image_visible = np.zeros((2, 2), dtype=np.uint16)
+            self.white_level = int(16383)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            del exc_type, exc, tb
+
+        def postprocess(
+            self,
+            *,
+            bright,
+            output_bps,
+            use_camera_wb,
+            no_auto_bright,
+            gamma,
+            user_flip,
+        ) -> np.ndarray:
+            del output_bps, use_camera_wb, no_auto_bright, gamma, user_flip
+            return np.clip(raw_pixels.astype(np.float32) * float(bright), 0.0, 65535.0).astype(
+                np.uint16
+            )
+
+    class _FakeRawPyModule:
+        LibRawError = RuntimeError
+
+        @staticmethod
+        def imread(_path: str) -> _FakeRawHandle:
+            return _FakeRawHandle()
+
+    fake_imageio_module = _FakeImageIoModule(
+        merged_rgb_u16=np.full((2, 2, 3), 32768, dtype=np.uint16)
+    )
+    fake_pil_module = _FakePilModule()
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_load_image_dependencies",
+        lambda: (_FakeRawPyModule(), fake_imageio_module, fake_pil_module),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_extract_dng_exif_payload_and_timestamp",
+        lambda **_kwargs: (None, None, 1, 0.125),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_resolve_auto_adjust_dependencies",
+        lambda: (_FakeOpenCvModule(), np),
+    )
+    monkeypatch.setattr(dng2jpg_module, "_encode_jpg", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_sync_output_file_timestamps_from_exif",
+        lambda **_kwargs: None,
+    )
+
+    exit_code = dng2jpg_module.run(
+        [
+            str(input_dng),
+            str(output_jpg),
+            "--ev=1",
+            "--ev-zero=0.5",
+            "--hdr-merge=OpenCV",
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "Using exposure mode: static" in output
+    assert "Using static EV center (ev_zero): 0.5" in output
+    assert "Using EV bracket delta: 1 (static)" in output
+    assert "Auto-EV heuristic" not in output
 def test_run_opencv_hdr_merge_requires_exif_exposure_time_for_radiance_modes() -> None:
     """OpenCV radiance modes must reject missing EXIF exposure time."""
 
