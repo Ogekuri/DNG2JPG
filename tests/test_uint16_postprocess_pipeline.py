@@ -1667,8 +1667,8 @@ def test_parse_run_options_rejects_invalid_opencv_controls() -> None:
     assert invalid_coupling is None
 
 
-def test_run_opencv_hdr_merge_dispatches_debevec_direct_float_path_with_tonemap() -> None:
-    """OpenCV merge must dispatch Debevec direct merge on linear float data."""
+def test_run_opencv_hdr_merge_dispatches_debevec_uint8_radiance_path_with_tonemap() -> None:
+    """OpenCV Debevec radiance path must quantize locally and return float output."""
 
     fake_cv2 = _FakeOpenCvModule()
     bracket_images_float = [
@@ -1694,21 +1694,26 @@ def test_run_opencv_hdr_merge_dispatches_debevec_direct_float_path_with_tonemap(
     assert fake_cv2.merge_debevec.last_inputs is not None
     assert fake_cv2.merge_robertson.last_inputs is None
     assert fake_cv2.last_tonemap is not None
+    assert all(
+        frame.dtype == np.uint8 for frame in fake_cv2.calibrate_debevec.last_inputs
+    )
     np.testing.assert_allclose(
         fake_cv2.merge_debevec.last_times,
         np.array([0.17677669, 0.35355338, 0.70710677], dtype=np.float32),
         rtol=1e-6,
         atol=1e-6,
     )
+    np.testing.assert_array_equal(
+        fake_cv2.calibrate_debevec.last_inputs[1],
+        np.full((1, 2, 3), 128, dtype=np.uint8),
+    )
     assert fake_cv2.merge_debevec.last_response is not None
     assert all(
-        frame.dtype == np.float32 for frame in fake_cv2.merge_debevec.last_inputs
+        frame.dtype == np.uint8 for frame in fake_cv2.merge_debevec.last_inputs
     )
-    np.testing.assert_allclose(
+    np.testing.assert_array_equal(
         fake_cv2.merge_debevec.last_inputs[1],
-        np.full((1, 2, 3), 0.5, dtype=np.float32),
-        rtol=1e-6,
-        atol=1e-6,
+        np.full((1, 2, 3), 128, dtype=np.uint8),
     )
     assert fake_cv2.last_tonemap.gamma == 2.2
     assert output.dtype == np.float32
@@ -1716,8 +1721,8 @@ def test_run_opencv_hdr_merge_dispatches_debevec_direct_float_path_with_tonemap(
     assert float(np.max(output)) <= 1.0
 
 
-def test_run_opencv_hdr_merge_dispatches_robertson_direct_float_path() -> None:
-    """OpenCV merge must dispatch Robertson direct merge on float data."""
+def test_run_opencv_hdr_merge_dispatches_robertson_uint8_radiance_path() -> None:
+    """OpenCV Robertson radiance path must quantize locally and return float output."""
 
     fake_cv2 = _FakeOpenCvModule()
     bracket_images_float = [
@@ -1744,15 +1749,26 @@ def test_run_opencv_hdr_merge_dispatches_robertson_direct_float_path() -> None:
     assert fake_cv2.merge_robertson.last_inputs is not None
     assert fake_cv2.merge_debevec.last_inputs is None
     assert fake_cv2.last_tonemap is None
+    assert all(
+        frame.dtype == np.uint8 for frame in fake_cv2.calibrate_robertson.last_inputs
+    )
     np.testing.assert_allclose(
         fake_cv2.merge_robertson.last_times,
         np.array([0.0625, 0.08838835, 0.125], dtype=np.float32),
         rtol=1e-6,
         atol=1e-6,
     )
+    np.testing.assert_array_equal(
+        fake_cv2.calibrate_robertson.last_inputs[1],
+        np.full((1, 1, 3), 102, dtype=np.uint8),
+    )
     assert fake_cv2.merge_robertson.last_response is not None
     assert all(
-        frame.dtype == np.float32 for frame in fake_cv2.merge_robertson.last_inputs
+        frame.dtype == np.uint8 for frame in fake_cv2.merge_robertson.last_inputs
+    )
+    np.testing.assert_array_equal(
+        fake_cv2.merge_robertson.last_inputs[1],
+        np.full((1, 1, 3), 102, dtype=np.uint8),
     )
     assert output.dtype == np.float32
     assert float(np.min(output)) >= 0.0
@@ -1867,7 +1883,7 @@ def test_parse_run_options_accepts_gamma_for_compatibility() -> None:
 
 
 def test_run_opencv_hdr_merge_ignores_gamma_value_for_linear_inputs() -> None:
-    """OpenCV radiance merge must ignore parsed RAW gamma once brackets are linear."""
+    """OpenCV radiance merge must ignore gamma while using backend-local uint8 payloads."""
 
     fake_cv2 = _FakeOpenCvModule()
     bracket_images_float = [
@@ -1890,17 +1906,22 @@ def test_run_opencv_hdr_merge_ignores_gamma_value_for_linear_inputs() -> None:
     )
 
     assert fake_cv2.merge_robertson.last_inputs is not None
-    np.testing.assert_allclose(
+    assert fake_cv2.calibrate_robertson.last_inputs is not None
+    np.testing.assert_array_equal(
         fake_cv2.merge_robertson.last_inputs[0],
-        bracket_images_float[0],
-        rtol=1e-6,
-        atol=1e-6,
+        np.full((1, 1, 3), 51, dtype=np.uint8),
     )
-    np.testing.assert_allclose(
+    np.testing.assert_array_equal(
         fake_cv2.merge_robertson.last_inputs[1],
-        bracket_images_float[1],
-        rtol=1e-6,
-        atol=1e-6,
+        np.full((1, 1, 3), 102, dtype=np.uint8),
+    )
+    np.testing.assert_array_equal(
+        fake_cv2.calibrate_robertson.last_inputs[0],
+        fake_cv2.merge_robertson.last_inputs[0],
+    )
+    np.testing.assert_array_equal(
+        fake_cv2.calibrate_robertson.last_inputs[1],
+        fake_cv2.merge_robertson.last_inputs[1],
     )
 
 

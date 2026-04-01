@@ -228,10 +228,11 @@
         - `_run_opencv_merge_mertens(...)`: execute OpenCV exposure fusion path on normalized float brackets [`src/dng2jpg/dng2jpg.py`]
           - `cv2.createMergeMertens().process(...)`: run Mertens fusion on normalized RGB float bracket tensors (external boundary)
           - `_normalize_opencv_hdr_to_unit_range(...)`: normalize OpenCV fusion output to repository RGB float contract [`src/dng2jpg/dng2jpg.py`]
-        - `_run_opencv_merge_radiance(...)`: execute Debevec or Robertson radiance path on the shared linear bracket contract with calibrated inverse response and optional simple tone mapping [`src/dng2jpg/dng2jpg.py`]
-          - `_estimate_opencv_camera_response(...)`: estimate inverse camera response with the OpenCV calibrator matching the selected radiance algorithm [`src/dng2jpg/dng2jpg.py`]
-          - `cv2.createMergeDebevec().process(...)`: merge Debevec HDR radiance from linear RGB float brackets with `times` and calibrated `response` (external boundary)
-          - `cv2.createMergeRobertson().process(...)`: merge Robertson HDR radiance from linear RGB float brackets with `times` and calibrated `response` (external boundary)
+      - `_run_opencv_merge_radiance(...)`: execute Debevec or Robertson radiance path by quantizing the shared linear bracket contract only inside the backend step, then normalize the merged result back to repository RGB float output [`src/dng2jpg/dng2jpg.py`]
+          - `_to_uint8_image_array(...)`: derive backend-local `uint8` bracket payloads required by the calibrated OpenCV radiance path [`src/dng2jpg/dng2jpg.py`]
+          - `_estimate_opencv_camera_response(...)`: estimate inverse camera response with the OpenCV calibrator matching the selected radiance algorithm from backend-local `uint8` brackets [`src/dng2jpg/dng2jpg.py`]
+          - `cv2.createMergeDebevec().process(...)`: merge Debevec HDR radiance from backend-local `uint8` brackets with `times` and calibrated `response` (external boundary)
+          - `cv2.createMergeRobertson().process(...)`: merge Robertson HDR radiance from backend-local `uint8` brackets with `times` and calibrated `response` (external boundary)
           - `cv2.createTonemap(...).process(...)`: apply simple gamma tone mapping for radiance paths when enabled (external boundary)
           - `_normalize_opencv_hdr_to_unit_range(...)`: normalize radiance or tone-mapped output to repository RGB float contract [`src/dng2jpg/dng2jpg.py`]
         - `_normalize_debevec_hdr_to_unit_range(...)`: compatibility wrapper preserving legacy helper name while delegating to unified OpenCV normalization [`src/dng2jpg/dng2jpg.py`]

@@ -4706,17 +4706,21 @@ def _run_opencv_merge_mertens(cv2_module, np_module, exposures_float):
 
 def _estimate_opencv_camera_response(
     cv2_module,
-    exposures_linear_float,
+    exposures_radiance_uint8,
     exposure_times,
     merge_algorithm,
 ):
     """@brief Estimate OpenCV inverse camera response for Debevec or Robertson radiance merge.
 
     @details Selects the OpenCV calibrator matching the requested radiance merge
-    algorithm and computes one inverse camera response tensor from the same
-    linear float brackets and exposure times used by the merge stage.
+    algorithm and computes one inverse camera response tensor from backend-local
+    `uint8` bracket views derived from the shared linear float contract by the
+    caller. This preserves the repository-wide RGB float `[0,1]` interface
+    while satisfying the OpenCV radiance path requirement for `CV_8U`
+    calibrator inputs. Time complexity: `O(n*p)` where `n` is bracket count and
+    `p` is pixels per bracket. Side effects: none.
     @param cv2_module {ModuleType} Imported OpenCV module.
-    @param exposures_linear_float {list[object]} Ordered linear RGB float bracket tensors.
+    @param exposures_radiance_uint8 {list[object]} Ordered backend-local RGB `uint8` bracket tensors.
     @param exposure_times {object} OpenCV exposure-time vector.
     @param merge_algorithm {str} Canonical OpenCV merge algorithm token.
     @return {object} OpenCV response tensor compatible with Debevec/Robertson merge calls.
@@ -4730,7 +4734,7 @@ def _estimate_opencv_camera_response(
         calibrator = cv2_module.createCalibrateRobertson()
     else:
         raise RuntimeError(f"Unsupported OpenCV merge algorithm: {merge_algorithm}")
-    return calibrator.process(exposures_linear_float, times=exposure_times)
+    return calibrator.process(exposures_radiance_uint8, times=exposure_times)
 
 
 def _run_opencv_merge_radiance(
@@ -4746,9 +4750,14 @@ def _run_opencv_merge_radiance(
 
     @details Follows the OpenCV tutorial flow by estimating inverse camera
     response with the matching `CalibrateDebevec` or `CalibrateRobertson`
-    implementation before `MergeDebevec` or `MergeRobertson`, then applies
-    simple OpenCV gamma tone mapping when enabled; otherwise normalizes the
-    radiance map directly to the repository RGB float contract.
+    implementation before `MergeDebevec` or `MergeRobertson`. OpenCV requires
+    the radiance path to consume backend-local `uint8` bracket payloads when
+    calibrated `response` is supplied, so this helper quantizes the shared
+    linear float brackets only inside the backend step, preserving float
+    repository interfaces at entry and exit. Then it applies simple OpenCV
+    gamma tone mapping when enabled; otherwise normalizes the radiance map
+    directly to the repository RGB float contract. Time complexity: `O(n*p)`.
+    Side effects: none.
     @param cv2_module {ModuleType} Imported OpenCV module.
     @param np_module {ModuleType} Imported numpy module.
     @param exposures_linear_float {list[object]} Ordered linear RGB float bracket tensors.
@@ -4761,21 +4770,28 @@ def _run_opencv_merge_radiance(
     @satisfies REQ-108, REQ-109, REQ-110, REQ-143, REQ-144, REQ-152, REQ-153, REQ-162
     """
 
+    exposures_radiance_uint8 = [
+        _to_uint8_image_array(
+            np_module=np_module,
+            image_data=exposure_linear_float,
+        )
+        for exposure_linear_float in exposures_linear_float
+    ]
     response = _estimate_opencv_camera_response(
         cv2_module=cv2_module,
-        exposures_linear_float=exposures_linear_float,
+        exposures_radiance_uint8=exposures_radiance_uint8,
         exposure_times=exposure_times,
         merge_algorithm=merge_algorithm,
     )
     if merge_algorithm == OPENCV_MERGE_ALGORITHM_DEBEVEC:
         hdr_rgb = cv2_module.createMergeDebevec().process(
-            exposures_linear_float,
+            exposures_radiance_uint8,
             times=exposure_times,
             response=response,
         )
     elif merge_algorithm == OPENCV_MERGE_ALGORITHM_ROBERTSON:
         hdr_rgb = cv2_module.createMergeRobertson().process(
-            exposures_linear_float,
+            exposures_radiance_uint8,
             times=exposure_times,
             response=response,
         )
