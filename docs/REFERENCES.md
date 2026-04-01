@@ -137,7 +137,7 @@ import subprocess
 
 ---
 
-# dng2jpg.py | Python | 10323L | 311 symbols | 24 imports | 216 comments
+# dng2jpg.py | Python | 10458L | 312 symbols | 24 imports | 217 comments
 > Path: `src/dng2jpg/dng2jpg.py`
 
 ## Imports
@@ -1987,13 +1987,15 @@ keeping the surrounding pipeline in normalized float arrays.
 
 ### fn `def _apply_auto_levels_tonal_transform_float(` `priv` (L8345-8348)
 
-### fn `def _auto_levels_has_full_tone_metrics(auto_levels_metrics)` `priv` (L8439-8462)
+### fn `def _auto_levels_has_full_tone_metrics(auto_levels_metrics)` `priv` (L8432-8455)
 - @brief Apply RawTherapee-equivalent auto-levels tonal transformation.
 - @brief Check whether auto-levels metrics support full tone processing.
 - @details Executes the float-domain port of RawTherapee auto-levels tone
 processing in the same stage order as `rgbProc(...)`: highlight curve,
 shadow curve, then output tonecurve. Exposure scaling is carried by the
-highlight curve baseline instead of a separate gain-only multiply.
+highlight curve baseline instead of a separate gain-only multiply. Mixed
+overflow pixels remain on the RawTherapee per-channel path; the function
+does not bypass tone mapping for partially out-of-gamut triplets.
 - @details Verifies the presence of the full RawTherapee-compatible metric set consumed by `_apply_auto_levels_tonal_transform_float(...)`. Legacy tests may monkeypatch `_compute_auto_levels_from_histogram(...)` with partial dictionaries containing only `gain`; such patched metrics must keep the historical gain-only fallback path.
 - @param np_module {ModuleType} Imported numpy module.
 - @param image_rgb_float {object} Normalized RGB float tensor.
@@ -2004,9 +2006,9 @@ highlight curve baseline instead of a separate gain-only multiply.
 - @satisfies REQ-100, REQ-119
 - @satisfies REQ-100, REQ-119
 
-### fn `def _call_auto_levels_compat_helper(` `priv` (L8463-8468)
+### fn `def _call_auto_levels_compat_helper(` `priv` (L8456-8461)
 
-### fn `def _apply_auto_levels_float(np_module, image_rgb_float, auto_levels_options)` `priv` (L8512-8618)
+### fn `def _apply_auto_levels_float(np_module, image_rgb_float, auto_levels_options)` `priv` (L8505-8611)
 - @brief Invoke float-native helper while honoring patched legacy aliases.
 - @brief Apply auto-levels stage on RGB float tensor.
 - @details Selects the float-native helper for normal execution. If a legacy
@@ -2016,7 +2018,7 @@ delegates to the patched callable, and maps the returned tensor back to
 normalized scale. This preserves deterministic legacy unit-test hooks
 without reintroducing code-domain math into the production auto-levels
 pipeline.
-- @details Executes RawTherapee-compatible histogram analysis on a normalized RGB float tensor, applies the full float-domain tonal transformation driven by exposure, black, brightness, contrast, and highlight-compression metrics, conditionally runs float-native highlight reconstruction, and optionally normalizes overflowing RGB triplets back into gamut without any production uint16 staging buffers.
+- @details Executes RawTherapee-compatible histogram analysis on a normalized RGB float tensor, applies the full float-domain tonal transformation driven by exposure, black, brightness, contrast, and highlight-compression metrics, conditionally runs float-native highlight reconstruction, and optionally clips overflowing RGB triplets with RawTherapee film-like gamut logic without any production uint16 staging buffers.
 - @param np_module {ModuleType} Imported numpy module.
 - @param primary_callable {object} Float-native helper callable.
 - @param legacy_name {str} Legacy module attribute name.
@@ -2030,18 +2032,38 @@ pipeline.
 - @satisfies REQ-100, REQ-102, REQ-119, REQ-120
 - @satisfies REQ-100, REQ-101, REQ-102, REQ-119, REQ-120, REQ-165
 
-### fn `def _clip_auto_levels_out_of_gamut_float(np_module, image_rgb, maxval=1.0)` `priv` (L8619-8637)
-- @brief Normalize overflowing RGB triplets back into normalized gamut.
-- @details Computes per-pixel maximum channel value, derives one scale factor for overflowing pixels, and preserves RGB ratios while bounding the triplet to `maxval`.
+### fn `def _clip_auto_levels_out_of_gamut_float(np_module, image_rgb, maxval=1.0)` `priv` (L8612-8772)
+- @brief Clip overflowing RGB triplets with RawTherapee film-like gamut logic.
+- @details Ports RawTherapee `filmlike_clip(...)` to normalized float space. Negative channels are clamped to `0` first. Overflowing triplets then use the Adobe-style hue-stable diagonal clipping family instead of isotropic normalization so dominant-channel ordering and cross-channel interpolation follow RawTherapee semantics.
 - @param np_module {ModuleType} Imported numpy module.
 - @param image_rgb {object} RGB float tensor on normalized scale.
 - @param maxval {float} Maximum allowed channel value.
 - @return {object} RGB float tensor with no channel above `maxval`.
-- @satisfies REQ-120
+- @satisfies REQ-165
 
-### fn `def _clip_auto_levels_out_of_gamut_uint16(` `priv` (L8638-8639)
+### fn `def _filmlike_clip_rgb_tone(primary, middle, lower)` `priv` (L8642-8675)
+- @brief Clip overflowing RGB triplets with RawTherapee film-like gamut logic.
+- @brief Apply one ordered RawTherapee diagonal gamut clip branch.
+- @details Ports RawTherapee `filmlike_clip(...)` to normalized float space.
+Negative channels are clamped to `0` first. Overflowing triplets then use
+the Adobe-style hue-stable diagonal clipping family instead of isotropic
+normalization so dominant-channel ordering and cross-channel interpolation
+follow RawTherapee semantics.
+- @details Clamps the dominant and lower channels to `maxval`, then reconstructs the middle channel by linearly interpolating across the unclipped diagonal exactly like RawTherapee `filmlike_clip_rgb_tone`. Division-by-zero only occurs on degenerate equal-channel cases that are dispatched away by the branch predicates, but one safe fallback is kept for deterministic vectorized execution.
+- @param np_module {ModuleType} Imported numpy module.
+- @param image_rgb {object} RGB float tensor on normalized scale.
+- @param maxval {float} Maximum allowed channel value.
+- @param primary {object} Dominant-channel tensor for one branch.
+- @param middle {object} Middle-ranked channel tensor for one branch.
+- @param lower {object} Lowest-ranked channel tensor for one branch.
+- @return {object} RGB float tensor with no channel above `maxval`.
+- @return {tuple[object, object, object]} Branch-clipped `(primary, middle, lower)` tensors.
+- @satisfies REQ-165
+- @satisfies REQ-165
 
-### fn `def _hlrecovery_luminance_float(np_module, image_rgb, maxval=1.0)` `priv` (L8669-8715)
+### fn `def _clip_auto_levels_out_of_gamut_uint16(` `priv` (L8773-8774)
+
+### fn `def _hlrecovery_luminance_float(np_module, image_rgb, maxval=1.0)` `priv` (L8804-8850)
 - @brief Compatibility adapter for the legacy gamut-clip helper name.
 - @brief Apply Luminance highlight reconstruction on normalized RGB tensor.
 - @details Converts legacy code-domain float tensors to normalized scale,
@@ -2058,10 +2080,10 @@ internal references and deterministic legacy unit-test hooks.
 - @return {object} RGB float tensor on legacy code scale.
 - @return {object} Highlight-reconstructed RGB float tensor.
 - @deprecated Use `_clip_auto_levels_out_of_gamut_float`.
-- @satisfies REQ-120
+- @satisfies REQ-165
 - @satisfies REQ-102
 
-### fn `def _hlrecovery_luminance_uint16(np_module, image_rgb, maxval=_AUTO_LEVELS_CODE_MAX)` `priv` (L8716-8744)
+### fn `def _hlrecovery_luminance_uint16(np_module, image_rgb, maxval=_AUTO_LEVELS_CODE_MAX)` `priv` (L8851-8879)
 - @brief Compatibility adapter for legacy luminance recovery helper name.
 - @details Converts legacy code-domain float tensors to normalized scale, delegates to `_hlrecovery_luminance_float(...)`, and rescales the result back to legacy code units. This shim exists only for transitional internal references and deterministic legacy unit-test hooks.
 - @param np_module {ModuleType} Imported numpy module.
@@ -2071,9 +2093,9 @@ internal references and deterministic legacy unit-test hooks.
 - @deprecated Use `_hlrecovery_luminance_float`.
 - @satisfies REQ-102
 
-### fn `def _hlrecovery_cielab_float(` `priv` (L8745-8746)
+### fn `def _hlrecovery_cielab_float(` `priv` (L8880-8881)
 
-### fn `def _f_lab(values)` `priv` (L8779-8786)
+### fn `def _f_lab(values)` `priv` (L8914-8921)
 - @brief Apply CIELab blending highlight reconstruction on RGB tensor.
 - @details Ports CIELab blending method from attached source with Lab-space
 channel repair under clipped highlights.
@@ -2085,11 +2107,11 @@ channel repair under clipped highlights.
 - @return {object} Highlight-reconstructed RGB float tensor.
 - @satisfies REQ-102
 
-### fn `def _f2xyz(values)` `priv` (L8787-8793)
+### fn `def _f2xyz(values)` `priv` (L8922-8928)
 
-### fn `def _hlrecovery_cielab_uint16(` `priv` (L8829-8830)
+### fn `def _hlrecovery_cielab_uint16(` `priv` (L8964-8965)
 
-### fn `def _hlrecovery_blend_float(np_module, image_rgb, hlmax, maxval=1.0)` `priv` (L8864-8969)
+### fn `def _hlrecovery_blend_float(np_module, image_rgb, hlmax, maxval=1.0)` `priv` (L8999-9104)
 - @brief Compatibility adapter for legacy CIELab helper name.
 - @brief Apply Blend highlight reconstruction on RGB tensor.
 - @details Converts legacy code-domain float tensors to normalized scale,
@@ -2112,9 +2134,9 @@ references and deterministic legacy unit-test hooks.
 - @satisfies REQ-102
 - @satisfies REQ-102
 
-### fn `def _hlrecovery_blend_uint16(` `priv` (L8970-8971)
+### fn `def _hlrecovery_blend_uint16(` `priv` (L9105-9106)
 
-### fn `def _dilate_mask_float(np_module, mask)` `priv` (L9006-9028)
+### fn `def _dilate_mask_float(np_module, mask)` `priv` (L9141-9163)
 - @brief Compatibility adapter for legacy Blend helper name.
 - @brief Expand one boolean mask by one Chebyshev pixel.
 - @details Converts legacy code-domain float tensors to normalized scale,
@@ -2134,7 +2156,7 @@ references and deterministic legacy unit-test hooks.
 - @satisfies REQ-102
 - @satisfies REQ-119
 
-### fn `def _box_mean_3x3_float(np_module, image_2d)` `priv` (L9029-9052)
+### fn `def _box_mean_3x3_float(np_module, image_2d)` `priv` (L9164-9187)
 - @brief Compute one deterministic `3x3` box mean over a 2D float tensor.
 - @details Uses edge padding and exact neighborhood averaging to approximate RawTherapee local neighborhood probes needed by RGB-space color-propagation and inpaint-opposed highlight reconstruction.
 - @param np_module {ModuleType} Imported numpy module.
@@ -2142,7 +2164,7 @@ references and deterministic legacy unit-test hooks.
 - @return {object} Float tensor with shape `H,W`.
 - @satisfies REQ-119
 
-### fn `def _hlrecovery_color_propagation_float(np_module, image_rgb, maxval=1.0)` `priv` (L9053-9097)
+### fn `def _hlrecovery_color_propagation_float(np_module, image_rgb, maxval=1.0)` `priv` (L9188-9232)
 - @brief Apply Color Propagation highlight reconstruction on RGB tensor.
 - @details Approximates RawTherapee `Color` recovery in post-merge RGB space: detect clipped channel regions, estimate one local opposite-channel reference from `3x3` means, derive one border chrominance offset, and fill clipped samples deterministically.
 - @param np_module {ModuleType} Imported numpy module.
@@ -2151,9 +2173,9 @@ references and deterministic legacy unit-test hooks.
 - @return {object} Highlight-reconstructed RGB float tensor.
 - @satisfies REQ-102, REQ-119
 
-### fn `def _hlrecovery_color_propagation_uint16(` `priv` (L9098-9099)
+### fn `def _hlrecovery_color_propagation_uint16(` `priv` (L9233-9234)
 
-### fn `def _hlrecovery_inpaint_opposed_float(` `priv` (L9129-9130)
+### fn `def _hlrecovery_inpaint_opposed_float(` `priv` (L9264-9265)
 - @brief Compatibility adapter for legacy Color Propagation helper name.
 - @details Converts legacy code-domain float tensors to normalized scale,
 delegates to `_hlrecovery_color_propagation_float(...)`, and rescales the
@@ -2166,7 +2188,7 @@ internal references and deterministic legacy unit-test hooks.
 - @deprecated Use `_hlrecovery_color_propagation_float`.
 - @satisfies REQ-102, REQ-119
 
-### fn `def _hlrecovery_inpaint_opposed_uint16(` `priv` (L9183-9184)
+### fn `def _hlrecovery_inpaint_opposed_uint16(` `priv` (L9318-9319)
 - @brief Apply Inpaint Opposed highlight reconstruction on RGB tensor.
 - @details Approximates RawTherapee `Coloropp` recovery in post-merge RGB
 space: derive the RawTherapee clip threshold from `gain_threshold`,
@@ -2180,7 +2202,7 @@ threshold.
 - @return {object} Highlight-reconstructed RGB float tensor.
 - @satisfies REQ-102, REQ-119
 
-### fn `def _apply_auto_brightness_rgb_float(` `priv` (L9226-9229)
+### fn `def _apply_auto_brightness_rgb_float(` `priv` (L9361-9364)
 - @brief Compatibility adapter for legacy Inpaint Opposed helper name.
 - @details Converts legacy code-domain float tensors to normalized scale,
 delegates to `_hlrecovery_inpaint_opposed_float(...)`, and rescales the
@@ -2194,7 +2216,7 @@ internal references and deterministic legacy unit-test hooks.
 - @deprecated Use `_hlrecovery_inpaint_opposed_float`.
 - @satisfies REQ-102, REQ-119
 
-### fn `def _clamp01(np_module, values)` `priv` (L9286-9299)
+### fn `def _clamp01(np_module, values)` `priv` (L9421-9434)
 - @brief Apply original photographic auto-brightness flow on RGB float tensor.
 - @brief Clamp numeric image tensor values into `[0.0, 1.0]` interval.
 - @details Executes `/tmp/auto-brightness.py` step order over normalized RGB
@@ -2214,7 +2236,7 @@ linear RGB pixels, then re-encode to sRGB without any CLAHE substep.
 - @satisfies REQ-050, REQ-103, REQ-104, REQ-105, REQ-121, REQ-122
 - @satisfies REQ-075
 
-### fn `def _gaussian_kernel_2d(np_module, sigma, radius=None)` `priv` (L9300-9322)
+### fn `def _gaussian_kernel_2d(np_module, sigma, radius=None)` `priv` (L9435-9457)
 - @brief Build normalized 2D Gaussian kernel.
 - @details Creates deterministic Gaussian kernel used by selective blur stage; returns identity kernel when `sigma <= 0`.
 - @param np_module {ModuleType} Imported numpy module.
@@ -2223,7 +2245,7 @@ linear RGB pixels, then re-encode to sRGB without any CLAHE substep.
 - @return {object} Normalized 2D kernel tensor.
 - @satisfies REQ-075
 
-### fn `def _rgb_to_hsl(np_module, rgb)` `priv` (L9323-9356)
+### fn `def _rgb_to_hsl(np_module, rgb)` `priv` (L9458-9491)
 - @brief Convert RGB float tensor to HSL channels.
 - @details Implements explicit HSL conversion for auto-adjust saturation-gamma stage without delegating to external color-space helpers.
 - @param np_module {ModuleType} Imported numpy module.
@@ -2231,7 +2253,7 @@ linear RGB pixels, then re-encode to sRGB without any CLAHE substep.
 - @return {tuple[object, object, object]} `(h, s, l)` channel tensors.
 - @satisfies REQ-075
 
-### fn `def _hue_to_rgb(np_module, p_values, q_values, t_values)` `priv` (L9357-9387)
+### fn `def _hue_to_rgb(np_module, p_values, q_values, t_values)` `priv` (L9492-9522)
 - @brief Convert one hue-shift channel to RGB component.
 - @details Evaluates piecewise hue interpolation branch used by HSL-to-RGB conversion in the auto-adjust pipeline.
 - @param np_module {ModuleType} Imported numpy module.
@@ -2241,7 +2263,7 @@ linear RGB pixels, then re-encode to sRGB without any CLAHE substep.
 - @return {object} RGB component tensor.
 - @satisfies REQ-075
 
-### fn `def _hsl_to_rgb(np_module, hue, saturation, lightness)` `priv` (L9388-9428)
+### fn `def _hsl_to_rgb(np_module, hue, saturation, lightness)` `priv` (L9523-9563)
 - @brief Convert HSL channels to RGB float tensor.
 - @details Reconstructs RGB tensor with explicit achromatic/chromatic branches for the auto-adjust saturation-gamma stage.
 - @param np_module {ModuleType} Imported numpy module.
@@ -2251,9 +2273,9 @@ linear RGB pixels, then re-encode to sRGB without any CLAHE substep.
 - @return {object} RGB tensor in `[0.0, 1.0]`.
 - @satisfies REQ-075
 
-### fn `def _selective_blur_contrast_gated_vectorized(` `priv` (L9429-9430)
+### fn `def _selective_blur_contrast_gated_vectorized(` `priv` (L9564-9565)
 
-### fn `def _level_per_channel_adaptive(np_module, rgb, low_pct=0.1, high_pct=99.9)` `priv` (L9479-9501)
+### fn `def _level_per_channel_adaptive(np_module, rgb, low_pct=0.1, high_pct=99.9)` `priv` (L9614-9636)
 - @brief Execute contrast-gated selective blur stage.
 - @brief Execute adaptive per-channel level normalization.
 - @details Applies vectorized contrast-gated neighborhood accumulation over
@@ -2272,7 +2294,7 @@ Gaussian kernel offsets to emulate selective blur behavior.
 - @satisfies REQ-075
 - @satisfies REQ-075
 
-### fn `def _sigmoidal_contrast(np_module, rgb, contrast=3.0, midpoint=0.5)` `priv` (L9502-9526)
+### fn `def _sigmoidal_contrast(np_module, rgb, contrast=3.0, midpoint=0.5)` `priv` (L9637-9661)
 - @brief Execute sigmoidal contrast stage.
 - @details Applies logistic remapping with bounded normalization for each RGB channel.
 - @param np_module {ModuleType} Imported numpy module.
@@ -2282,7 +2304,7 @@ Gaussian kernel offsets to emulate selective blur behavior.
 - @return {object} Contrast-adjusted RGB float tensor.
 - @satisfies REQ-075
 
-### fn `def logistic(z_values)` (L9517-9519)
+### fn `def logistic(z_values)` (L9652-9654)
 - @brief Execute sigmoidal contrast stage.
 - @details Applies logistic remapping with bounded normalization for each RGB
 channel.
@@ -2293,7 +2315,7 @@ channel.
 - @return {object} Contrast-adjusted RGB float tensor.
 - @satisfies REQ-075
 
-### fn `def _vibrance_hsl_gamma(np_module, rgb, saturation_gamma=0.8)` `priv` (L9527-9544)
+### fn `def _vibrance_hsl_gamma(np_module, rgb, saturation_gamma=0.8)` `priv` (L9662-9679)
 - @brief Execute HSL saturation gamma stage.
 - @details Converts RGB to HSL, applies saturation gamma transform, and converts back to RGB.
 - @param np_module {ModuleType} Imported numpy module.
@@ -2302,7 +2324,7 @@ channel.
 - @return {object} Saturation-adjusted RGB float tensor.
 - @satisfies REQ-075
 
-### fn `def _gaussian_blur_rgb(cv2_module, np_module, rgb, sigma)` `priv` (L9545-9568)
+### fn `def _gaussian_blur_rgb(cv2_module, np_module, rgb, sigma)` `priv` (L9680-9703)
 - @brief Execute RGB Gaussian blur with reflected border mode.
 - @details Computes odd kernel size from sigma and applies OpenCV Gaussian blur preserving reflected border behavior.
 - @param cv2_module {ModuleType} Imported cv2 module.
@@ -2312,7 +2334,7 @@ channel.
 - @return {object} Blurred RGB float tensor.
 - @satisfies REQ-075
 
-### fn `def _high_pass_math_gray(cv2_module, np_module, rgb, blur_sigma=2.5)` `priv` (L9569-9592)
+### fn `def _high_pass_math_gray(cv2_module, np_module, rgb, blur_sigma=2.5)` `priv` (L9704-9727)
 - @brief Execute high-pass math grayscale stage.
 - @details Computes high-pass response as `A - B + 0.5` over RGB channels and converts to luminance grayscale tensor.
 - @param cv2_module {ModuleType} Imported cv2 module.
@@ -2322,7 +2344,7 @@ channel.
 - @return {object} Grayscale float tensor in `[0.0, 1.0]`.
 - @satisfies REQ-075
 
-### fn `def _overlay_composite(np_module, base_rgb, overlay_gray)` `priv` (L9593-9614)
+### fn `def _overlay_composite(np_module, base_rgb, overlay_gray)` `priv` (L9728-9749)
 - @brief Execute overlay composite stage.
 - @details Applies conditional overlay blend equation over RGB base and grayscale overlay tensors.
 - @param np_module {ModuleType} Imported numpy module.
@@ -2331,9 +2353,9 @@ channel.
 - @return {object} Overlay-composited RGB float tensor.
 - @satisfies REQ-075
 
-### fn `def _apply_validated_auto_adjust_pipeline(` `priv` (L9615-9621)
+### fn `def _apply_validated_auto_adjust_pipeline(` `priv` (L9750-9756)
 
-### fn `def _load_piexif_dependency()` `priv` (L9730-9747)
+### fn `def _load_piexif_dependency()` `priv` (L9865-9882)
 - @brief Execute the validated auto-adjust pipeline.
 - @brief Resolve piexif runtime dependency for EXIF thumbnail refresh.
 - @details Accepts one normalized RGB float image, executes selective blur,
@@ -2353,22 +2375,22 @@ RGB float output without any file round-trip.
 - @satisfies REQ-051, REQ-075, REQ-106, REQ-123, REQ-136, REQ-137, REQ-148
 - @satisfies REQ-059, REQ-078
 
-### fn `def _encode_jpg(` `priv` (L9748-9759)
+### fn `def _encode_jpg(` `priv` (L9883-9894)
 
-### fn `def _collect_processing_errors(rawpy_module)` `priv` (L9891-9919)
+### fn `def _collect_processing_errors(rawpy_module)` `priv` (L10026-10054)
 - @brief Build deterministic tuple of recoverable processing exceptions.
 - @details Combines common IO/value/subprocess errors with rawpy-specific decoding error classes when present in runtime module version.
 - @param rawpy_module {ModuleType} Imported rawpy module.
 - @return {tuple[type[BaseException], ...]} Ordered deduplicated exception class tuple.
 - @satisfies REQ-059
 
-### fn `def _is_supported_runtime_os()` `priv` (L9920-9939)
+### fn `def _is_supported_runtime_os()` `priv` (L10055-10074)
 - @brief Validate runtime platform support for `dng2jpg`.
 - @details Accepts Linux runtime only; emits explicit non-Linux unsupported message that includes OS label (`Windows` or `MacOS`) for deterministic UX.
 - @return {bool} `True` when runtime OS is Linux; `False` otherwise.
 - @satisfies REQ-055, REQ-059
 
-### fn `def run(args)` (L9940-10139)
+### fn `def run(args)` (L10075-10274)
 - @brief Execute `dng2jpg` command pipeline.
 - @details Parses command options, validates dependencies, detects source DNG bits-per-color from RAW metadata, resolves manual or automatic EV-zero center, resolves static or adaptive EV selector around resolved center using bit-derived EV ceilings, extracts one linear HDR base image and derives three normalized RGB float brackets, executes the selected HDR backend with float input/output interfaces, executes the float-interface post-merge pipeline, optionally emits persistent debug TIFF checkpoints for executed stages, writes the final JPG, and guarantees temporary artifact cleanup through isolated temporary directory lifecycle.
 - @param args {list[str]} Command argument vector excluding command token.
@@ -2650,45 +2672,46 @@ RGB float output without any file round-trip.
 |`_rt_hlcurve_float`|fn|priv|8124-8154|def _rt_hlcurve_float(np_module, exp_scale, comp, hlrange...|
 |`_build_auto_levels_tone_curve_state`|fn|priv|8155-8344|def _build_auto_levels_tone_curve_state(np_module, image_...|
 |`_apply_auto_levels_tonal_transform_float`|fn|priv|8345-8348|def _apply_auto_levels_tonal_transform_float(|
-|`_auto_levels_has_full_tone_metrics`|fn|priv|8439-8462|def _auto_levels_has_full_tone_metrics(auto_levels_metrics)|
-|`_call_auto_levels_compat_helper`|fn|priv|8463-8468|def _call_auto_levels_compat_helper(|
-|`_apply_auto_levels_float`|fn|priv|8512-8618|def _apply_auto_levels_float(np_module, image_rgb_float, ...|
-|`_clip_auto_levels_out_of_gamut_float`|fn|priv|8619-8637|def _clip_auto_levels_out_of_gamut_float(np_module, image...|
-|`_clip_auto_levels_out_of_gamut_uint16`|fn|priv|8638-8639|def _clip_auto_levels_out_of_gamut_uint16(|
-|`_hlrecovery_luminance_float`|fn|priv|8669-8715|def _hlrecovery_luminance_float(np_module, image_rgb, max...|
-|`_hlrecovery_luminance_uint16`|fn|priv|8716-8744|def _hlrecovery_luminance_uint16(np_module, image_rgb, ma...|
-|`_hlrecovery_cielab_float`|fn|priv|8745-8746|def _hlrecovery_cielab_float(|
-|`_f_lab`|fn|priv|8779-8786|def _f_lab(values)|
-|`_f2xyz`|fn|priv|8787-8793|def _f2xyz(values)|
-|`_hlrecovery_cielab_uint16`|fn|priv|8829-8830|def _hlrecovery_cielab_uint16(|
-|`_hlrecovery_blend_float`|fn|priv|8864-8969|def _hlrecovery_blend_float(np_module, image_rgb, hlmax, ...|
-|`_hlrecovery_blend_uint16`|fn|priv|8970-8971|def _hlrecovery_blend_uint16(|
-|`_dilate_mask_float`|fn|priv|9006-9028|def _dilate_mask_float(np_module, mask)|
-|`_box_mean_3x3_float`|fn|priv|9029-9052|def _box_mean_3x3_float(np_module, image_2d)|
-|`_hlrecovery_color_propagation_float`|fn|priv|9053-9097|def _hlrecovery_color_propagation_float(np_module, image_...|
-|`_hlrecovery_color_propagation_uint16`|fn|priv|9098-9099|def _hlrecovery_color_propagation_uint16(|
-|`_hlrecovery_inpaint_opposed_float`|fn|priv|9129-9130|def _hlrecovery_inpaint_opposed_float(|
-|`_hlrecovery_inpaint_opposed_uint16`|fn|priv|9183-9184|def _hlrecovery_inpaint_opposed_uint16(|
-|`_apply_auto_brightness_rgb_float`|fn|priv|9226-9229|def _apply_auto_brightness_rgb_float(|
-|`_clamp01`|fn|priv|9286-9299|def _clamp01(np_module, values)|
-|`_gaussian_kernel_2d`|fn|priv|9300-9322|def _gaussian_kernel_2d(np_module, sigma, radius=None)|
-|`_rgb_to_hsl`|fn|priv|9323-9356|def _rgb_to_hsl(np_module, rgb)|
-|`_hue_to_rgb`|fn|priv|9357-9387|def _hue_to_rgb(np_module, p_values, q_values, t_values)|
-|`_hsl_to_rgb`|fn|priv|9388-9428|def _hsl_to_rgb(np_module, hue, saturation, lightness)|
-|`_selective_blur_contrast_gated_vectorized`|fn|priv|9429-9430|def _selective_blur_contrast_gated_vectorized(|
-|`_level_per_channel_adaptive`|fn|priv|9479-9501|def _level_per_channel_adaptive(np_module, rgb, low_pct=0...|
-|`_sigmoidal_contrast`|fn|priv|9502-9526|def _sigmoidal_contrast(np_module, rgb, contrast=3.0, mid...|
-|`logistic`|fn|pub|9517-9519|def logistic(z_values)|
-|`_vibrance_hsl_gamma`|fn|priv|9527-9544|def _vibrance_hsl_gamma(np_module, rgb, saturation_gamma=...|
-|`_gaussian_blur_rgb`|fn|priv|9545-9568|def _gaussian_blur_rgb(cv2_module, np_module, rgb, sigma)|
-|`_high_pass_math_gray`|fn|priv|9569-9592|def _high_pass_math_gray(cv2_module, np_module, rgb, blur...|
-|`_overlay_composite`|fn|priv|9593-9614|def _overlay_composite(np_module, base_rgb, overlay_gray)|
-|`_apply_validated_auto_adjust_pipeline`|fn|priv|9615-9621|def _apply_validated_auto_adjust_pipeline(|
-|`_load_piexif_dependency`|fn|priv|9730-9747|def _load_piexif_dependency()|
-|`_encode_jpg`|fn|priv|9748-9759|def _encode_jpg(|
-|`_collect_processing_errors`|fn|priv|9891-9919|def _collect_processing_errors(rawpy_module)|
-|`_is_supported_runtime_os`|fn|priv|9920-9939|def _is_supported_runtime_os()|
-|`run`|fn|pub|9940-10139|def run(args)|
+|`_auto_levels_has_full_tone_metrics`|fn|priv|8432-8455|def _auto_levels_has_full_tone_metrics(auto_levels_metrics)|
+|`_call_auto_levels_compat_helper`|fn|priv|8456-8461|def _call_auto_levels_compat_helper(|
+|`_apply_auto_levels_float`|fn|priv|8505-8611|def _apply_auto_levels_float(np_module, image_rgb_float, ...|
+|`_clip_auto_levels_out_of_gamut_float`|fn|priv|8612-8772|def _clip_auto_levels_out_of_gamut_float(np_module, image...|
+|`_filmlike_clip_rgb_tone`|fn|priv|8642-8675|def _filmlike_clip_rgb_tone(primary, middle, lower)|
+|`_clip_auto_levels_out_of_gamut_uint16`|fn|priv|8773-8774|def _clip_auto_levels_out_of_gamut_uint16(|
+|`_hlrecovery_luminance_float`|fn|priv|8804-8850|def _hlrecovery_luminance_float(np_module, image_rgb, max...|
+|`_hlrecovery_luminance_uint16`|fn|priv|8851-8879|def _hlrecovery_luminance_uint16(np_module, image_rgb, ma...|
+|`_hlrecovery_cielab_float`|fn|priv|8880-8881|def _hlrecovery_cielab_float(|
+|`_f_lab`|fn|priv|8914-8921|def _f_lab(values)|
+|`_f2xyz`|fn|priv|8922-8928|def _f2xyz(values)|
+|`_hlrecovery_cielab_uint16`|fn|priv|8964-8965|def _hlrecovery_cielab_uint16(|
+|`_hlrecovery_blend_float`|fn|priv|8999-9104|def _hlrecovery_blend_float(np_module, image_rgb, hlmax, ...|
+|`_hlrecovery_blend_uint16`|fn|priv|9105-9106|def _hlrecovery_blend_uint16(|
+|`_dilate_mask_float`|fn|priv|9141-9163|def _dilate_mask_float(np_module, mask)|
+|`_box_mean_3x3_float`|fn|priv|9164-9187|def _box_mean_3x3_float(np_module, image_2d)|
+|`_hlrecovery_color_propagation_float`|fn|priv|9188-9232|def _hlrecovery_color_propagation_float(np_module, image_...|
+|`_hlrecovery_color_propagation_uint16`|fn|priv|9233-9234|def _hlrecovery_color_propagation_uint16(|
+|`_hlrecovery_inpaint_opposed_float`|fn|priv|9264-9265|def _hlrecovery_inpaint_opposed_float(|
+|`_hlrecovery_inpaint_opposed_uint16`|fn|priv|9318-9319|def _hlrecovery_inpaint_opposed_uint16(|
+|`_apply_auto_brightness_rgb_float`|fn|priv|9361-9364|def _apply_auto_brightness_rgb_float(|
+|`_clamp01`|fn|priv|9421-9434|def _clamp01(np_module, values)|
+|`_gaussian_kernel_2d`|fn|priv|9435-9457|def _gaussian_kernel_2d(np_module, sigma, radius=None)|
+|`_rgb_to_hsl`|fn|priv|9458-9491|def _rgb_to_hsl(np_module, rgb)|
+|`_hue_to_rgb`|fn|priv|9492-9522|def _hue_to_rgb(np_module, p_values, q_values, t_values)|
+|`_hsl_to_rgb`|fn|priv|9523-9563|def _hsl_to_rgb(np_module, hue, saturation, lightness)|
+|`_selective_blur_contrast_gated_vectorized`|fn|priv|9564-9565|def _selective_blur_contrast_gated_vectorized(|
+|`_level_per_channel_adaptive`|fn|priv|9614-9636|def _level_per_channel_adaptive(np_module, rgb, low_pct=0...|
+|`_sigmoidal_contrast`|fn|priv|9637-9661|def _sigmoidal_contrast(np_module, rgb, contrast=3.0, mid...|
+|`logistic`|fn|pub|9652-9654|def logistic(z_values)|
+|`_vibrance_hsl_gamma`|fn|priv|9662-9679|def _vibrance_hsl_gamma(np_module, rgb, saturation_gamma=...|
+|`_gaussian_blur_rgb`|fn|priv|9680-9703|def _gaussian_blur_rgb(cv2_module, np_module, rgb, sigma)|
+|`_high_pass_math_gray`|fn|priv|9704-9727|def _high_pass_math_gray(cv2_module, np_module, rgb, blur...|
+|`_overlay_composite`|fn|priv|9728-9749|def _overlay_composite(np_module, base_rgb, overlay_gray)|
+|`_apply_validated_auto_adjust_pipeline`|fn|priv|9750-9756|def _apply_validated_auto_adjust_pipeline(|
+|`_load_piexif_dependency`|fn|priv|9865-9882|def _load_piexif_dependency()|
+|`_encode_jpg`|fn|priv|9883-9894|def _encode_jpg(|
+|`_collect_processing_errors`|fn|priv|10026-10054|def _collect_processing_errors(rawpy_module)|
+|`_is_supported_runtime_os`|fn|priv|10055-10074|def _is_supported_runtime_os()|
+|`run`|fn|pub|10075-10274|def run(args)|
 
 
 ---

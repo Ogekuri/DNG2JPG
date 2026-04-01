@@ -2247,8 +2247,10 @@ def test_compute_auto_levels_from_histogram_matches_rawtherapee_reference() -> N
     np.testing.assert_allclose(metrics["ospread"], 0.6606658566861634, rtol=1e-9)
 
 
-def test_apply_auto_levels_clip_out_of_gamut_normalizes_triplet(monkeypatch) -> None:
-    """Out-of-gamut clipping must preserve channel ratios instead of hard clipping."""
+def test_apply_auto_levels_clip_out_of_gamut_matches_rawtherapee_filmlike_clip(
+    monkeypatch,
+) -> None:
+    """Out-of-gamut clipping must follow RawTherapee film-like hue-stable clipping."""
 
     image_rgb_float = np.array([[[40000, 30000, 20000]]], dtype=np.float32) / 65535.0
 
@@ -2286,7 +2288,7 @@ def test_apply_auto_levels_clip_out_of_gamut_normalizes_triplet(monkeypatch) -> 
     )
     np.testing.assert_allclose(
         enabled,
-        np.array([[[1.0, 0.75, 0.5]]], dtype=np.float32),
+        np.array([[[1.0, 0.80518043, 0.61036086]]], dtype=np.float32),
         rtol=1e-6,
         atol=1e-6,
     )
@@ -2336,6 +2338,61 @@ def test_apply_auto_levels_tonal_transform_uses_metric_driven_float_curves(
         rtol=1e-6,
         atol=1e-6,
     )
+
+
+def test_apply_auto_levels_tonal_transform_keeps_mixed_overflow_on_tonecurve_path(
+    monkeypatch,
+) -> None:
+    """Mixed-overflow pixels must still sample the final tone curve."""
+
+    image_rgb_float = np.array([[[0.4, 0.8, 1.2]]], dtype=np.float32)
+    highlight_curve = np.linspace(0.75, 1.25, 65536, dtype=np.float64)
+    shadow_curve = np.ones(65536, dtype=np.float64)
+    tone_curve = np.linspace(0.1, 0.9, 65536, dtype=np.float64)
+    metrics = {
+        "expcomp": 0.0,
+        "black_normalized": 0.0,
+        "brightness": 0,
+        "contrast": 0,
+        "hlcompr": 0,
+        "hlcomprthresh": 0,
+    }
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_build_auto_levels_tone_curve_state",
+        lambda **_kwargs: {
+            "highlight_curve": highlight_curve,
+            "shadow_curve": shadow_curve,
+            "tone_curve": tone_curve,
+            "exp_scale": 1.0,
+            "comp": 0.0,
+            "hlrange": float(dng2jpg_module._AUTO_LEVELS_CODE_MAX),  # pylint: disable=protected-access
+        },
+    )
+    output = dng2jpg_module._apply_auto_levels_tonal_transform_float(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_float=image_rgb_float,
+        auto_levels_metrics=metrics,
+    )
+
+    image_code = np.clip(image_rgb_float.astype(np.float64), 0.0, 1.0)
+    image_code *= dng2jpg_module._AUTO_LEVELS_CODE_MAX  # pylint: disable=protected-access
+    channel_factors = [
+        dng2jpg_module._sample_auto_levels_lut_float(  # pylint: disable=protected-access
+            np_module=np,
+            lut_values=highlight_curve,
+            indices=image_code[..., channel_index],
+        )
+        for channel_index in range(3)
+    ]
+    highlight_factor = np.stack(channel_factors, axis=0).mean(axis=0)
+    expected = dng2jpg_module._sample_auto_levels_lut_float(  # pylint: disable=protected-access
+        np_module=np,
+        lut_values=tone_curve,
+        indices=image_code * highlight_factor[..., None],
+    )
+    np.testing.assert_allclose(output, expected, rtol=1e-6, atol=1e-6)
 
 
 def test_apply_auto_levels_color_methods_require_explicit_enable(

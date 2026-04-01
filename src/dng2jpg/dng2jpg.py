@@ -8352,7 +8352,9 @@ def _apply_auto_levels_tonal_transform_float(
     @details Executes the float-domain port of RawTherapee auto-levels tone
     processing in the same stage order as `rgbProc(...)`: highlight curve,
     shadow curve, then output tonecurve. Exposure scaling is carried by the
-    highlight curve baseline instead of a separate gain-only multiply.
+    highlight curve baseline instead of a separate gain-only multiply. Mixed
+    overflow pixels remain on the RawTherapee per-channel path; the function
+    does not bypass tone mapping for partially out-of-gamut triplets.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} Normalized RGB float tensor.
     @param auto_levels_metrics {dict[str, int|float]} Metrics from `_compute_auto_levels_from_histogram(...)`.
@@ -8420,19 +8422,10 @@ def _apply_auto_levels_tonal_transform_float(
         )
         image_code *= shadow_factor[..., None]
 
-    tone_mapped = _sample_auto_levels_lut_float(
+    return _sample_auto_levels_lut_float(
         np_module=np_module,
         lut_values=tone_curve_state["tone_curve"],
         indices=image_code,
-    )
-    all_channels_oog = np_module.logical_or(
-        image_code < 0.0,
-        image_code > _AUTO_LEVELS_CODE_MAX,
-    ).all(axis=-1, keepdims=True)
-    return np_module.where(
-        all_channels_oog,
-        image_code / _AUTO_LEVELS_CODE_MAX,
-        tone_mapped,
     )
 
 
@@ -8516,8 +8509,8 @@ def _apply_auto_levels_float(np_module, image_rgb_float, auto_levels_options):
     RGB float tensor, applies the full float-domain tonal transformation driven
     by exposure, black, brightness, contrast, and highlight-compression
     metrics, conditionally runs float-native highlight reconstruction, and
-    optionally normalizes overflowing RGB triplets back into gamut without any
-    production uint16 staging buffers.
+    optionally clips overflowing RGB triplets with RawTherapee film-like gamut
+    logic without any production uint16 staging buffers.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} RGB float tensor.
     @param auto_levels_options {AutoLevelsOptions} Parsed auto-levels options.
@@ -8617,22 +8610,164 @@ def _apply_auto_levels_float(np_module, image_rgb_float, auto_levels_options):
 
 
 def _clip_auto_levels_out_of_gamut_float(np_module, image_rgb, maxval=1.0):
-    """@brief Normalize overflowing RGB triplets back into normalized gamut.
+    """@brief Clip overflowing RGB triplets with RawTherapee film-like gamut logic.
 
-    @details Computes per-pixel maximum channel value, derives one scale factor
-    for overflowing pixels, and preserves RGB ratios while bounding the triplet
-    to `maxval`.
+    @details Ports RawTherapee `filmlike_clip(...)` to normalized float space.
+    Negative channels are clamped to `0` first. Overflowing triplets then use
+    the Adobe-style hue-stable diagonal clipping family instead of isotropic
+    normalization so dominant-channel ordering and cross-channel interpolation
+    follow RawTherapee semantics.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb {object} RGB float tensor on normalized scale.
     @param maxval {float} Maximum allowed channel value.
     @return {object} RGB float tensor with no channel above `maxval`.
-    @satisfies REQ-120
+    @satisfies REQ-165
     """
 
     rgb = np_module.asarray(image_rgb, dtype=np_module.float64)
-    channel_max = np_module.max(rgb, axis=-1, keepdims=True)
-    scale = np_module.where(channel_max > maxval, maxval / channel_max, 1.0)
-    return rgb * scale
+    output = np_module.maximum(rgb, 0.0)
+    red = output[..., 0]
+    green = output[..., 1]
+    blue = output[..., 2]
+    source_red = red.copy()
+    source_green = green.copy()
+    source_blue = blue.copy()
+    overflow_mask = np_module.logical_or(
+        source_red > maxval,
+        np_module.logical_or(source_green > maxval, source_blue > maxval),
+    )
+    if not np_module.any(overflow_mask):
+        return output
+
+    def _filmlike_clip_rgb_tone(primary, middle, lower):
+        """@brief Apply one ordered RawTherapee diagonal gamut clip branch.
+
+        @details Clamps the dominant and lower channels to `maxval`, then
+        reconstructs the middle channel by linearly interpolating across the
+        unclipped diagonal exactly like RawTherapee `filmlike_clip_rgb_tone`.
+        Division-by-zero only occurs on degenerate equal-channel cases that are
+        dispatched away by the branch predicates, but one safe fallback is kept
+        for deterministic vectorized execution.
+        @param primary {object} Dominant-channel tensor for one branch.
+        @param middle {object} Middle-ranked channel tensor for one branch.
+        @param lower {object} Lowest-ranked channel tensor for one branch.
+        @return {tuple[object, object, object]} Branch-clipped `(primary, middle, lower)` tensors.
+        @satisfies REQ-165
+        """
+
+        primary_clipped = np_module.minimum(primary, maxval)
+        lower_clipped = np_module.minimum(lower, maxval)
+        denominator = primary - lower
+        safe_denominator = np_module.where(
+            denominator != 0.0,
+            denominator,
+            1.0,
+        )
+        middle_clipped = lower_clipped + (
+            (primary_clipped - lower_clipped) * (middle - lower) / safe_denominator
+        )
+        middle_clipped = np_module.where(
+            denominator != 0.0,
+            middle_clipped,
+            np_module.minimum(middle, maxval),
+        )
+        return primary_clipped, middle_clipped, lower_clipped
+
+    case_1 = overflow_mask & (source_red >= source_green) & (source_green > source_blue)
+    if np_module.any(case_1):
+        r_case, g_case, b_case = _filmlike_clip_rgb_tone(
+            red[case_1],
+            green[case_1],
+            blue[case_1],
+        )
+        red[case_1] = r_case
+        green[case_1] = g_case
+        blue[case_1] = b_case
+
+    case_2 = overflow_mask & (source_red >= source_green) & (source_blue > source_red)
+    if np_module.any(case_2):
+        b_case, r_case, g_case = _filmlike_clip_rgb_tone(
+            blue[case_2],
+            red[case_2],
+            green[case_2],
+        )
+        red[case_2] = r_case
+        green[case_2] = g_case
+        blue[case_2] = b_case
+
+    case_3 = (
+        overflow_mask
+        & (source_red >= source_green)
+        & ~(source_green > source_blue)
+        & ~(source_blue > source_red)
+        & (source_blue > source_green)
+    )
+    if np_module.any(case_3):
+        r_case, b_case, g_case = _filmlike_clip_rgb_tone(
+            red[case_3],
+            blue[case_3],
+            green[case_3],
+        )
+        red[case_3] = r_case
+        green[case_3] = g_case
+        blue[case_3] = b_case
+
+    case_4 = (
+        overflow_mask
+        & (source_red >= source_green)
+        & ~(source_green > source_blue)
+        & ~(source_blue > source_red)
+        & ~(source_blue > source_green)
+    )
+    if np_module.any(case_4):
+        red[case_4] = np_module.minimum(red[case_4], maxval)
+        green[case_4] = np_module.minimum(green[case_4], maxval)
+        blue[case_4] = green[case_4]
+
+    case_5 = overflow_mask & ~(source_red >= source_green) & (source_red >= source_blue)
+    if np_module.any(case_5):
+        g_case, r_case, b_case = _filmlike_clip_rgb_tone(
+            green[case_5],
+            red[case_5],
+            blue[case_5],
+        )
+        red[case_5] = r_case
+        green[case_5] = g_case
+        blue[case_5] = b_case
+
+    case_6 = (
+        overflow_mask
+        & ~(source_red >= source_green)
+        & ~(source_red >= source_blue)
+        & (source_blue > source_green)
+    )
+    if np_module.any(case_6):
+        b_case, g_case, r_case = _filmlike_clip_rgb_tone(
+            blue[case_6],
+            green[case_6],
+            red[case_6],
+        )
+        red[case_6] = r_case
+        green[case_6] = g_case
+        blue[case_6] = b_case
+
+    case_7 = (
+        overflow_mask
+        & ~(source_red >= source_green)
+        & ~(source_red >= source_blue)
+        & ~(source_blue > source_green)
+    )
+    if np_module.any(case_7):
+        g_case, b_case, r_case = _filmlike_clip_rgb_tone(
+            green[case_7],
+            blue[case_7],
+            red[case_7],
+        )
+        red[case_7] = r_case
+        green[case_7] = g_case
+        blue[case_7] = b_case
+
+    return output
 
 
 def _clip_auto_levels_out_of_gamut_uint16(
@@ -8649,7 +8784,7 @@ def _clip_auto_levels_out_of_gamut_uint16(
     @param maxval {float} Maximum allowed legacy code-domain value.
     @return {object} RGB float tensor on legacy code scale.
     @deprecated Use `_clip_auto_levels_out_of_gamut_float`.
-    @satisfies REQ-120
+    @satisfies REQ-165
     """
 
     clipped = _clip_auto_levels_out_of_gamut_float(
