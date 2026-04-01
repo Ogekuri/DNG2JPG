@@ -372,7 +372,7 @@ import numpy as np_module  # type: ignore
 - @param ev_detail {float} Detail Preservation method EV correction (rounded to one decimal).
 - @param ev_conservative {float} Most conservative raw correction before clamping/quantization.
 - @return {None} Immutable histogram-analysis solution container.
-- @satisfies REQ-008, REQ-009, REQ-052, REQ-166, REQ-167, REQ-168, REQ-169, REQ-170
+- @satisfies REQ-008, REQ-009, REQ-052, REQ-166, REQ-167, REQ-168, REQ-169, REQ-170, REQ-171, REQ-172
 
 ### fn `def _print_box_table(headers, rows, header_rows=())` `priv` (L646-682)
 - @brief Print one Unicode box-drawing table.
@@ -626,7 +626,7 @@ optional histogram-derived clipping-safe headroom
 - @return {tuple[float, float, float]} `(ev_entropy, ev_ettr, ev_detail)` rounded to one decimal.
 - @satisfies REQ-008, REQ-166, REQ-167, REQ-168
 
-### fn `def _smoothstep(x, edge0, edge1)` `priv` (L1922-1926)
+### fn `def _smoothstep(x, edge0, edge1)` `priv` (L1918-1922)
 - @brief Compute EV corrections from three histogram analysis methods.
 - @details Derives BT.709 linear luminance from the normalized linear HDR
 base RGB image, then executes three concurrent EV correction methods:
@@ -666,7 +666,7 @@ Complexity: delegated to `_compute_histogram_ev_corrections`. Side effects:
 - @param option_raw {str} Raw option token value from CLI args.
 - @return {AutoEvHistogramSolution} Resolved automatic EV histogram solution.
 - @return {str|None} Parsed normalized option token when valid; `None` otherwise.
-- @satisfies REQ-008, REQ-009, REQ-019, REQ-028, REQ-052, REQ-166, REQ-167, REQ-168, REQ-169, REQ-170
+- @satisfies REQ-008, REQ-009, REQ-019, REQ-028, REQ-052, REQ-166, REQ-167, REQ-168, REQ-169, REQ-170, REQ-171, REQ-172
 - @satisfies REQ-061
 
 ### fn `def _parse_positive_float_option(option_name, option_raw)` `priv` (L2048-2071)
@@ -2330,7 +2330,7 @@ RGB float output without any file round-trip.
 |`_calculate_bt709_luminance`|fn|priv|1791-1813|def _calculate_bt709_luminance(np_module, image_rgb_float)|
 |`_smoothstep`|fn|priv|1814-1832|def _smoothstep(np_module, values, edge0, edge1)|
 |`_compute_histogram_ev_corrections`|fn|priv|1833-1950|def _compute_histogram_ev_corrections(np_module, cv2_modu...|
-|`_smoothstep`|fn|priv|1922-1926|def _smoothstep(x, edge0, edge1)|
+|`_smoothstep`|fn|priv|1918-1922|def _smoothstep(x, edge0, edge1)|
 |`_resolve_auto_ev_histogram_solution`|fn|priv|1951-1952|def _resolve_auto_ev_histogram_solution(|
 |`_parse_luminance_text_option`|fn|priv|2027-2047|def _parse_luminance_text_option(option_name, option_raw)|
 |`_parse_positive_float_option`|fn|priv|2048-2071|def _parse_positive_float_option(option_name, option_raw)|

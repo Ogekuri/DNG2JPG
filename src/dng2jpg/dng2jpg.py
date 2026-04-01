@@ -630,7 +630,7 @@ class AutoEvHistogramSolution:
     @param ev_detail {float} Detail Preservation method EV correction (rounded to one decimal).
     @param ev_conservative {float} Most conservative raw correction before clamping/quantization.
     @return {None} Immutable histogram-analysis solution container.
-    @satisfies REQ-008, REQ-009, REQ-052, REQ-166, REQ-167, REQ-168, REQ-169, REQ-170
+    @satisfies REQ-008, REQ-009, REQ-052, REQ-166, REQ-167, REQ-168, REQ-169, REQ-170, REQ-171, REQ-172
     """
 
     ev_zero: float
@@ -1914,16 +1914,16 @@ def _compute_histogram_ev_corrections(np_module, cv2_module, base_rgb_float):
         lambda_shadow = 1.5
         best_detail_ev = 0.0
         max_detail_score = -float("inf")
+
+        def _smoothstep(x, edge0, edge1):
+            denom = max(edge1 - edge0, 1e-6)
+            t = np_module.clip((x - edge0) / denom, 0.0, 1.0)
+            return t * t * (3.0 - 2.0 * t)
+
         for ev_candidate in sweep_values:
             simulated = luminance_linear.astype(np_module.float32) * (
                 2.0 ** float(ev_candidate)
             )
-
-            def _smoothstep(x, edge0, edge1):
-                denom = max(edge1 - edge0, 1e-6)
-                t = np_module.clip((x - edge0) / denom, 0.0, 1.0)
-                return t * t * (3.0 - 2.0 * t)
-
             w_shadow = _smoothstep(simulated, noise_floor, shadow_target)
             w_high = 1.0 - _smoothstep(simulated, highlight_knee, 1.0)
             preserved_detail = float(
@@ -1967,7 +1967,7 @@ def _resolve_auto_ev_histogram_solution(
     @param base_rgb_float {object} Normalized linear RGB base image on `[0,1]`.
     @param base_max_ev {float} Bit-derived `BASE_MAX` ceiling.
     @return {AutoEvHistogramSolution} Resolved automatic EV histogram solution.
-    @satisfies REQ-008, REQ-009, REQ-019, REQ-028, REQ-052, REQ-166, REQ-167, REQ-168, REQ-169, REQ-170
+    @satisfies REQ-008, REQ-009, REQ-019, REQ-028, REQ-052, REQ-166, REQ-167, REQ-168, REQ-169, REQ-170, REQ-171, REQ-172
     """
 
     ev_entropy, ev_ettr, ev_detail = _compute_histogram_ev_corrections(

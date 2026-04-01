@@ -146,6 +146,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-168**: MUST compute Detail Preservation EV correction by sweeping EV in `[-3.0, +3.0]` with `0.1` step, computing Sobel gradients on log-luminance for local detail, weighting preserved detail by shadow/highlight smoothstep safety boundaries, and selecting the EV maximizing the detail-preservation score, rounded to one decimal.
 - **REQ-169**: MUST select automatic `ev_zero` as the most conservative value (smallest absolute value) among the three histogram EV corrections, clamped to `[-SAFE_ZERO_MAX, +SAFE_ZERO_MAX]`, and quantized on `0.25` EV step.
 - **REQ-170**: MUST derive automatic bracket fork as `ev_minus = ev_zero - MAX_BRACKET` and `ev_plus = ev_zero + MAX_BRACKET` where `MAX_BRACKET = BASE_MAX - abs(ev_zero)`.
+- **REQ-171**: MUST print each histogram EV correction value (ETTR, Entropy, Detail) individually as labeled diagnostic output when `--auto-ev` resolves to `enable`.
+- **REQ-172**: MUST print the selected most conservative EV correction value (smallest absolute value among ETTR, Entropy, Detail) as labeled diagnostic output when `--auto-ev` resolves to `enable`.
 - **REQ-033**: MUST parse and preserve `--tmo*` passthrough option payloads for luminance command forwarding.
 - **REQ-034**: MUST order luminance backend bracket inputs as `ev_minus`, `ev_zero`, `ev_plus`.
 - **REQ-035**: MUST execute `luminance-hdr-cli` from output TIFF parent directory to isolate sidecar artifacts in temporary workspace.
@@ -164,7 +166,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-049**: SHOULD provide both `dng2jpg` and `d2j` as equivalent user-invokable CLI aliases.
 - **REQ-050**: MUST implement `/tmp/auto-brightness.py` auto-brightness step order on normalized RGB float input/output: normalize sRGB, linearize, compute BT.709 luminance, tonemap luminance, rescale RGB, optionally desaturate, then re-encode sRGB.
 - **REQ-051**: MUST support exactly one auto-adjust pipeline with one validated knob model containing shared controls and CLAHE-luma controls.
-- **REQ-052**: MUST print deterministic runtime diagnostics for input path, gamma, postprocess factors, backend, exposure mode, bit-derived EV ceilings, histogram-based EV corrections (ETTR, Entropy, Detail), selected conservative `ev_zero`, bracket fork limits, selected EV triplet, and OpenCV radiance exposure calculations/results.
+- **REQ-052**: MUST print deterministic runtime diagnostics for input path, gamma, postprocess factors, backend, exposure mode, bit-derived EV ceilings, bracket fork limits, selected EV triplet, and OpenCV radiance exposure calculations/results.
 - **REQ-103**: MUST classify normalized BT.709 luminance as `low-key` when `median<0.35 && p95<0.85`, `high-key` when `median>0.65 && p05>0.15`, else `normal-key`.
 - **REQ-104**: MUST map luminance with `L=(a/Lw_bar)*Y`, percentile-derived robust `Lwhite`, and burn-out compression `Ld=(L*(1+L/Lwhite^2))/(1+L)` before linear-domain chromaticity-preserving RGB scaling.
 - **REQ-105**: MUST desaturate only overflowing linear RGB pixels by blending toward `(Ld,Ld,Ld)` with the minimal factor that restores `max(R,G,B)<=1` while preserving luminance.
@@ -334,6 +336,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-168 | `src/dng2jpg/dng2jpg.py::_compute_histogram_ev_corrections`; excerpt: computes Detail Preservation EV via Sobel gradients on log-luminance. |
 | REQ-169 | `src/dng2jpg/dng2jpg.py::_resolve_auto_ev_histogram_solution`; excerpt: selects most conservative ev_zero, clamps to SAFE_ZERO_MAX, quantizes on 0.25 step. |
 | REQ-170 | `src/dng2jpg/dng2jpg.py::_resolve_auto_ev_histogram_solution`; excerpt: derives ev_minus and ev_plus as ev_zero ± MAX_BRACKET. |
+| REQ-171 | `src/dng2jpg/dng2jpg.py::_resolve_auto_ev_histogram_solution`; excerpt: `print_info` emits labeled ETTR, Entropy, Detail EV correction values. |
+| REQ-172 | `src/dng2jpg/dng2jpg.py::_resolve_auto_ev_histogram_solution`; excerpt: `print_info` emits labeled `ev_conservative` (smallest absolute value among three corrections). |
 | REQ-033 | `src/dng2jpg/dng2jpg.py::_parse_tmo_passthrough_value`, `_run_luminance_hdr_cli`; excerpt: parses and forwards `--tmo*` args unchanged. |
 | REQ-034 | `src/dng2jpg/dng2jpg.py::_order_bracket_paths`; excerpt: deterministic `ev_minus`, `ev_zero`, `ev_plus` order. |
 | REQ-035 | `src/dng2jpg/dng2jpg.py::_run_luminance_hdr_cli`; excerpt: changes cwd to output parent before subprocess execution. |
@@ -352,7 +356,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-049 | `pyproject.toml`; excerpt: both `dng2jpg` and `d2j` map to identical entrypoint. |
 | REQ-050 | `src/dng2jpg/dng2jpg.py::_apply_auto_brightness_rgb_float`; excerpt: executes the original auto-brightness step order on normalized RGB float I/O with optional luminance-preserving desaturation before final sRGB re-encoding. |
 | REQ-051 | `src/dng2jpg/dng2jpg.py::AutoAdjustOptions`, `_apply_validated_auto_adjust_pipeline`; excerpt: supports one float-domain auto-adjust implementation with one validated knob container including CLAHE-luma controls. |
-| REQ-052 | `src/dng2jpg/dng2jpg.py::run`, `_resolve_auto_ev_histogram_solution`; excerpt: deterministic `print_info` diagnostic lines for exposure mode, histogram EV corrections, selected conservative ev_zero, bracket fork, EV triplet, and OpenCV radiance timing calculations/results. |
+| REQ-052 | `src/dng2jpg/dng2jpg.py::run`, `_resolve_auto_ev_histogram_solution`; excerpt: deterministic `print_info` diagnostic lines for exposure mode, bracket fork, EV triplet, and OpenCV radiance timing calculations/results. |
 | REQ-103 | `src/dng2jpg/dng2jpg.py::_analyze_luminance_key`; excerpt: classifies `low-key`/`normal-key`/`high-key` with the original median and percentile thresholds. |
 | REQ-104 | `src/dng2jpg/dng2jpg.py::_reinhard_global_tonemap_luminance`, `_apply_auto_brightness_rgb_float`; excerpt: percentile robust `Lwhite` and burn-out compression before RGB scaling. |
 | REQ-105 | `src/dng2jpg/dng2jpg.py::_luminance_preserving_desaturate_to_fit`; excerpt: overflow-only luminance-preserving grayscale blending with minimal factor selection. |
