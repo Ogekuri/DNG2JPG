@@ -1915,6 +1915,9 @@ def test_extract_bracket_images_float_uses_single_linear_base_pass() -> None:
             use_camera_wb,
             no_auto_bright,
             gamma,
+            user_wb,
+            output_color,
+            no_auto_scale,
             user_flip,
         ) -> np.ndarray:
             self.calls.append(
@@ -1924,27 +1927,39 @@ def test_extract_bracket_images_float_uses_single_linear_base_pass() -> None:
                     "use_camera_wb": use_camera_wb,
                     "no_auto_bright": no_auto_bright,
                     "gamma": gamma,
+                    "user_wb": user_wb,
+                    "output_color": output_color,
+                    "no_auto_scale": no_auto_scale,
                     "user_flip": user_flip,
                 }
             )
             return np.array(base_rgb_u16, copy=True)
 
     fake_raw = _FakeRawHandle()
+    fake_rawpy = type(
+        "_FakeRawPyModule",
+        (),
+        {"ColorSpace": type("_ColorSpace", (), {"raw": "raw"})},
+    )()
     multipliers = (0.5, 1.0, 2.0)
 
     bracket_images = dng2jpg_module._extract_bracket_images_float(  # pylint: disable=protected-access
         raw_handle=fake_raw,
         np_module=np,
         multipliers=multipliers,
+        rawpy_module=fake_rawpy,
     )
 
     assert len(fake_raw.calls) == 1
     assert fake_raw.calls[0] == {
         "bright": 1.0,
         "output_bps": 16,
-        "use_camera_wb": True,
+        "use_camera_wb": False,
         "no_auto_bright": True,
         "gamma": (1.0, 1.0),
+        "user_wb": [1.0, 1.0, 1.0, 1.0],
+        "output_color": "raw",
+        "no_auto_scale": True,
         "user_flip": 0,
     }
     base_rgb_float = base_rgb_u16.astype(np.float32) / 65535.0
@@ -2832,15 +2847,28 @@ def test_run_debug_writes_extraction_and_merge_checkpoints(monkeypatch, tmp_path
             use_camera_wb,
             no_auto_bright,
             gamma,
+            user_wb,
+            output_color,
+            no_auto_scale,
             user_flip,
         ) -> np.ndarray:
-            del output_bps, use_camera_wb, no_auto_bright, gamma, user_flip
+            del (
+                output_bps,
+                use_camera_wb,
+                no_auto_bright,
+                gamma,
+                user_wb,
+                output_color,
+                no_auto_scale,
+                user_flip,
+            )
             return np.clip(raw_pixels.astype(np.float32) * float(bright), 0.0, 65535.0).astype(
                 np.uint16
             )
 
     class _FakeRawPyModule:
         LibRawError = RuntimeError
+        ColorSpace = type("_ColorSpace", (), {"raw": "raw"})
 
         @staticmethod
         def imread(_path: str) -> _FakeRawHandle:
@@ -2939,15 +2967,28 @@ def test_run_auto_ev_prints_selected_triplet_diagnostics(monkeypatch, tmp_path, 
             use_camera_wb,
             no_auto_bright,
             gamma,
+            user_wb,
+            output_color,
+            no_auto_scale,
             user_flip,
         ) -> np.ndarray:
-            del output_bps, use_camera_wb, no_auto_bright, gamma, user_flip
+            del (
+                output_bps,
+                use_camera_wb,
+                no_auto_bright,
+                gamma,
+                user_wb,
+                output_color,
+                no_auto_scale,
+                user_flip,
+            )
             return np.clip(raw_pixels.astype(np.float32) * float(bright), 0.0, 65535.0).astype(
                 np.uint16
             )
 
     class _FakeRawPyModule:
         LibRawError = RuntimeError
+        ColorSpace = type("_ColorSpace", (), {"raw": "raw"})
 
         @staticmethod
         def imread(_path: str) -> _FakeRawHandle:
@@ -3000,12 +3041,12 @@ def test_run_auto_ev_prints_selected_triplet_diagnostics(monkeypatch, tmp_path, 
     assert "Export EV triplet:" in output
 
 
-def test_run_auto_ev_uses_raw_white_level_for_triplet_selection(
+def test_run_auto_ev_uses_zero_processing_raw_extraction_for_triplet_selection(
     monkeypatch,
     tmp_path,
     capsys,
 ) -> None:
-    """Automatic runtime must not collapse to `0,0,0` when RAW white level is below uint16 full scale."""
+    """Automatic runtime must use zero-processing RAW extraction for histogram triplet selection."""
 
     input_dng = tmp_path / "scene-low-white.dng"
     input_dng.write_bytes(b"fake-dng")
@@ -3037,15 +3078,28 @@ def test_run_auto_ev_uses_raw_white_level_for_triplet_selection(
             use_camera_wb,
             no_auto_bright,
             gamma,
+            user_wb,
+            output_color,
+            no_auto_scale,
             user_flip,
         ) -> np.ndarray:
-            del output_bps, use_camera_wb, no_auto_bright, gamma, user_flip
+            del (
+                output_bps,
+                use_camera_wb,
+                no_auto_bright,
+                gamma,
+                user_wb,
+                output_color,
+                no_auto_scale,
+                user_flip,
+            )
             return np.clip(raw_pixels.astype(np.float32) * float(bright), 0.0, 65535.0).astype(
                 np.uint16
             )
 
     class _FakeRawPyModule:
         LibRawError = RuntimeError
+        ColorSpace = type("_ColorSpace", (), {"raw": "raw"})
 
         @staticmethod
         def imread(_path: str) -> _FakeRawHandle:
@@ -3132,15 +3186,28 @@ def test_run_static_ev_uses_manual_center_and_reports_static_mode(
             use_camera_wb,
             no_auto_bright,
             gamma,
+            user_wb,
+            output_color,
+            no_auto_scale,
             user_flip,
         ) -> np.ndarray:
-            del output_bps, use_camera_wb, no_auto_bright, gamma, user_flip
+            del (
+                output_bps,
+                use_camera_wb,
+                no_auto_bright,
+                gamma,
+                user_wb,
+                output_color,
+                no_auto_scale,
+                user_flip,
+            )
             return np.clip(raw_pixels.astype(np.float32) * float(bright), 0.0, 65535.0).astype(
                 np.uint16
             )
 
     class _FakeRawPyModule:
         LibRawError = RuntimeError
+        ColorSpace = type("_ColorSpace", (), {"raw": "raw"})
 
         @staticmethod
         def imread(_path: str) -> _FakeRawHandle:
@@ -3222,13 +3289,27 @@ def test_run_prints_source_gamma_diagnostics(monkeypatch, tmp_path, capsys) -> N
             use_camera_wb,
             no_auto_bright,
             gamma,
+            user_wb,
+            output_color,
+            no_auto_scale,
             user_flip,
         ) -> np.ndarray:
-            del bright, output_bps, use_camera_wb, no_auto_bright, gamma, user_flip
+            del (
+                bright,
+                output_bps,
+                use_camera_wb,
+                no_auto_bright,
+                gamma,
+                user_wb,
+                output_color,
+                no_auto_scale,
+                user_flip,
+            )
             return np.full((2, 2, 3), 32768, dtype=np.uint16)
 
     class _FakeRawPyModule:
         LibRawError = RuntimeError
+        ColorSpace = type("_ColorSpace", (), {"raw": "raw"})
 
         @staticmethod
         def imread(_path: str) -> _FakeRawHandle:

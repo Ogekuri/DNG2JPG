@@ -2,7 +2,7 @@
 """@brief Convert one DNG file into one HDR-merged JPG output.
 
 @details Implements single-pass linear RAW extraction with one maximum-
-resolution camera-WB-aware RGB base image, derives three synthetic exposures
+resolution zero-processing RGB base image, derives three synthetic exposures
 (`ev_zero-ev`, `ev_zero`, `ev_zero+ev`) by NumPy EV scaling, emits one
 diagnostic source-gamma line from RAW metadata without feeding it into the
 numeric pipeline, merges through selected `luminance-hdr-cli`, selected OpenCV
@@ -1481,20 +1481,19 @@ def _quantize_ev_to_resolution(ev_value, resolution):
 
 
 
-def _extract_base_rgb_linear_float(raw_handle, np_module):
+def _extract_base_rgb_linear_float(raw_handle, np_module, rawpy_module):
     """@brief Extract one linear normalized RGB base image from one RAW handle.
 
-    @details Executes exactly one `rawpy.postprocess` call with deterministic
-    parameters `bright=1.0`, `output_bps=16`, `use_camera_wb=True`,
-    `no_auto_bright=True`, `gamma=(1.0,1.0)`, and `user_flip=0`, then
-    normalizes the demosaiced maximum-resolution RGB output to float `[0,1]`.
-    When RAW metadata exposes one positive `white_level`, normalization clamps
-    against that effective sensor ceiling instead of the wider integer container
-    range so automatic EV analysis observes the same scene dynamic range implied
-    by the RAW metadata. Complexity: O(H*W). Side effects: one RAW postprocess
-    invocation.
+    @details Executes exactly one zero-processing `rawpy.postprocess` call with
+    deterministic parameters `gamma=(1.0,1.0)`, `no_auto_bright=True`,
+    `output_bps=16`, `use_camera_wb=False`, `user_wb=[1.0,1.0,1.0,1.0]`,
+    `output_color=rawpy.ColorSpace.raw`, `no_auto_scale=True`, `bright=1.0`,
+    and `user_flip=0`, then normalizes the demosaiced maximum-resolution RGB
+    output to float `[0,1]` directly from the 16-bit container range.
+    Complexity: O(H*W). Side effects: one RAW postprocess invocation.
     @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
     @param np_module {ModuleType} Imported numpy module.
+    @param rawpy_module {ModuleType} Imported `rawpy` module exposing `ColorSpace.raw`.
     @return {object} Normalized RGB float tensor in `[0,1]`.
     @satisfies REQ-010, REQ-158
     @see _compute_histogram_ev_corrections
@@ -1503,37 +1502,18 @@ def _extract_base_rgb_linear_float(raw_handle, np_module):
     base_rgb = raw_handle.postprocess(
         bright=1.0,
         output_bps=16,
-        use_camera_wb=True,
+        use_camera_wb=False,
         no_auto_bright=True,
         gamma=(1.0, 1.0),
+        user_wb=[1.0, 1.0, 1.0, 1.0],
+        output_color=rawpy_module.ColorSpace.raw,
+        no_auto_scale=True,
         user_flip=0,
     )
-    normalized_base_rgb = _normalize_float_rgb_image(
+    return _normalize_float_rgb_image(
         np_module=np_module,
         image_data=base_rgb,
     )
-    white_level_raw = getattr(raw_handle, "white_level", None)
-    if white_level_raw is None:
-        return normalized_base_rgb
-    if isinstance(white_level_raw, (tuple, list)):
-        if not white_level_raw:
-            return normalized_base_rgb
-        white_level_value = max(white_level_raw)
-    else:
-        white_level_value = white_level_raw
-    try:
-        white_level_float = float(white_level_value)
-    except (TypeError, ValueError):
-        return normalized_base_rgb
-    if white_level_float <= 0.0:
-        return normalized_base_rgb
-    container_max = 65535.0
-    scaling_ratio = container_max / white_level_float
-    return np_module.clip(
-        normalized_base_rgb.astype(np_module.float32, copy=False) * scaling_ratio,
-        0.0,
-        1.0,
-    ).astype(np_module.float32, copy=False)
 
 
 def _normalize_source_gamma_label(label_raw):
@@ -4193,19 +4173,20 @@ def _extract_bracket_images_float(
     raw_handle,
     np_module,
     multipliers,
+    rawpy_module,
     base_rgb_float=None,
 ):
     """@brief Extract three normalized RGB float brackets from one RAW handle.
 
     @details Reuses an optional precomputed normalized linear base tensor when
-    available, otherwise executes one deterministic linear camera-WB-aware RAW
-    postprocess call, and derives canonical bracket tensors by NumPy EV
-    scaling and `[0,1]` clipping without exposing TIFF artifacts outside this
-    step. Complexity: O(H*W). Side effects: at most one RAW postprocess
-    invocation.
+    available, otherwise executes one deterministic zero-processing RAW
+    postprocess call, and derives canonical bracket tensors by NumPy EV scaling
+    and `[0,1]` clipping without exposing TIFF artifacts outside this step.
+    Complexity: O(H*W). Side effects: at most one RAW postprocess invocation.
     @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
     @param np_module {ModuleType} Imported numpy module.
     @param multipliers {tuple[float, float, float]} Ordered exposure multipliers.
+    @param rawpy_module {ModuleType} Imported `rawpy` module exposing `ColorSpace.raw`.
     @param base_rgb_float {object|None} Optional precomputed normalized linear RGB float base tensor.
     @return {list[object]} Ordered RGB float bracket tensors.
     @satisfies REQ-010, REQ-157, REQ-158, REQ-159, REQ-160
@@ -4216,6 +4197,7 @@ def _extract_bracket_images_float(
         base_rgb_float = _extract_base_rgb_linear_float(
             raw_handle=raw_handle,
             np_module=np_module,
+            rawpy_module=rawpy_module,
         )
     bracket_images_float = _build_bracket_images_from_linear_base_float(
         np_module=np_module,
@@ -9626,6 +9608,7 @@ def run(args):
                     base_rgb_float = _extract_base_rgb_linear_float(
                         raw_handle=raw_handle,
                         np_module=numpy_module,
+                        rawpy_module=rawpy_module,
                     )
                     cv2_for_auto_ev = auto_adjust_dependencies[0]
                     auto_ev_solution = _resolve_auto_ev_histogram_solution(
@@ -9718,11 +9701,12 @@ def run(args):
                     effective_ev_plus,
                 )
                 bracket_images_float = _extract_bracket_images_float(
-                    raw_handle=raw_handle,
-                    np_module=numpy_module,
-                    multipliers=multipliers,
-                    base_rgb_float=base_rgb_float,
-                )
+                        raw_handle=raw_handle,
+                        np_module=numpy_module,
+                        multipliers=multipliers,
+                        rawpy_module=rawpy_module,
+                        base_rgb_float=base_rgb_float,
+                    )
                 if debug_context is not None:
                     extraction_suffixes = (
                         "_1.1_ev_min"
