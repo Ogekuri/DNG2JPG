@@ -109,7 +109,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-005**: MUST print manual management commands instead of auto-executing them on non-Linux systems.
 - **REQ-006**: MUST reject unknown options, missing option values, and invalid option values with explicit parse errors.
 - **REQ-007**: MUST reject `--aa-*` options when `--auto-adjust` resolves to `disable` and MUST reject `--ab-*` options when `--auto-brightness` resolves to `disable`.
-- **REQ-008**: MUST resolve automatic exposure directly as `(ev_minus, ev_zero, ev_plus)` from one normalized linear HDR base RGB image when `--auto-ev` resolves to `enable`.
+- **REQ-008**: MUST compute automatic `ev_zero` by three-method histogram analysis (ETTR, Entropy Optimization, Detail Preservation) of the normalized linear HDR base RGB image, select the most conservative correction, clamp to `[-SAFE_ZERO_MAX, +SAFE_ZERO_MAX]`, quantize on `0.25` step, and derive maximum-width bracket fork `(ev_minus, ev_zero, ev_plus)` when `--auto-ev` resolves to `enable`.
 - **REQ-009**: MUST treat `--auto-ev` as the only automatic exposure mode and MUST pass the selected automatic EV triplet downstream as the RAW bracket extraction values.
 - **REQ-010**: MUST extract one maximum-resolution demosaiced RGB base image using linear `rawpy.postprocess` with camera white balance before HDR bracket generation.
 - **REQ-158**: MUST normalize the extracted HDR base image to RGB float `[0,1]` before any bracket arithmetic.
@@ -126,7 +126,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-151**: MUST recalculate idle-time and rewrite the version-check cache JSON after every latest-release API attempt, regardless of success or error outcome.
 - **REQ-017**: MUST render conversion usage/help with canonical executable name `dng2jpg`, stable aligned indentation, and MUST NOT prepend alternative launcher labels.
 - **REQ-018**: MUST reject `--ev-zero` unless `--ev` is specified and MUST reject `--auto-zero`, `--auto-zero-pct`, and `--auto-ev-pct` as removed options.
-- **REQ-019**: MUST execute `--auto-ev` with deterministic internal parameters `ev_step=0.25`, `ev_resolution=0.25`, `hard_clip_threshold=0.005`, `soft_clip_threshold=0.05`, `shadow_hard_level=1/255`, `highlight_hard_level=254/255`, `shadow_soft_level=8/255`, and `highlight_soft_level=247/255`.
+- **REQ-019**: MUST execute `--auto-ev` histogram analysis using `cv2` and `numpy` dependencies, requiring both modules at runtime when `--auto-ev` resolves to `enable`.
 - **REQ-020**: MUST reject `--gamma` as a removed option.
 - **REQ-157**: MUST derive source gamma diagnostics from RAW metadata without modifying HDR bracket extraction, which remains linear and camera-WB-aware.
 - **REQ-163**: MUST classify source gamma diagnostics by preferring explicit profile or color-space metadata, then `rawpy.tone_curve`, then `rgb_xyz_matrix`, `color_matrix`, and `color_desc`, and MUST report `unknown` when evidence is insufficient.
@@ -141,8 +141,11 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-028**: MUST compute `BASE_MAX=((bits_per_color-8)/2)` before exposure-mode dispatch and MUST use it as the common EV ceiling for manual validation and automatic scan-range clamping.
 - **REQ-029**: MUST compute EV-zero safe ceiling with `SAFE_ZERO_MAX=((bits_per_color-8)/2)-1`.
 - **REQ-030**: MUST quantize EV and EV-zero computations on `0.25` EV step granularity.
-- **REQ-031**: MUST classify one automatic EV candidate as unsafe when BT.709 luminance or any RGB channel exceeds the configured hard or soft clipping thresholds after EV scaling and `[0,1]` clipping.
-- **REQ-032**: MUST derive the automatic safe interval from the last negative and positive safe EV candidates and MUST conservatively quantize the final symmetric triplet inside that interval.
+- **REQ-166**: MUST compute ETTR EV correction from BT.709 luminance of the normalized linear HDR base image by computing 99th percentile `P99` and returning `round(log2(0.90 / P99), 1)` when `P99 > 0`, else `0.0`.
+- **REQ-167**: MUST compute Entropy Optimization EV correction by sweeping EV in `[-3.0, +3.0]` with `0.1` step on BT.709 luminance, applying gamma `1/2.2`, building 256-bin histograms, and selecting the EV maximizing `score = entropy - 50.0*(p_255²) - 20.0*(p_0²)`, rounded to one decimal.
+- **REQ-168**: MUST compute Detail Preservation EV correction by sweeping EV in `[-3.0, +3.0]` with `0.1` step, computing Sobel gradients on log-luminance for local detail, weighting preserved detail by shadow/highlight smoothstep safety boundaries, and selecting the EV maximizing the detail-preservation score, rounded to one decimal.
+- **REQ-169**: MUST select automatic `ev_zero` as the most conservative value (smallest absolute value) among the three histogram EV corrections, clamped to `[-SAFE_ZERO_MAX, +SAFE_ZERO_MAX]`, and quantized on `0.25` EV step.
+- **REQ-170**: MUST derive automatic bracket fork as `ev_minus = ev_zero - MAX_BRACKET` and `ev_plus = ev_zero + MAX_BRACKET` where `MAX_BRACKET = BASE_MAX - abs(ev_zero)`.
 - **REQ-033**: MUST parse and preserve `--tmo*` passthrough option payloads for luminance command forwarding.
 - **REQ-034**: MUST order luminance backend bracket inputs as `ev_minus`, `ev_zero`, `ev_plus`.
 - **REQ-035**: MUST execute `luminance-hdr-cli` from output TIFF parent directory to isolate sidecar artifacts in temporary workspace.
@@ -161,7 +164,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-049**: SHOULD provide both `dng2jpg` and `d2j` as equivalent user-invokable CLI aliases.
 - **REQ-050**: MUST implement `/tmp/auto-brightness.py` auto-brightness step order on normalized RGB float input/output: normalize sRGB, linearize, compute BT.709 luminance, tonemap luminance, rescale RGB, optionally desaturate, then re-encode sRGB.
 - **REQ-051**: MUST support exactly one auto-adjust pipeline with one validated knob model containing shared controls and CLAHE-luma controls.
-- **REQ-052**: MUST print deterministic runtime diagnostics for input path, gamma, postprocess factors, backend, exposure mode, bit-derived EV ceilings, automatic selection parameters and safe limits, selected EV triplet, and OpenCV radiance exposure calculations/results.
+- **REQ-052**: MUST print deterministic runtime diagnostics for input path, gamma, postprocess factors, backend, exposure mode, bit-derived EV ceilings, histogram-based EV corrections (ETTR, Entropy, Detail), selected conservative `ev_zero`, bracket fork limits, selected EV triplet, and OpenCV radiance exposure calculations/results.
 - **REQ-103**: MUST classify normalized BT.709 luminance as `low-key` when `median<0.35 && p95<0.85`, `high-key` when `median>0.65 && p05>0.15`, else `normal-key`.
 - **REQ-104**: MUST map luminance with `L=(a/Lw_bar)*Y`, percentile-derived robust `Lwhite`, and burn-out compression `Ld=(L*(1+L/Lwhite^2))/(1+L)` before linear-domain chromaticity-preserving RGB scaling.
 - **REQ-105**: MUST desaturate only overflowing linear RGB pixels by blending toward `(Ld,Ld,Ld)` with the minimal factor that restores `max(R,G,B)<=1` while preserving luminance.
@@ -225,7 +228,9 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-001**: MUST verify `_parse_run_options` rejects `--ev` with `--auto-ev`, parses `--hdr-merge`, and rejects unknown `--hdr-merge` values with deterministic error output.
 - **TST-002**: MUST verify `run` returns `1` for unsupported runtime OS and for missing `luminance-hdr-cli` dependency with deterministic diagnostics naming each missing executable.
 - **TST-003**: MUST verify successful `run` execution returns `0`, writes output JPG, and emits success message `HDR JPG created: <output>`.
-- **TST-004**: MUST verify `_compute_auto_ev_bracketing_solution` returns a symmetric triplet bounded by the automatic safe interval and conservatively quantized on the configured EV grid.
+- **TST-004**: MUST verify `_compute_histogram_ev_corrections` returns three rounded float EV correction values from a deterministic normalized linear RGB float image using ETTR, Entropy Optimization, and Detail Preservation methods.
+- **TST-047**: MUST verify `_resolve_auto_ev_histogram_solution` selects the most conservative `ev_zero` (smallest absolute value), clamps to `SAFE_ZERO_MAX`, quantizes on `0.25` EV step, and derives `ev_minus = ev_zero - MAX_BRACKET` and `ev_plus = ev_zero + MAX_BRACKET`.
+- **TST-048**: MUST verify auto-ev histogram solver returns `ev_zero = 0.0` for a completely black image, produces finite corrections for a uniform midtone image, and MUST NOT exceed `SAFE_ZERO_MAX` in absolute `ev_zero` value.
 - **TST-005**: MUST verify static exposure resolution uses `ev_zero=0.0` for `--ev` without `--ev-zero`, preserves manual `--ev-zero` when provided with `--ev`, and rejects unsupported static EV for the detected bit depth.
 - **TST-006**: MUST verify `_run_luminance_hdr_cli` builds deterministic argument order and includes any `--tmo*` passthrough pairs unchanged.
 - **TST-007**: MUST verify `_extract_dng_exif_payload_and_timestamp` applies datetime priority `36867` then `36868` then `306` and extracts EXIF `ExposureTime` as positive seconds.
@@ -299,7 +304,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-005 | `src/dng2jpg/core.py::_run_management`; excerpt: non-Linux path prints manual command and returns `0`. |
 | REQ-006 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: explicit errors for unknown option and missing values. |
 | REQ-007 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: rejects `--aa-*` when auto-adjust resolves to `disable` and rejects `--ab-*` when auto-brightness resolves to `disable`. |
-| REQ-008 | `src/dng2jpg/dng2jpg.py::_resolve_auto_ev_bracketing_solution`, `_compute_auto_ev_bracketing_solution`; excerpt: resolves `(ev_minus, ev_zero, ev_plus)` from the normalized linear base RGB image. |
+| REQ-008 | `src/dng2jpg/dng2jpg.py::_resolve_auto_ev_histogram_solution`, `_compute_histogram_ev_corrections`; excerpt: computes ev_zero by three-method histogram analysis and derives maximum-width bracket fork. |
 | REQ-009 | `src/dng2jpg/dng2jpg.py::run`, `_resolve_auto_ev_bracketing_solution`; excerpt: treats `--auto-ev` as the only automatic exposure path and forwards the selected triplet into bracket extraction. |
 | REQ-010 | `src/dng2jpg/dng2jpg.py::_extract_base_rgb_linear_float`, `_extract_bracket_images_float`; excerpt: executes one linear camera-WB-aware `rawpy.postprocess(...)` call before bracket derivation. |
 | REQ-011 | `src/dng2jpg/dng2jpg.py::_run_luminance_hdr_cli`; excerpt: deterministic luminance args, `--ldrTiff 16b`, and backend-local TIFF artifact handling. |
@@ -312,7 +317,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-151 | `src/dng2jpg/core.py::_check_online_version`, `_write_version_cache`; excerpt: cache JSON is rewritten after every latest-release API attempt on both success and error outcomes. |
 | REQ-017 | `src/dng2jpg/dng2jpg.py`; excerpt: `PROGRAM = "dng2jpg"` and help usage renders canonical command label without duplicated command token. |
 | REQ-018 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: rejects removed `--auto-zero*` and `--auto-ev-pct` options and rejects `--ev-zero` outside static `--ev` mode. |
-| REQ-019 | `src/dng2jpg/dng2jpg.py::AutoEvBracketingParams`; excerpt: defines the deterministic automatic selection parameters. |
+| REQ-019 | `src/dng2jpg/dng2jpg.py::_resolve_auto_ev_histogram_solution`; excerpt: requires `cv2` and `numpy` modules for histogram analysis when `--auto-ev` resolves to `enable`. |
 | REQ-020 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: rejects removed `--gamma` option. |
 | REQ-021 | `src/dng2jpg/dng2jpg.py::_parse_jpg_compression_option`; excerpt: enforces inclusive `0..100`. |
 | REQ-022 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: rejects luminance options unless `--hdr-merge Luminace-HDR` is selected. |
@@ -324,8 +329,11 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-028 | `src/dng2jpg/dng2jpg.py::run`, `_calculate_max_ev_from_bits`; excerpt: computes `BASE_MAX` before exposure-mode dispatch and reuses it for manual validation and automatic scan limits. |
 | REQ-029 | `src/dng2jpg/dng2jpg.py::_calculate_safe_ev_zero_max`; excerpt: `SAFE_ZERO_MAX = BASE_MAX - 1`. |
 | REQ-030 | `src/dng2jpg/dng2jpg.py::_is_ev_value_on_supported_step`; excerpt: quarter-step quantization validation. |
-| REQ-031 | `src/dng2jpg/dng2jpg.py::_is_auto_ev_candidate_clipped`; excerpt: applies BT.709 luminance and per-channel hard/soft clipping checks after EV scaling. |
-| REQ-032 | `src/dng2jpg/dng2jpg.py::_compute_auto_ev_bracketing_solution`; excerpt: builds the safe interval and conservatively quantizes the symmetric triplet inside it. |
+| REQ-166 | `src/dng2jpg/dng2jpg.py::_compute_histogram_ev_corrections`; excerpt: computes ETTR EV correction from 99th percentile of BT.709 luminance. |
+| REQ-167 | `src/dng2jpg/dng2jpg.py::_compute_histogram_ev_corrections`; excerpt: computes Entropy Optimization EV via sweep and histogram scoring. |
+| REQ-168 | `src/dng2jpg/dng2jpg.py::_compute_histogram_ev_corrections`; excerpt: computes Detail Preservation EV via Sobel gradients on log-luminance. |
+| REQ-169 | `src/dng2jpg/dng2jpg.py::_resolve_auto_ev_histogram_solution`; excerpt: selects most conservative ev_zero, clamps to SAFE_ZERO_MAX, quantizes on 0.25 step. |
+| REQ-170 | `src/dng2jpg/dng2jpg.py::_resolve_auto_ev_histogram_solution`; excerpt: derives ev_minus and ev_plus as ev_zero ± MAX_BRACKET. |
 | REQ-033 | `src/dng2jpg/dng2jpg.py::_parse_tmo_passthrough_value`, `_run_luminance_hdr_cli`; excerpt: parses and forwards `--tmo*` args unchanged. |
 | REQ-034 | `src/dng2jpg/dng2jpg.py::_order_bracket_paths`; excerpt: deterministic `ev_minus`, `ev_zero`, `ev_plus` order. |
 | REQ-035 | `src/dng2jpg/dng2jpg.py::_run_luminance_hdr_cli`; excerpt: changes cwd to output parent before subprocess execution. |
@@ -344,7 +352,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-049 | `pyproject.toml`; excerpt: both `dng2jpg` and `d2j` map to identical entrypoint. |
 | REQ-050 | `src/dng2jpg/dng2jpg.py::_apply_auto_brightness_rgb_float`; excerpt: executes the original auto-brightness step order on normalized RGB float I/O with optional luminance-preserving desaturation before final sRGB re-encoding. |
 | REQ-051 | `src/dng2jpg/dng2jpg.py::AutoAdjustOptions`, `_apply_validated_auto_adjust_pipeline`; excerpt: supports one float-domain auto-adjust implementation with one validated knob container including CLAHE-luma controls. |
-| REQ-052 | `src/dng2jpg/dng2jpg.py::run`; excerpt: deterministic `print_info` diagnostic lines for exposure mode, automatic anchors, selected joint solution, EV triplet, and OpenCV radiance timing calculations/results. |
+| REQ-052 | `src/dng2jpg/dng2jpg.py::run`, `_resolve_auto_ev_histogram_solution`; excerpt: deterministic `print_info` diagnostic lines for exposure mode, histogram EV corrections, selected conservative ev_zero, bracket fork, EV triplet, and OpenCV radiance timing calculations/results. |
 | REQ-103 | `src/dng2jpg/dng2jpg.py::_analyze_luminance_key`; excerpt: classifies `low-key`/`normal-key`/`high-key` with the original median and percentile thresholds. |
 | REQ-104 | `src/dng2jpg/dng2jpg.py::_reinhard_global_tonemap_luminance`, `_apply_auto_brightness_rgb_float`; excerpt: percentile robust `Lwhite` and burn-out compression before RGB scaling. |
 | REQ-105 | `src/dng2jpg/dng2jpg.py::_luminance_preserving_desaturate_to_fit`; excerpt: overflow-only luminance-preserving grayscale blending with minimal factor selection. |
@@ -410,7 +418,9 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | TST-001 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; branches for exposure-mode exclusivity, hdr-merge parsing, and deterministic parse failures. |
 | TST-002 | `src/dng2jpg/dng2jpg.py::run`; branches for unsupported OS and dependency failures returning `1`. |
 | TST-003 | `src/dng2jpg/dng2jpg.py::run`; success branch prints `HDR JPG created: ...` and returns `0`. |
-| TST-004 | `tests/test_uint16_postprocess_pipeline.py::test_compute_auto_ev_bracketing_solution_returns_conservative_symmetric_triplet`, `test_compute_auto_ev_bracketing_solution_clamps_scan_range_to_base_max`; verifies symmetric safe-triplet selection and `BASE_MAX` clamping. |
+| TST-004 | `tests/test_uint16_postprocess_pipeline.py::test_compute_histogram_ev_corrections_returns_three_floats`; verifies three-method histogram EV correction output. |
+| TST-047 | `tests/test_uint16_postprocess_pipeline.py::test_resolve_auto_ev_histogram_solution_selects_conservative_quantized_bracket`; verifies conservative selection, SAFE_ZERO_MAX clamping, and MAX_BRACKET bracket derivation. |
+| TST-048 | `tests/test_uint16_postprocess_pipeline.py::test_auto_ev_histogram_solver_edge_cases`; verifies black-image, midtone, and SAFE_ZERO_MAX boundary handling. |
 | TST-005 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_defaults_ev_zero_to_zero_for_static_ev`, `test_parse_run_options_preserves_manual_ev_zero_with_static_ev`, `test_parse_run_options_rejects_ev_zero_without_static_ev`; verifies static-mode EV-center rules. |
 | TST-006 | `src/dng2jpg/dng2jpg.py::_run_luminance_hdr_cli`; deterministic argv generation including passthrough. |
 | TST-007 | `tests/test_uint16_postprocess_pipeline.py::test_extract_dng_exif_payload_and_timestamp_reads_datetime_priority_and_exposure_time`; verifies EXIF datetime priority and positive-second `ExposureTime` parsing. |

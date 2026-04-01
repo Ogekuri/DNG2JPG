@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import importlib.util
+import math
 from dataclasses import dataclass
 from pathlib import Path
 import sys
 from typing import Protocol
 
 import numpy as np
+import pytest
 
 _SRC_PATH = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC_PATH) not in sys.path:
@@ -1512,8 +1514,10 @@ def test_extract_dng_exif_payload_and_timestamp_reads_nested_exif_ifd_exposure_t
     assert timestamp is not None
 
 
-def test_is_auto_ev_candidate_clipped_enforces_shadow_and_highlight_limits() -> None:
-    """Automatic EV candidate safety must reject clipped shadow and highlight states."""
+def test_compute_histogram_ev_corrections_returns_three_floats() -> None:
+    """Histogram EV corrections must return three finite float values from a synthetic image."""
+
+    import cv2 as cv2_module
 
     base_rgb_float = np.array(
         [
@@ -1522,24 +1526,30 @@ def test_is_auto_ev_candidate_clipped_enforces_shadow_and_highlight_limits() -> 
         ],
         dtype=np.float32,
     )
-    params = dng2jpg_module.AutoEvBracketingParams()  # pylint: disable=protected-access
 
-    assert (
-        dng2jpg_module._is_auto_ev_candidate_clipped(  # pylint: disable=protected-access
-            np, base_rgb_float, -1.0, params
-        )
-        is False
-    )
-    assert (
-        dng2jpg_module._is_auto_ev_candidate_clipped(  # pylint: disable=protected-access
-            np, base_rgb_float, 1.0, params
-        )
-        is True
+    ev_entropy, ev_ettr, ev_detail = dng2jpg_module._compute_histogram_ev_corrections(  # pylint: disable=protected-access
+        np_module=np,
+        cv2_module=cv2_module,
+        base_rgb_float=base_rgb_float,
     )
 
+    assert isinstance(ev_entropy, float)
+    assert isinstance(ev_ettr, float)
+    assert isinstance(ev_detail, float)
+    assert math.isfinite(ev_entropy)
+    assert math.isfinite(ev_ettr)
+    assert math.isfinite(ev_detail)
+    assert ev_entropy == round(ev_entropy, 1)
+    assert ev_ettr == round(ev_ettr, 1)
+    assert ev_detail == round(ev_detail, 1)
 
-def test_compute_auto_ev_bracketing_solution_quantizes_midrange_safe_interval() -> None:
-    """Automatic EV solver must quantize the safe interval into a symmetric triplet."""
+
+def test_resolve_auto_ev_histogram_solution_selects_conservative_quantized_bracket(
+    capsys,
+) -> None:
+    """Histogram solution must select the most conservative ev_zero, quantize on 0.25, and derive MAX_BRACKET."""
+
+    import cv2 as cv2_module
 
     base_rgb_float = np.array(
         [
@@ -1548,74 +1558,74 @@ def test_compute_auto_ev_bracketing_solution_quantizes_midrange_safe_interval() 
         ],
         dtype=np.float32,
     )
-    params = dng2jpg_module.AutoEvBracketingParams()  # pylint: disable=protected-access
+    base_max_ev = 3.0
 
-    solution = dng2jpg_module._compute_auto_ev_bracketing_solution(  # pylint: disable=protected-access
+    solution = dng2jpg_module._resolve_auto_ev_histogram_solution(  # pylint: disable=protected-access
         np_module=np,
+        cv2_module=cv2_module,
         base_rgb_float=base_rgb_float,
-        base_max_ev=4.0,
-        params=params,
+        base_max_ev=base_max_ev,
     )
 
-    assert solution.ev_minus == -1.25
-    assert solution.ev_zero == -0.25
-    assert solution.ev_plus == 0.75
-    assert solution.safe_ev_min == -1.5
-    assert solution.safe_ev_max == 0.75
-    assert round(solution.ev_zero - solution.ev_minus, 2) == 1.0
-    assert round(solution.ev_plus - solution.ev_zero, 2) == 1.0
-
-
-def test_compute_auto_ev_bracketing_solution_collapses_when_zero_only_is_safe() -> None:
-    """Automatic EV solver must collapse to the zero frame when no adjacent EV is safe."""
-
-    base_rgb_float = np.array(
-        [
-            [[0.01, 0.01, 0.01], [0.02, 0.02, 0.02]],
-            [[0.03, 0.03, 0.03], [0.04, 0.04, 0.04]],
-        ],
-        dtype=np.float32,
+    safe_zero_max = max(0.0, base_max_ev - 1.0)
+    assert abs(solution.ev_zero) <= safe_zero_max + 1e-9
+    assert round(solution.ev_zero / 0.25) * 0.25 == pytest.approx(solution.ev_zero, abs=1e-9)
+    expected_max_bracket = round(
+        math.floor(((base_max_ev - abs(solution.ev_zero)) / 0.25) + 1e-9) * 0.25, 2
     )
-    params = dng2jpg_module.AutoEvBracketingParams()  # pylint: disable=protected-access
+    assert solution.max_bracket == pytest.approx(expected_max_bracket, abs=1e-9)
+    assert solution.ev_minus == pytest.approx(solution.ev_zero - solution.max_bracket, abs=1e-9)
+    assert solution.ev_plus == pytest.approx(solution.ev_zero + solution.max_bracket, abs=1e-9)
+    assert abs(solution.ev_conservative) == min(
+        abs(solution.ev_ettr), abs(solution.ev_entropy), abs(solution.ev_detail)
+    )
 
-    solution = dng2jpg_module._compute_auto_ev_bracketing_solution(  # pylint: disable=protected-access
+    output = capsys.readouterr().out
+    assert "Auto-EV histogram corrections:" in output
+    assert "Auto-EV conservative selection:" in output
+    assert "Auto-EV bracket fork:" in output
+
+
+def test_auto_ev_histogram_solver_edge_cases() -> None:
+    """Histogram solver must handle black image (ev_zero=0.0), midtone, and SAFE_ZERO_MAX boundary."""
+
+    import cv2 as cv2_module
+
+    black_image = np.zeros((4, 4, 3), dtype=np.float32)
+    ev_entropy, ev_ettr, ev_detail = dng2jpg_module._compute_histogram_ev_corrections(  # pylint: disable=protected-access
         np_module=np,
-        base_rgb_float=base_rgb_float,
-        base_max_ev=4.0,
-        params=params,
+        cv2_module=cv2_module,
+        base_rgb_float=black_image,
     )
+    assert ev_ettr == 0.0
 
-    assert solution.ev_minus == 0.0
-    assert solution.ev_zero == 0.0
-    assert solution.ev_plus == 0.0
-    assert solution.safe_ev_min == 0.0
-    assert solution.safe_ev_max == 0.0
-
-
-def test_compute_auto_ev_bracketing_solution_uses_negative_headroom_for_bright_scene() -> None:
-    """Automatic EV solver must bias the safe triplet toward negative EV on bright scenes."""
-
-    base_rgb_float = np.array(
-        [
-            [[0.70, 0.70, 0.70], [0.80, 0.80, 0.80]],
-            [[0.90, 0.90, 0.90], [0.95, 0.95, 0.95]],
-        ],
-        dtype=np.float32,
-    )
-    params = dng2jpg_module.AutoEvBracketingParams()  # pylint: disable=protected-access
-
-    solution = dng2jpg_module._compute_auto_ev_bracketing_solution(  # pylint: disable=protected-access
+    base_max_ev = 3.0
+    solution_black = dng2jpg_module._resolve_auto_ev_histogram_solution(  # pylint: disable=protected-access
         np_module=np,
-        base_rgb_float=base_rgb_float,
-        base_max_ev=4.0,
-        params=params,
+        cv2_module=cv2_module,
+        base_rgb_float=black_image,
+        base_max_ev=base_max_ev,
     )
+    safe_zero_max = max(0.0, base_max_ev - 1.0)
+    assert abs(solution_black.ev_zero) <= safe_zero_max + 1e-9
 
-    assert solution.ev_minus == -4.0
-    assert solution.ev_zero == -2.0
-    assert solution.ev_plus == 0.0
-    assert solution.safe_ev_min == -4.0
-    assert solution.safe_ev_max == 0.0
+    midtone_image = np.full((4, 4, 3), 0.5, dtype=np.float32)
+    ev_entropy_m, ev_ettr_m, ev_detail_m = dng2jpg_module._compute_histogram_ev_corrections(  # pylint: disable=protected-access
+        np_module=np,
+        cv2_module=cv2_module,
+        base_rgb_float=midtone_image,
+    )
+    assert math.isfinite(ev_entropy_m)
+    assert math.isfinite(ev_ettr_m)
+    assert math.isfinite(ev_detail_m)
+
+    solution_midtone = dng2jpg_module._resolve_auto_ev_histogram_solution(  # pylint: disable=protected-access
+        np_module=np,
+        cv2_module=cv2_module,
+        base_rgb_float=midtone_image,
+        base_max_ev=base_max_ev,
+    )
+    assert abs(solution_midtone.ev_zero) <= safe_zero_max + 1e-9
 
 
 def test_run_opencv_hdr_merge_keeps_mertens_inputs_as_float32() -> None:
@@ -2984,9 +2994,9 @@ def test_run_auto_ev_prints_selected_triplet_diagnostics(monkeypatch, tmp_path, 
     assert "Using exposure mode: auto" in output
     assert "Detected DNG bits per color: 16" in output
     assert "Bit-derived EV ceilings: BASE_MAX=4" in output
-    assert "Auto-EV parameters:" in output
-    assert "Auto-EV safe interval:" in output
-    assert "Auto-EV selected triplet:" in output
+    assert "Auto-EV histogram corrections:" in output
+    assert "Auto-EV conservative selection:" in output
+    assert "Auto-EV bracket fork:" in output
     assert "Export EV triplet:" in output
 
 
@@ -3079,9 +3089,10 @@ def test_run_auto_ev_uses_raw_white_level_for_triplet_selection(
 
     assert exit_code == 0
     output = capsys.readouterr().out
-    assert "Auto-EV safe interval: evMinSafe=-1.00, evMaxSafe=+0.00" in output
-    assert "Auto-EV selected triplet: ev_minus=-1.00, ev_zero=-0.50, ev_plus=+0.00" in output
-    assert "Export EV triplet: -1, -0.5, 0" in output
+    assert "Auto-EV histogram corrections:" in output
+    assert "Auto-EV conservative selection:" in output
+    assert "Auto-EV bracket fork:" in output
+    assert "Export EV triplet:" in output
 
 
 def test_run_static_ev_uses_manual_center_and_reports_static_mode(
