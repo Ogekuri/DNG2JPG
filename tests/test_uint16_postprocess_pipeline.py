@@ -1597,8 +1597,9 @@ def test_optimize_joint_ev_zero_and_delta_uses_deterministic_tie_breaks(
         p_low,
         p_high,
         auto_ev_pct,
+        clipping_risk_stats,
     ):
-        del bits_per_color, anchors, p_low, p_high, auto_ev_pct
+        del bits_per_color, anchors, p_low, p_high, auto_ev_pct, clipping_risk_stats
         return dng2jpg_module.JointAutoEvSolution(
             ev_zero=ev_zero_candidate,
             ev_delta=0.25,
@@ -1660,6 +1661,63 @@ def test_optimize_joint_ev_zero_and_delta_applies_auto_ev_pct_scaling() -> None:
         scaled_solution.uncovered_shadow + scaled_solution.uncovered_highlight
         >= full_solution.uncovered_shadow + full_solution.uncovered_highlight
     )
+
+
+def test_build_auto_ev_clipping_risk_stats_reports_safe_positive_ev_caps() -> None:
+    """Clipping-risk stats must expose deterministic positive-EV headroom caps."""
+
+    base_rgb_float = np.array(
+        [
+            [[0.10, 0.10, 0.10], [0.20, 0.20, 0.20]],
+            [[0.40, 0.40, 0.40], [0.50, 0.50, 0.50]],
+        ],
+        dtype=np.float32,
+    )
+
+    stats = dng2jpg_module._build_auto_ev_clipping_risk_stats(  # pylint: disable=protected-access
+        np,
+        base_rgb_float,
+    )
+
+    assert stats.base_clip_any == 0.0
+    assert stats.p99_9_max_rgb >= 0.49
+    assert stats.p99_99_max_rgb >= stats.p99_9_max_rgb
+    assert 0.9 <= stats.safe_center_ev <= 1.1
+    assert 0.9 <= stats.safe_plus_ev <= 1.1
+
+
+def test_optimize_joint_ev_zero_and_delta_contracts_delta_when_clipping_cap_is_tighter() -> None:
+    """Joint auto EV must contract the bracket when histogram headroom rejects wider plus frames."""
+
+    evaluations = dng2jpg_module.AutoZeroEvaluation(  # pylint: disable=protected-access
+        miglior_ev=1.5,
+        ev_ettr=1.5,
+        ev_dettaglio=1.75,
+    )
+    preview_stats = (0.01, 0.2, 0.4)
+    clipping_risk_stats = dng2jpg_module.AutoEvClippingRiskStats(  # pylint: disable=protected-access
+        sorted_max_rgb=np.array([0.10, 0.20, 0.30, 0.45], dtype=np.float32),
+        p99_9_max_rgb=0.45,
+        p99_99_max_rgb=0.48,
+        base_clip_any=0.0,
+        safe_center_ev=1.0,
+        safe_plus_ev=1.1,
+    )
+
+    solution = dng2jpg_module._optimize_joint_ev_zero_and_delta(  # pylint: disable=protected-access
+        bits_per_color=16,
+        base_max_ev=4.0,
+        preview_luminance_stats=preview_stats,
+        auto_ev_pct=50.0,
+        evaluations=evaluations,
+        clipping_risk_stats=clipping_risk_stats,
+    )
+
+    assert solution.ev_zero <= 1.0
+    assert solution.ev_delta == 0.25
+    assert solution.clipping_safe_delta <= 0.35
+    assert solution.predicted_plus_clip <= dng2jpg_module.AUTO_EV_PLUS_CLIP_TARGET_FRACTION
+    assert solution.predicted_center_clip <= 0.00001
 
 
 def test_run_opencv_hdr_merge_keeps_mertens_inputs_as_float32() -> None:
@@ -2874,6 +2932,7 @@ def test_run_auto_ev_prints_joint_candidate_diagnostics(monkeypatch, tmp_path, c
     assert "Auto-EV heuristic ev_ettr:" in output
     assert "Auto-EV heuristic ev_dettaglio:" in output
     assert "Auto-EV regularization anchors:" in output
+    assert "Auto-EV clipping-risk metrics:" in output
     assert "Auto-EV selected joint solution:" in output
     assert "Export EV triplet:" in output
 

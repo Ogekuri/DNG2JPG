@@ -141,6 +141,9 @@ AUTO_EV_MEDIAN_PERCENTILE = 50.0
 AUTO_EV_TARGET_SHADOW = 0.05
 AUTO_EV_TARGET_HIGHLIGHT = 0.90
 AUTO_EV_MEDIAN_TARGET = 0.5
+AUTO_EV_PLUS_CLIP_TARGET_FRACTION = 0.001
+AUTO_EV_CENTER_CLIP_TARGET_FRACTION = 0.0
+AUTO_EV_CLIP_EPS = 1e-9
 AUTO_ZERO_SCENE_KEY_LOW_THRESHOLD = 0.35
 AUTO_ZERO_SCENE_KEY_HIGH_THRESHOLD = 0.65
 AUTO_ZERO_TARGET_LOW_KEY = 0.35
@@ -632,8 +635,11 @@ class JointAutoEvSolution:
     @param zero_reg {float} Mean absolute distance from `ev_zero` to the regularization anchors.
     @param score {float} Final objective score minimized by the joint solver.
     @param anchors {tuple[float, float, float]} Quantized center regularization anchors.
+    @param clipping_safe_delta {float} Histogram-derived maximum symmetric delta allowed by plus-bracket clipping guardrails at `ev_zero`.
+    @param predicted_center_clip {float} Predicted any-channel clipping fraction for the center bracket at `ev_zero`.
+    @param predicted_plus_clip {float} Predicted any-channel clipping fraction for the plus bracket at `ev_zero+ev_delta`.
     @return {None} Immutable joint auto-exposure solution container.
-    @satisfies REQ-008, REQ-009, REQ-032, REQ-052
+    @satisfies REQ-008, REQ-009, REQ-028, REQ-032, REQ-052
     """
 
     ev_zero: float
@@ -646,6 +652,9 @@ class JointAutoEvSolution:
     zero_reg: float
     score: float
     anchors: tuple[float, float, float]
+    clipping_safe_delta: float = 0.0
+    predicted_center_clip: float = 0.0
+    predicted_plus_clip: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -666,6 +675,34 @@ class AutoZeroEvaluation:
     miglior_ev: float
     ev_ettr: float
     ev_dettaglio: float
+
+
+@dataclass(frozen=True)
+class AutoEvClippingRiskStats:
+    """@brief Hold histogram-derived clipping-risk metrics for automatic exposure solving.
+
+    @details Stores sorted per-pixel any-channel maxima from the normalized
+    linear base RGB image so the joint automatic solver can estimate clipping
+    fractions for hypothetical bracket exposures without rebuilding bracket
+    images for every candidate. Also stores deterministic percentile summaries
+    and safe positive-EV ceilings used by clipping-aware diagnostics and delta
+    contraction. Complexity: storage `O(N)` where `N=H*W`. Side effects: none.
+    @param sorted_max_rgb {object} Sorted flattened any-channel maxima from the normalized linear base RGB tensor.
+    @param p99_9_max_rgb {float} `99.9`th percentile of per-pixel any-channel maxima.
+    @param p99_99_max_rgb {float} `99.99`th percentile of per-pixel any-channel maxima.
+    @param base_clip_any {float} Fraction of base-image pixels already clipped in at least one RGB channel.
+    @param safe_center_ev {float} Positive-EV ceiling that keeps center-bracket clipping at the strict center target.
+    @param safe_plus_ev {float} Positive-EV ceiling that keeps plus-bracket clipping at the configured plus target.
+    @return {None} Immutable clipping-risk statistics container.
+    @satisfies REQ-008, REQ-028, REQ-052
+    """
+
+    sorted_max_rgb: object
+    p99_9_max_rgb: float
+    p99_99_max_rgb: float
+    base_clip_any: float
+    safe_center_ev: float
+    safe_plus_ev: float
 
 
 def _print_box_table(headers, rows, header_rows=()):
@@ -1204,31 +1241,46 @@ def _derive_supported_signed_ev_zero_values(base_max_ev):
     return tuple(sorted(signed_values))
 
 
-def _derive_supported_ev_values(bits_per_color, ev_zero=0.0):
-    """@brief Derive valid bracket EV selector set from bit depth and `ev_zero`.
+def _derive_supported_ev_values(
+    bits_per_color,
+    ev_zero=0.0,
+    clipping_safe_plus_ev=None,
+):
+    """@brief Derive valid bracket EV selector set from bit depth, `ev_zero`, and optional clipping cap.
 
     @details Builds deterministic EV selector tuple with fixed `0.25` step in
-    closed range `[0.25, MAX_BRACKET]`, where
-    `MAX_BRACKET=((bits_per_color-8)/2)-abs(ev_zero)`.
+    closed range `[0.25, MAX_BRACKET]`, where `MAX_BRACKET` is the minimum of
+    the bit-depth headroom `((bits_per_color-8)/2)-abs(ev_zero)` and the
+    optional histogram-derived clipping-safe headroom
+    `clipping_safe_plus_ev-ev_zero`.
     @param bits_per_color {int} Detected source DNG bits per color.
     @param ev_zero {float} Central EV selector.
+    @param clipping_safe_plus_ev {float|None} Optional histogram-derived positive-EV ceiling for the brightest bracket.
     @return {tuple[float, ...]} Supported bracket EV selector tuple.
     @exception ValueError Raised when bit-derived bracket EV ceiling cannot produce any selector values.
     @satisfies REQ-026, REQ-027, REQ-028, REQ-030
     """
 
     base_max_ev = _calculate_max_ev_from_bits(bits_per_color)
-    max_bracket = base_max_ev - abs(ev_zero)
-    if max_bracket < (1.0 - 1e-9):
+    bit_depth_max_bracket = base_max_ev - abs(ev_zero)
+    max_bracket = bit_depth_max_bracket
+    if clipping_safe_plus_ev is not None:
+        histogram_max_bracket = float(clipping_safe_plus_ev) - float(ev_zero)
+        max_bracket = min(max_bracket, histogram_max_bracket)
+    if max_bracket < (EV_STEP - 1e-9):
         raise ValueError(
-            "Bit-derived bracket EV ceiling is too small for selector generation: "
-            f"{max_bracket:g} (formula: ((bits_per_color-8)/2)-abs(ev_zero))"
+            "Derived bracket EV ceiling is too small for selector generation: "
+            f"{max_bracket:g} "
+            "(effective MAX_BRACKET = min(((bits_per_color-8)/2)-abs(ev_zero), "
+            "clipping_safe_plus_ev-ev_zero))"
         )
     max_steps = int(math.floor((max_bracket / EV_STEP) + 1e-9))
     if max_steps < 1:
         raise ValueError(
-            "Bit-derived bracket EV ceiling cannot produce selector values: "
-            f"{max_bracket:g} (formula: ((bits_per_color-8)/2)-abs(ev_zero))"
+            "Derived bracket EV ceiling cannot produce selector values: "
+            f"{max_bracket:g} "
+            "(effective MAX_BRACKET = min(((bits_per_color-8)/2)-abs(ev_zero), "
+            "clipping_safe_plus_ev-ev_zero))"
         )
     return tuple(round(index * EV_STEP, 2) for index in range(1, max_steps + 1))
 
@@ -1566,6 +1618,26 @@ def _quantize_ev_to_supported(ev_value, ev_values):
             nearest_ev = candidate
             smallest_distance = distance
     return nearest_ev
+
+
+def _floor_ev_to_supported_cap(ev_cap, ev_values):
+    """@brief Quantize one EV cap downward to the largest supported selector not exceeding it.
+
+    @details Preserves deterministic quarter-step selector behavior while
+    enforcing upper-bound safety constraints such as histogram-derived clipping
+    caps. When `ev_cap` falls below the minimum supported selector, the minimum
+    selector is returned so the caller can keep symmetric-bracket semantics and
+    let the optimizer move `ev_zero` instead.
+    @param ev_cap {float} Inclusive EV upper cap.
+    @param ev_values {tuple[float, ...]} Sorted supported EV selector values.
+    @return {float} Largest selector `<= ev_cap` when available; otherwise the minimum selector.
+    @satisfies REQ-028, REQ-030
+    """
+
+    for candidate in reversed(ev_values):
+        if candidate <= (float(ev_cap) + 1e-9):
+            return candidate
+    return ev_values[0]
 
 
 def _quantize_ev_toward_zero_step(ev_value, step=EV_STEP):
@@ -2179,6 +2251,85 @@ def _calculate_auto_zero_evaluations(cv2_module, np_module, image_rgb_float):
     )
 
 
+def _build_auto_ev_clipping_risk_stats(np_module, base_rgb_float):
+    """@brief Build histogram-derived clipping-risk metrics from the linear base RGB image.
+
+    @details Computes sorted per-pixel any-channel maxima from the normalized
+    linear base RGB tensor, derives `99.9` and `99.99` percentile summaries,
+    measures the already-clipped base fraction, and converts the percentile
+    maxima into positive-EV ceilings for clipping-aware automatic exposure
+    solving. Complexity: `O(N log N)` where `N=H*W`. Side effects: none.
+    @param np_module {ModuleType} Imported numpy module.
+    @param base_rgb_float {object} Normalized linear base RGB tensor in `[0,1]`.
+    @return {AutoEvClippingRiskStats} Histogram-derived clipping-risk metrics.
+    @satisfies REQ-008, REQ-028, REQ-052, REQ-158
+    """
+
+    normalized_base = _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=base_rgb_float,
+    ).astype(np_module.float32, copy=False)
+    max_rgb = np_module.max(normalized_base, axis=2).reshape(-1)
+    sorted_max_rgb = np_module.sort(np_module.clip(max_rgb, 0.0, 1.0))
+    if sorted_max_rgb.size == 0:
+        raise ValueError("Automatic exposure clipping-risk analysis requires non-empty base image")
+    p99_9_max_rgb = float(np_module.percentile(sorted_max_rgb, 99.9))
+    p99_99_max_rgb = float(np_module.percentile(sorted_max_rgb, 99.99))
+    base_clip_any = float(np_module.mean(sorted_max_rgb >= (1.0 - AUTO_EV_CLIP_EPS)))
+    safe_center_ev = max(
+        0.0,
+        math.log2(
+            1.0
+            / max(
+                p99_99_max_rgb,
+                AUTO_EV_CLIP_EPS,
+            )
+        ),
+    )
+    safe_plus_ev = max(
+        0.0,
+        math.log2(
+            1.0
+            / max(
+                p99_9_max_rgb,
+                AUTO_EV_CLIP_EPS,
+            )
+        ),
+    )
+    return AutoEvClippingRiskStats(
+        sorted_max_rgb=sorted_max_rgb,
+        p99_9_max_rgb=round(p99_9_max_rgb, 6),
+        p99_99_max_rgb=round(p99_99_max_rgb, 6),
+        base_clip_any=round(base_clip_any, 6),
+        safe_center_ev=round(safe_center_ev, 6),
+        safe_plus_ev=round(safe_plus_ev, 6),
+    )
+
+
+def _estimate_auto_ev_any_channel_clip_fraction(clipping_risk_stats, exposure_ev):
+    """@brief Estimate any-channel clipping fraction for one hypothetical exposure EV.
+
+    @details Reuses sorted per-pixel any-channel maxima from the linear base RGB
+    image. A pixel clips when `max_rgb * 2**exposure_ev >= 1`. The function
+    converts that condition into a scalar threshold and uses binary search over
+    the sorted maxima to estimate the fraction of clipped pixels in `O(log N)`.
+    Side effects: none.
+    @param clipping_risk_stats {AutoEvClippingRiskStats} Histogram-derived clipping-risk metrics.
+    @param exposure_ev {float} Exposure EV applied to the linear base RGB tensor.
+    @return {float} Predicted fraction of pixels clipped in at least one RGB channel.
+    @satisfies REQ-008, REQ-028, REQ-052
+    """
+
+    sorted_max_rgb = clipping_risk_stats.sorted_max_rgb
+    if float(exposure_ev) <= 0.0:
+        threshold = 1.0 + AUTO_EV_CLIP_EPS
+    else:
+        threshold = 2.0 ** (-float(exposure_ev))
+    clipped_start = int(sorted_max_rgb.searchsorted(threshold, side="left"))
+    clipped_count = int(sorted_max_rgb.size) - clipped_start
+    return clipped_count / float(sorted_max_rgb.size)
+
+
 def _build_joint_auto_ev_regularization_anchors(evaluations, safe_ev_zero_max):
     """@brief Build quantized center anchors for the joint automatic solver.
 
@@ -2209,24 +2360,48 @@ def _evaluate_joint_auto_ev_candidate(
     p_low,
     p_high,
     auto_ev_pct,
+    clipping_risk_stats=None,
 ):
     """@brief Evaluate one discrete joint automatic exposure candidate.
 
     @details Computes the minimum symmetric delta required by the shadow and
-    highlight guardrails at the candidate center, applies percentage scaling,
-    measures residual uncovered guardrail demand, and evaluates soft center
-    regularization from the three quantized anchors.
+    highlight guardrails at the candidate center, optionally contracts the
+    resulting delta by histogram-derived clipping-safe headroom, measures
+    residual uncovered guardrail demand, predicts center/plus clipping
+    fractions, and evaluates soft center regularization from the three
+    quantized anchors.
     @param bits_per_color {int} Detected source DNG bits per color.
     @param ev_zero_candidate {float} Signed center candidate on the supported quarter-step grid.
     @param anchors {tuple[float, float, float]} Quantized center regularization anchors.
     @param p_low {float} Normalized low-percentile preview luminance.
     @param p_high {float} Normalized high-percentile preview luminance.
     @param auto_ev_pct {float} Percentage scaler applied to the required automatic delta.
+    @param clipping_risk_stats {AutoEvClippingRiskStats|None} Optional histogram-derived clipping-risk metrics from the linear base RGB image.
     @return {JointAutoEvSolution} Fully scored candidate solution.
-    @satisfies REQ-008, REQ-009, REQ-019, REQ-028, REQ-030, REQ-031, REQ-032
+    @satisfies REQ-008, REQ-009, REQ-019, REQ-028, REQ-030, REQ-031, REQ-032, REQ-052
     """
 
-    supported_deltas = _derive_supported_ev_values(bits_per_color, ev_zero=ev_zero_candidate)
+    clipping_safe_delta = None
+    invalid_clipping_candidate = False
+    if clipping_risk_stats is not None:
+        clipping_safe_delta = max(
+            0.0,
+            float(clipping_risk_stats.safe_plus_ev) - float(ev_zero_candidate),
+        )
+    bit_supported_deltas = _derive_supported_ev_values(
+        bits_per_color,
+        ev_zero=ev_zero_candidate,
+    )
+    supported_deltas = bit_supported_deltas
+    if clipping_risk_stats is not None:
+        try:
+            supported_deltas = _derive_supported_ev_values(
+                bits_per_color,
+                ev_zero=ev_zero_candidate,
+                clipping_safe_plus_ev=float(clipping_risk_stats.safe_plus_ev),
+            )
+        except ValueError:
+            invalid_clipping_candidate = True
     shadow_need = max(0.0, math.log2(AUTO_EV_TARGET_SHADOW / p_low) - ev_zero_candidate)
     highlight_need = max(
         0.0,
@@ -2239,8 +2414,13 @@ def _evaluate_joint_auto_ev_candidate(
     )
     effective_delta = _clamp_ev_to_supported(
         _apply_auto_percentage_scaling(required_delta, auto_ev_pct),
-        supported_deltas,
+        bit_supported_deltas,
     )
+    if clipping_safe_delta is not None and not invalid_clipping_candidate:
+        effective_delta = min(
+            effective_delta,
+            _floor_ev_to_supported_cap(clipping_safe_delta, supported_deltas),
+        )
     uncovered_shadow = max(0.0, shadow_need - effective_delta)
     uncovered_highlight = max(0.0, highlight_need - effective_delta)
     zero_reg = (
@@ -2248,11 +2428,44 @@ def _evaluate_joint_auto_ev_candidate(
         + abs(ev_zero_candidate - anchors[1])
         + abs(ev_zero_candidate - anchors[2])
     ) / 3.0
+    predicted_center_clip = 0.0
+    predicted_plus_clip = 0.0
+    clip_overflow = 0.0
+    if clipping_risk_stats is not None:
+        predicted_center_clip = _estimate_auto_ev_any_channel_clip_fraction(
+            clipping_risk_stats=clipping_risk_stats,
+            exposure_ev=ev_zero_candidate,
+        )
+        predicted_plus_clip = _estimate_auto_ev_any_channel_clip_fraction(
+            clipping_risk_stats=clipping_risk_stats,
+            exposure_ev=ev_zero_candidate + effective_delta,
+        )
+        clip_overflow = max(
+            0.0,
+            predicted_center_clip - AUTO_EV_CENTER_CLIP_TARGET_FRACTION,
+        ) + max(
+            0.0,
+            predicted_plus_clip - AUTO_EV_PLUS_CLIP_TARGET_FRACTION,
+        )
+        if invalid_clipping_candidate:
+            clip_overflow += 1.0
     score = (
         64.0 * (uncovered_shadow + uncovered_highlight)
-        + (2.0 * effective_delta)
         + zero_reg
     )
+    if clipping_risk_stats is None:
+        score += 2.0 * effective_delta
+    else:
+        shadow_limited_by_clipping = (
+            clipping_safe_delta is not None
+            and required_delta > (clipping_safe_delta + 1e-9)
+            and not invalid_clipping_candidate
+        )
+        if shadow_limited_by_clipping:
+            score -= 4.0 * effective_delta
+        else:
+            score += 2.0 * effective_delta
+        score += 65536.0 * clip_overflow
     return JointAutoEvSolution(
         ev_zero=round(ev_zero_candidate, 2),
         ev_delta=round(effective_delta, 2),
@@ -2264,6 +2477,9 @@ def _evaluate_joint_auto_ev_candidate(
         zero_reg=round(zero_reg, 6),
         score=round(score, 6),
         anchors=anchors,
+        clipping_safe_delta=round(clipping_safe_delta or 0.0, 6),
+        predicted_center_clip=round(predicted_center_clip, 6),
+        predicted_plus_clip=round(predicted_plus_clip, 6),
     )
 
 
@@ -2273,20 +2489,22 @@ def _optimize_joint_ev_zero_and_delta(
     preview_luminance_stats,
     auto_ev_pct,
     evaluations,
+    clipping_risk_stats=None,
 ):
     """@brief Optimize one symmetric automatic solution over `(ev_zero, ev_delta)`.
 
     @details Enumerates every signed safe-center candidate on the supported
     quarter-step grid, evaluates the candidate score, then applies the
     deterministic tie-break chain:
-    `score -> ev_delta -> zero_reg -> mean-anchor-distance -> abs(ev_zero) -> ev_zero`.
+    `score -> delta-preference -> zero_reg -> mean-anchor-distance -> abs(ev_zero) -> ev_zero`.
     @param bits_per_color {int} Detected source DNG bits per color.
     @param base_max_ev {float} Bit-derived `BASE_MAX` ceiling.
     @param preview_luminance_stats {tuple[float, float, float]} Normalized preview `(p_low, p_median, p_high)` statistics.
     @param auto_ev_pct {float} Percentage scaler applied to the required automatic delta.
     @param evaluations {AutoZeroEvaluation} Raw center heuristics from the linear base image.
+    @param clipping_risk_stats {AutoEvClippingRiskStats|None} Optional histogram-derived clipping-risk metrics from the linear base RGB image.
     @return {JointAutoEvSolution} Selected joint automatic solution.
-    @satisfies REQ-008, REQ-009, REQ-019, REQ-028, REQ-029, REQ-030, REQ-031, REQ-032
+    @satisfies REQ-008, REQ-009, REQ-019, REQ-028, REQ-029, REQ-030, REQ-031, REQ-032, REQ-052
     """
 
     safe_ev_zero_max = _calculate_safe_ev_zero_max(base_max_ev)
@@ -2306,10 +2524,21 @@ def _optimize_joint_ev_zero_and_delta(
             p_low=p_low,
             p_high=p_high,
             auto_ev_pct=auto_ev_pct,
+            clipping_risk_stats=clipping_risk_stats,
+        )
+        shadow_limited_by_clipping = (
+            clipping_risk_stats is not None
+            and candidate_solution.required_delta
+            > (candidate_solution.clipping_safe_delta + 1e-9)
+        )
+        delta_preference = (
+            round(-candidate_solution.ev_delta, 2)
+            if shadow_limited_by_clipping
+            else round(candidate_solution.ev_delta, 2)
         )
         sort_key = (
             round(candidate_solution.score, 6),
-            round(candidate_solution.ev_delta, 2),
+            delta_preference,
             round(candidate_solution.zero_reg, 6),
             round(abs(candidate_solution.ev_zero - anchor_mean), 6),
             round(abs(candidate_solution.ev_zero), 6),
@@ -2331,6 +2560,7 @@ def _resolve_joint_auto_ev_solution(
     auto_adjust_dependencies=None,
     preview_luminance_stats=None,
     base_rgb_float=None,
+    clipping_risk_stats=None,
 ):
     """@brief Resolve the automatic symmetric exposure plan.
 
@@ -2345,9 +2575,10 @@ def _resolve_joint_auto_ev_solution(
     @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2_module, numpy_module)` tuple.
     @param preview_luminance_stats {tuple[float, float, float]|None} Optional precomputed preview luminance statistics.
     @param base_rgb_float {object|None} Optional precomputed normalized linear base RGB image.
+    @param clipping_risk_stats {AutoEvClippingRiskStats|None} Optional histogram-derived clipping-risk metrics for the normalized linear base RGB image.
     @return {JointAutoEvSolution} Selected joint automatic exposure solution.
     @exception RuntimeError Raised when required `cv2` or `numpy` dependencies are unavailable.
-    @satisfies REQ-008, REQ-009, REQ-031, REQ-032, REQ-037, REQ-052
+    @satisfies REQ-008, REQ-009, REQ-028, REQ-031, REQ-032, REQ-037, REQ-052
     """
 
     if auto_adjust_dependencies is None:
@@ -2364,6 +2595,11 @@ def _resolve_joint_auto_ev_solution(
             raw_handle=raw_handle,
             np_module=np_module,
         )
+    if clipping_risk_stats is None:
+        clipping_risk_stats = _build_auto_ev_clipping_risk_stats(
+            np_module=np_module,
+            base_rgb_float=base_rgb_float,
+        )
     evaluations = _calculate_auto_zero_evaluations(
         cv2_module=cv2_module,
         np_module=np_module,
@@ -2375,6 +2611,7 @@ def _resolve_joint_auto_ev_solution(
         preview_luminance_stats=preview_luminance_stats,
         auto_ev_pct=auto_ev_pct,
         evaluations=evaluations,
+        clipping_risk_stats=clipping_risk_stats,
     )
     print_info(f"Auto-EV heuristic miglior_ev: {evaluations.miglior_ev:+.1f} EV")
     print_info(f"Auto-EV heuristic ev_ettr: {evaluations.ev_ettr:+.1f} EV")
@@ -2384,13 +2621,24 @@ def _resolve_joint_auto_ev_solution(
         + ", ".join(f"{anchor:+.2f}" for anchor in solution.anchors)
     )
     print_info(
+        "Auto-EV clipping-risk metrics: "
+        f"p99.9MaxRGB={clipping_risk_stats.p99_9_max_rgb:.6f}, "
+        f"p99.99MaxRGB={clipping_risk_stats.p99_99_max_rgb:.6f}, "
+        f"baseClipAny={clipping_risk_stats.base_clip_any:.6f}, "
+        f"safeCenterEV={clipping_risk_stats.safe_center_ev:.2f}, "
+        f"safePlusEV={clipping_risk_stats.safe_plus_ev:.2f}"
+    )
+    print_info(
         "Auto-EV selected joint solution: "
         f"ev_zero={solution.ev_zero:+.2f}, "
         f"ev_delta={solution.ev_delta:.2f}, "
         f"required_delta={solution.required_delta:.2f}, "
+        f"clipping_safe_delta={solution.clipping_safe_delta:.2f}, "
         f"score={solution.score:.6f}, "
         f"uncovered_shadow={solution.uncovered_shadow:.6f}, "
-        f"uncovered_highlight={solution.uncovered_highlight:.6f}"
+        f"uncovered_highlight={solution.uncovered_highlight:.6f}, "
+        f"predicted_center_clip={solution.predicted_center_clip:.6f}, "
+        f"predicted_plus_clip={solution.predicted_plus_clip:.6f}"
     )
     return solution
 
