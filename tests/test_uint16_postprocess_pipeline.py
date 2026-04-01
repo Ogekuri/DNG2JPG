@@ -2990,6 +2990,100 @@ def test_run_auto_ev_prints_selected_triplet_diagnostics(monkeypatch, tmp_path, 
     assert "Export EV triplet:" in output
 
 
+def test_run_auto_ev_uses_raw_white_level_for_triplet_selection(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    """Automatic runtime must not collapse to `0,0,0` when RAW white level is below uint16 full scale."""
+
+    input_dng = tmp_path / "scene-low-white.dng"
+    input_dng.write_bytes(b"fake-dng")
+    output_jpg = tmp_path / "scene-low-white.jpg"
+    raw_pixels = np.array(
+        [
+            [[300, 600, 900], [1200, 1500, 1800]],
+            [[2100, 2400, 2700], [3000, 3300, 3600]],
+        ],
+        dtype=np.uint16,
+    )
+
+    class _FakeRawHandle:
+        def __init__(self) -> None:
+            self.raw_image_visible = np.zeros((2, 2), dtype=np.uint16)
+            self.white_level = int(4095)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            del exc_type, exc, tb
+
+        def postprocess(
+            self,
+            *,
+            bright,
+            output_bps,
+            use_camera_wb,
+            no_auto_bright,
+            gamma,
+            user_flip,
+        ) -> np.ndarray:
+            del output_bps, use_camera_wb, no_auto_bright, gamma, user_flip
+            return np.clip(raw_pixels.astype(np.float32) * float(bright), 0.0, 65535.0).astype(
+                np.uint16
+            )
+
+    class _FakeRawPyModule:
+        LibRawError = RuntimeError
+
+        @staticmethod
+        def imread(_path: str) -> _FakeRawHandle:
+            return _FakeRawHandle()
+
+    fake_imageio_module = _FakeImageIoModule(
+        merged_rgb_u16=np.full((2, 2, 3), 32768, dtype=np.uint16)
+    )
+    fake_pil_module = _FakePilModule()
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_load_image_dependencies",
+        lambda: (_FakeRawPyModule(), fake_imageio_module, fake_pil_module),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_extract_dng_exif_payload_and_timestamp",
+        lambda **_kwargs: (None, None, 1, 0.125),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_resolve_auto_adjust_dependencies",
+        lambda: (_FakeOpenCvModule(), np),
+    )
+    monkeypatch.setattr(dng2jpg_module, "_encode_jpg", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_sync_output_file_timestamps_from_exif",
+        lambda **_kwargs: None,
+    )
+
+    exit_code = dng2jpg_module.run(
+        [
+            str(input_dng),
+            str(output_jpg),
+            "--auto-ev=enable",
+            "--hdr-merge=OpenCV",
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "Auto-EV safe interval: evMinSafe=-1.00, evMaxSafe=+0.00" in output
+    assert "Auto-EV selected triplet: ev_minus=-1.00, ev_zero=-0.50, ev_plus=+0.00" in output
+    assert "Export EV triplet: -1, -0.5, 0" in output
+
+
 def test_run_static_ev_uses_manual_center_and_reports_static_mode(
     monkeypatch,
     tmp_path,

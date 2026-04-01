@@ -1525,7 +1525,11 @@ def _extract_base_rgb_linear_float(raw_handle, np_module):
     parameters `bright=1.0`, `output_bps=16`, `use_camera_wb=True`,
     `no_auto_bright=True`, `gamma=(1.0,1.0)`, and `user_flip=0`, then
     normalizes the demosaiced maximum-resolution RGB output to float `[0,1]`.
-    Complexity: O(H*W). Side effects: one RAW postprocess invocation.
+    When RAW metadata exposes one positive `white_level`, normalization clamps
+    against that effective sensor ceiling instead of the wider integer container
+    range so automatic EV analysis observes the same scene dynamic range implied
+    by the RAW metadata. Complexity: O(H*W). Side effects: one RAW postprocess
+    invocation.
     @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
     @param np_module {ModuleType} Imported numpy module.
     @return {object} Normalized RGB float tensor in `[0,1]`.
@@ -1541,10 +1545,32 @@ def _extract_base_rgb_linear_float(raw_handle, np_module):
         gamma=(1.0, 1.0),
         user_flip=0,
     )
-    return _normalize_float_rgb_image(
+    normalized_base_rgb = _normalize_float_rgb_image(
         np_module=np_module,
         image_data=base_rgb,
     )
+    white_level_raw = getattr(raw_handle, "white_level", None)
+    if white_level_raw is None:
+        return normalized_base_rgb
+    if isinstance(white_level_raw, (tuple, list)):
+        if not white_level_raw:
+            return normalized_base_rgb
+        white_level_value = max(white_level_raw)
+    else:
+        white_level_value = white_level_raw
+    try:
+        white_level_float = float(white_level_value)
+    except (TypeError, ValueError):
+        return normalized_base_rgb
+    if white_level_float <= 0.0:
+        return normalized_base_rgb
+    container_max = 65535.0
+    scaling_ratio = container_max / white_level_float
+    return np_module.clip(
+        normalized_base_rgb.astype(np_module.float32, copy=False) * scaling_ratio,
+        0.0,
+        1.0,
+    ).astype(np_module.float32, copy=False)
 
 
 def _normalize_source_gamma_label(label_raw):
