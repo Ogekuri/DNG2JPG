@@ -2157,6 +2157,7 @@ def test_parse_run_options_accepts_extended_auto_levels_knobs() -> None:
             "--auto-levels=enable",
             "--al-clip-pct=0.5",
             "--al-clip-out-of-gamut=false",
+            "--al-highlight-reconstruction",
             "--al-highlight-reconstruction-method",
             "Inpaint Opposed",
             "--al-gain-threshold=1.25",
@@ -2174,6 +2175,28 @@ def test_parse_run_options_accepts_extended_auto_levels_knobs() -> None:
         == "Inpaint Opposed"
     )
     assert postprocess.auto_levels_options.gain_threshold == 1.25
+
+
+def test_parse_run_options_method_does_not_enable_highlight_reconstruction() -> None:
+    """Method selection must not implicitly enable highlight reconstruction."""
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        [
+            "input.dng",
+            "output.jpg",
+            "--ev=1",
+            "--auto-levels=enable",
+            "--al-highlight-reconstruction-method=Color Propagation",
+            "--hdr-merge=OpenCV",
+        ]
+    )
+    assert parsed is not None
+    postprocess = parsed[4]
+    assert postprocess.auto_levels_options.highlight_reconstruction_enabled is False
+    assert (
+        postprocess.auto_levels_options.highlight_reconstruction_method
+        == "Color Propagation"
+    )
 
 
 def test_compute_auto_levels_from_histogram_matches_rawtherapee_reference() -> None:
@@ -2269,8 +2292,56 @@ def test_apply_auto_levels_clip_out_of_gamut_normalizes_triplet(monkeypatch) -> 
     )
 
 
-def test_apply_auto_levels_color_methods_preserve_float_pipeline(monkeypatch) -> None:
-    """New method selectors must dispatch on float internals and preserve float output."""
+def test_apply_auto_levels_tonal_transform_uses_metric_driven_float_curves(
+    monkeypatch,
+) -> None:
+    """Auto-levels must apply the full float tone transform before clipping."""
+
+    image_rgb_float = np.array([[[0.2, 0.4, 0.6]]], dtype=np.float32)
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_build_autoexp_histogram_rgb_float",
+        lambda **_kwargs: np.zeros(1, dtype=np.uint64),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_compute_auto_levels_from_histogram",
+        lambda **_kwargs: {
+            "expcomp": 0.25,
+            "gain": 1.0,
+            "black_normalized": 0.01,
+            "brightness": 10,
+            "contrast": 15,
+            "hlcompr": 20,
+            "hlcomprthresh": 35,
+        },
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_apply_auto_levels_tonal_transform_float",
+        lambda **kwargs: kwargs["image_rgb_float"].astype(np.float64) + 0.125,
+    )
+
+    output = dng2jpg_module._apply_auto_levels_float(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_float=image_rgb_float,
+        auto_levels_options=dng2jpg_module.AutoLevelsOptions(
+            clip_out_of_gamut=False,
+        ),
+    )
+
+    np.testing.assert_allclose(
+        output,
+        np.array([[[0.325, 0.525, 0.725]]], dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+
+
+def test_apply_auto_levels_color_methods_require_explicit_enable(
+    monkeypatch,
+) -> None:
+    """Highlight reconstruction methods must execute only when explicitly enabled."""
 
     image_rgb_float = (
         np.array([[[1000, 2000, 3000], [4000, 5000, 6000]]], dtype=np.float32)
@@ -2286,7 +2357,20 @@ def test_apply_auto_levels_color_methods_preserve_float_pipeline(monkeypatch) ->
     monkeypatch.setattr(
         dng2jpg_module,
         "_compute_auto_levels_from_histogram",
-        lambda **_kwargs: {"gain": 1.0},
+        lambda **_kwargs: {
+            "expcomp": 0.0,
+            "gain": 1.0,
+            "black_normalized": 0.0,
+            "brightness": 0,
+            "contrast": 0,
+            "hlcompr": 0,
+            "hlcomprthresh": 0,
+        },
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_apply_auto_levels_tonal_transform_float",
+        lambda **kwargs: kwargs["image_rgb_float"].astype(np.float64),
     )
 
     def _fake_color_propagation(*, np_module, image_rgb, maxval):
@@ -2312,6 +2396,15 @@ def test_apply_auto_levels_color_methods_preserve_float_pipeline(monkeypatch) ->
         _fake_inpaint_opposed,
     )
 
+    disabled_output = dng2jpg_module._apply_auto_levels_float(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_float=image_rgb_float,
+        auto_levels_options=dng2jpg_module.AutoLevelsOptions(
+            highlight_reconstruction_enabled=False,
+            highlight_reconstruction_method="Color Propagation",
+            clip_out_of_gamut=False,
+        ),
+    )
     color_output = dng2jpg_module._apply_auto_levels_float(  # pylint: disable=protected-access
         np_module=np,
         image_rgb_float=image_rgb_float,
@@ -2332,6 +2425,12 @@ def test_apply_auto_levels_color_methods_preserve_float_pipeline(monkeypatch) ->
         ),
     )
 
+    np.testing.assert_allclose(
+        disabled_output,
+        image_rgb_float.astype(np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
     assert color_output.dtype == np.float32
     assert inpaint_output.dtype == np.float32
     np.testing.assert_allclose(

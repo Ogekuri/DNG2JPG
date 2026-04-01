@@ -11,7 +11,7 @@ deterministic parameters, then writes final JPG to user-selected output path.
 Temporary workspace artifacts are isolated in a temporary directory and
 removed automatically on success and failure, while optional debug checkpoints
 persist in the output directory when `--debug` is enabled.
-    @satisfies PRJ-001, PRJ-002, DES-003, DES-008, DES-009, REQ-008, REQ-009, REQ-010, REQ-012, REQ-013, REQ-014, REQ-018, REQ-020, REQ-032, REQ-034, REQ-037, REQ-041, REQ-052, REQ-100, REQ-106, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-141, REQ-142, REQ-143, REQ-144, REQ-145, REQ-146, REQ-148, REQ-149, REQ-152, REQ-153, REQ-154, REQ-157, REQ-158, REQ-159, REQ-160, REQ-163, REQ-164
+    @satisfies PRJ-001, PRJ-002, DES-003, DES-008, DES-009, REQ-008, REQ-009, REQ-010, REQ-012, REQ-013, REQ-014, REQ-018, REQ-020, REQ-032, REQ-034, REQ-037, REQ-041, REQ-052, REQ-100, REQ-106, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-141, REQ-142, REQ-143, REQ-144, REQ-145, REQ-146, REQ-148, REQ-149, REQ-152, REQ-153, REQ-154, REQ-157, REQ-158, REQ-159, REQ-160, REQ-163, REQ-164, REQ-165
 """
 
 import os
@@ -72,10 +72,16 @@ DEFAULT_AL_HISTCOMPR = 3
 _AUTO_LEVELS_CODE_BIN_COUNT = 1 << 16
 _AUTO_LEVELS_CODE_MAX = float(_AUTO_LEVELS_CODE_BIN_COUNT - 1)
 _AUTO_LEVELS_RT_MIDGRAY = 0.1842
+_AUTO_LEVELS_RT_CURVE_MIN_POLY_POINTS = 1000
 _AUTO_LEVELS_LUMINANCE_WEIGHTS = (
     0.2126729,
     0.7151521,
     0.0721750,
+)
+_AUTO_LEVELS_TONECURVE_LUMINANCE_WEIGHTS = (
+    0.299,
+    0.587,
+    0.114,
 )
 _AUTO_LEVELS_BLEND_CLIP_THRESHOLD = 0.95
 _AUTO_LEVELS_BLEND_FIX_THRESHOLD = 0.5
@@ -208,6 +214,7 @@ _OPENCV_MERGE_ALGORITHMS = (
 _AUTO_LEVELS_KNOB_OPTIONS = (
     "--al-clip-pct",
     "--al-clip-out-of-gamut",
+    "--al-highlight-reconstruction",
     "--al-highlight-reconstruction-method",
     "--al-gain-threshold",
 )
@@ -435,13 +442,13 @@ class AutoLevelsOptions:
     from the attached RawTherapee-oriented source and adapted for normalized
     RGB float stage execution in the current post-merge pipeline.
     @param clip_percent {float} Histogram clipping percentage in `[0, +inf)`.
-    @param clip_out_of_gamut {bool} `True` to normalize overflowing RGB triplets back into normalized gamut after gain/reconstruction.
+    @param clip_out_of_gamut {bool} `True` to normalize overflowing RGB triplets back into normalized gamut after tonal transform/reconstruction.
     @param histcompr {int} Histogram compression shift in `[0, 15]`.
-    @param highlight_reconstruction_enabled {bool} `True` when highlight reconstruction is enabled.
+    @param highlight_reconstruction_enabled {bool} `True` when highlight reconstruction is explicitly enabled.
     @param highlight_reconstruction_method {str} Highlight reconstruction method selector.
     @param gain_threshold {float} Inpaint Opposed gain threshold in `(0, +inf)`.
     @return {None} Immutable dataclass container.
-    @satisfies REQ-100, REQ-101, REQ-102, REQ-116
+    @satisfies REQ-100, REQ-101, REQ-102, REQ-116, REQ-120, REQ-165
     """
 
     clip_percent: float = DEFAULT_AL_CLIP_PERCENT
@@ -1053,18 +1060,26 @@ def print_help(version):
     )
     _print_help_option(
         "--al-clip-out-of-gamut[=<bool>]",
-        "Normalize overflowing RGB triplets after auto-levels gain and highlight reconstruction. Effective only when auto-levels resolves to enable.",
+        "Normalize overflowing RGB triplets after auto-levels tonal transformation and optional highlight reconstruction. Effective only when auto-levels resolves to enable.",
         (
             f"Default: `{'true' if DEFAULT_AL_CLIP_OUT_OF_GAMUT else 'false'}`.",
             "Bare flag form is equivalent to `true`.",
         ),
     )
     _print_help_option(
+        "--al-highlight-reconstruction[=<bool>]",
+        "Enable or disable highlight reconstruction after the auto-levels tonal transformation. Effective only when auto-levels resolves to enable.",
+        (
+            "Bare flag form is equivalent to `true`.",
+            "Default: `false`.",
+        ),
+    )
+    _print_help_option(
         "--al-highlight-reconstruction-method <name>",
-        "Enable highlight reconstruction and select one RawTherapee-aligned method. Effective only when auto-levels resolves to enable.",
+        "Select one RawTherapee-aligned highlight reconstruction method. Effective only when auto-levels resolves to enable.",
         (
             "Allowed values: " + ", ".join(_AUTO_LEVELS_HIGHLIGHT_METHODS) + ".",
-            "Default when omitted: highlight reconstruction disabled; default method when enabled without override is `Inpaint Opposed`.",
+            "Default when omitted: `Inpaint Opposed`.",
         ),
     )
     _print_help_option(
@@ -2991,11 +3006,12 @@ def _parse_auto_levels_options(auto_levels_raw_values):
     """@brief Parse and validate auto-levels parameters.
 
     @details Parses histogram clip percentage, explicit gamut clipping toggle,
-    optional highlight reconstruction method, and Inpaint Opposed gain
-    threshold using RawTherapee-aligned defaults.
+    explicit highlight reconstruction toggle, optional highlight
+    reconstruction method, and Inpaint Opposed gain threshold using
+    RawTherapee-aligned defaults.
     @param auto_levels_raw_values {dict[str, str]} Raw `--al-*` option values keyed by long option name.
     @return {AutoLevelsOptions|None} Parsed auto-levels options or `None` on validation error.
-    @satisfies REQ-100, REQ-101, REQ-102, REQ-116
+    @satisfies REQ-100, REQ-101, REQ-102, REQ-116, REQ-120
     """
 
     options = AutoLevelsOptions()
@@ -3023,13 +3039,21 @@ def _parse_auto_levels_options(auto_levels_raw_values):
             return None
         clip_out_of_gamut = parsed
 
+    if "--al-highlight-reconstruction" in auto_levels_raw_values:
+        parsed = _parse_explicit_boolean_option(
+            "--al-highlight-reconstruction",
+            auto_levels_raw_values["--al-highlight-reconstruction"],
+        )
+        if parsed is None:
+            return None
+        highlight_reconstruction_enabled = parsed
+
     if "--al-highlight-reconstruction-method" in auto_levels_raw_values:
         parsed = _parse_auto_levels_hr_method_option(
             auto_levels_raw_values["--al-highlight-reconstruction-method"]
         )
         if parsed is None:
             return None
-        highlight_reconstruction_enabled = True
         highlight_reconstruction_method = parsed
 
     if "--al-gain-threshold" in auto_levels_raw_values:
@@ -3646,7 +3670,10 @@ def _parse_run_options(args):
             continue
 
         if token.startswith("--al-"):
-            if token == "--al-clip-out-of-gamut":
+            if token in (
+                "--al-clip-out-of-gamut",
+                "--al-highlight-reconstruction",
+            ):
                 if idx + 1 < len(args) and not args[idx + 1].startswith("--"):
                     auto_levels_raw_values[token] = args[idx + 1]
                     idx += 2
@@ -7797,6 +7824,642 @@ def _compute_auto_levels_from_histogram(np_module, histogram, histcompr, clip_pe
     )
 
 
+def _rt_simplebasecurve_scalar(x_value, black, shadow_recovery):
+    """@brief Evaluate RawTherapee `simplebasecurve` for one normalized sample.
+
+    @details Ports the `CurveFactory::simplebasecurve(...)` path used by
+    RawTherapee to derive the shadow tone factor curve. Input and output stay in
+    normalized float space; no uint16 buffer staging is introduced.
+    @param x_value {float} Normalized sample coordinate.
+    @param black {float} Normalized clipped black point.
+    @param shadow_recovery {float} Shadow recovery strength.
+    @return {float} Normalized curve output for the sample.
+    @satisfies REQ-100, REQ-119
+    """
+
+    def _basel(x_input, slope_start, slope_end):
+        if x_input == 0.0:
+            return 0.0
+        numerator = math.sqrt(
+            (slope_start - 1.0) * (slope_start - slope_end) * 0.5
+        )
+        denominator = 1.0 - slope_end
+        k_value = numerator / denominator
+        l_value = ((slope_start - slope_end) / denominator) + k_value
+        log_x = math.log(x_input)
+        return (
+            slope_end * x_input
+            + (1.0 - slope_end)
+            * (2.0 - math.exp(k_value * log_x))
+            * math.exp(l_value * log_x)
+        )
+
+    def _baseu(x_input, slope_start, slope_end):
+        return 1.0 - _basel(1.0 - x_input, slope_start, slope_end)
+
+    def _cupper(x_input, slope_value, highlight_recovery):
+        if highlight_recovery > 1.0:
+            return _baseu(
+                x_input,
+                slope_value,
+                2.0 * (highlight_recovery - 1.0) / slope_value,
+            )
+        x1_value = (1.0 - highlight_recovery) / slope_value
+        x2_value = x1_value + highlight_recovery
+        if x_input >= x2_value:
+            return 1.0
+        if x_input < x1_value:
+            return x_input * slope_value
+        return (
+            1.0
+            - highlight_recovery
+            + highlight_recovery
+            * _baseu((x_input - x1_value) / highlight_recovery, slope_value, 0.0)
+        )
+
+    def _clower(x_input, slope_value, shadow_value):
+        return 1.0 - _cupper(1.0 - x_input, slope_value, shadow_value)
+
+    def _clower2(x_input, slope_value, shadow_value):
+        x1_value = shadow_value / 1.5 + 0.00001
+        if x_input > x1_value or shadow_value < 0.001:
+            return 1.0 - (1.0 - x_input) * slope_value
+        y1_value = 1.0 - (1.0 - x1_value) * slope_value
+        x_ratio = 1.0 - x_input / x1_value
+        return (
+            y1_value
+            + slope_value * (x_input - x1_value)
+            - (1.0 - slope_value) * (x_ratio * x_ratio) * (x_ratio * x_ratio)
+        )
+
+    if black == 0.0:
+        return x_value
+    if black < 0.0:
+        midpoint = 0.5
+        slope_value = 1.0 + black
+        midpoint_value = -black + midpoint * slope_value
+        if x_value > midpoint:
+            return midpoint_value + (x_value - midpoint) * slope_value
+        return midpoint_value * _clower2(
+            x_value / midpoint,
+            slope_value * midpoint / midpoint_value,
+            2.0 - shadow_recovery,
+        )
+    slope_value = 1.0 / (1.0 - black)
+    midpoint = black + (1.0 - black) * 0.25
+    midpoint_value = (midpoint - black) * slope_value
+    if x_value <= midpoint:
+        return _clower(
+            x_value / midpoint,
+            slope_value * midpoint / midpoint_value,
+            shadow_recovery,
+        ) * midpoint_value
+    return midpoint_value + (x_value - midpoint) * slope_value
+
+
+def _build_rt_nurbs_curve_lut(np_module, x_points, y_points, sample_count):
+    """@brief Build one RawTherapee-style NURBS diagonal-curve LUT.
+
+    @details Ports the `DiagonalCurve` NURBS polygonization path used by
+    RawTherapee for the brightness and contrast curves inside
+    `CurveFactory::complexCurve(...)`, then resamples the resulting polyline on
+    one dense normalized LUT.
+    @param np_module {ModuleType} Imported numpy module.
+    @param x_points {tuple[float, ...]|list[float]} Ordered control-point x coordinates.
+    @param y_points {tuple[float, ...]|list[float]} Ordered control-point y coordinates.
+    @param sample_count {int} Output LUT length.
+    @return {object} Dense normalized float64 LUT.
+    @exception ValueError Raised when control-point arrays are invalid.
+    @satisfies REQ-100, REQ-119
+    """
+
+    if len(x_points) != len(y_points):
+        raise ValueError("NURBS x/y control point counts must match")
+    if len(x_points) < 2:
+        raise ValueError("NURBS curve requires at least two control points")
+
+    if len(x_points) == 2:
+        samples = np_module.linspace(0.0, 1.0, sample_count, dtype=np_module.float64)
+        return np_module.interp(
+            samples,
+            np_module.asarray(x_points, dtype=np_module.float64),
+            np_module.asarray(y_points, dtype=np_module.float64),
+        ).astype(np_module.float64)
+
+    ppn = min(_AUTO_LEVELS_RT_CURVE_MIN_POLY_POINTS, 65500)
+    point_count = len(x_points)
+    subcurve_x = []
+    subcurve_y = []
+    subcurve_lengths = []
+    total_length = 0.0
+    point_index = 0
+
+    while point_index < point_count - 1:
+        if point_index == 0:
+            first_x = float(x_points[point_index])
+            first_y = float(y_points[point_index])
+            point_index += 1
+        else:
+            first_x = 0.5 * float(x_points[point_index - 1] + x_points[point_index])
+            first_y = 0.5 * float(y_points[point_index - 1] + y_points[point_index])
+        subcurve_x.append(first_x)
+        subcurve_y.append(first_y)
+
+        control_x = float(x_points[point_index])
+        control_y = float(y_points[point_index])
+        point_index += 1
+        subcurve_x.append(control_x)
+        subcurve_y.append(control_y)
+
+        if point_index == point_count - 1:
+            third_x = float(x_points[point_index])
+            third_y = float(y_points[point_index])
+        else:
+            third_x = 0.5 * float(x_points[point_index - 1] + x_points[point_index])
+            third_y = 0.5 * float(y_points[point_index - 1] + y_points[point_index])
+        subcurve_x.append(third_x)
+        subcurve_y.append(third_y)
+
+        first_leg = math.hypot(control_x - first_x, control_y - first_y)
+        second_leg = math.hypot(third_x - control_x, third_y - control_y)
+        curve_length = first_leg + second_leg
+        subcurve_lengths.append(curve_length)
+        total_length += curve_length
+
+    if total_length <= 0.0:
+        samples = np_module.linspace(0.0, 1.0, sample_count, dtype=np_module.float64)
+        return np_module.interp(
+            samples,
+            np_module.asarray(x_points, dtype=np_module.float64),
+            np_module.asarray(y_points, dtype=np_module.float64),
+        ).astype(np_module.float64)
+
+    poly_x = []
+    poly_y = []
+    if float(x_points[0]) > 0.0:
+        poly_x.append(0.0)
+        poly_y.append(float(y_points[0]))
+
+    subcurve_count = len(subcurve_lengths)
+    for subcurve_index in range(subcurve_count):
+        offset = subcurve_index * 3
+        x1_value = subcurve_x[offset]
+        y1_value = subcurve_y[offset]
+        x2_value = subcurve_x[offset + 1]
+        y2_value = subcurve_y[offset + 1]
+        x3_value = subcurve_x[offset + 2]
+        y3_value = subcurve_y[offset + 2]
+        nbr_points = int(
+            ((ppn + point_count - 2) * subcurve_lengths[subcurve_index])
+            / total_length
+        )
+        nbr_points = max(2, nbr_points)
+        increment = 1.0 / float(nbr_points - 1)
+        if subcurve_index == 0:
+            poly_x.append(x1_value)
+            poly_y.append(y1_value)
+        for point_offset in range(1, nbr_points - 1):
+            t_value = point_offset * increment
+            t_squared = t_value * t_value
+            t_reverse = 1.0 - t_value
+            reverse_squared = t_reverse * t_reverse
+            reverse_double_t = t_reverse * 2.0 * t_value
+            poly_x.append(
+                reverse_squared * x1_value
+                + reverse_double_t * x2_value
+                + t_squared * x3_value
+            )
+            poly_y.append(
+                reverse_squared * y1_value
+                + reverse_double_t * y2_value
+                + t_squared * y3_value
+            )
+        poly_x.append(x3_value)
+        poly_y.append(y3_value)
+
+    poly_x.append(3.0)
+    poly_y.append(float(y_points[-1]))
+    samples = np_module.linspace(0.0, 1.0, sample_count, dtype=np_module.float64)
+    return np_module.clip(
+        np_module.interp(
+            samples,
+            np_module.asarray(poly_x, dtype=np_module.float64),
+            np_module.asarray(poly_y, dtype=np_module.float64),
+        ),
+        0.0,
+        1.0,
+    ).astype(np_module.float64)
+
+
+def _sample_auto_levels_lut_float(
+    np_module,
+    lut_values,
+    indices,
+    *,
+    clip_below=True,
+    clip_above=True,
+):
+    """@brief Sample one dense float LUT with RawTherapee-style interpolation.
+
+    @details Replicates `LUT<float>::operator[](float)` semantics for scalar or
+    tensor indices, including optional clipping or edge extrapolation, while
+    keeping the surrounding pipeline in normalized float arrays.
+    @param np_module {ModuleType} Imported numpy module.
+    @param lut_values {object} One-dimensional float LUT.
+    @param indices {object} Scalar or tensor of float lookup coordinates.
+    @param clip_below {bool} `True` to clip values below the lower bound.
+    @param clip_above {bool} `True` to clip values above the upper bound.
+    @return {object} LUT-sampled float tensor.
+    @satisfies REQ-100, REQ-119
+    """
+
+    lut = np_module.asarray(lut_values, dtype=np_module.float64)
+    lookup = np_module.asarray(indices, dtype=np_module.float64)
+    max_index = float(lut.size - 1)
+    effective_lookup = lookup
+    if clip_below:
+        effective_lookup = np_module.maximum(effective_lookup, 0.0)
+    if clip_above:
+        effective_lookup = np_module.minimum(effective_lookup, max_index)
+    base_index = effective_lookup.astype(np_module.int64)
+    base_index = np_module.clip(base_index, 0, lut.size - 2)
+    fraction = effective_lookup - base_index.astype(np_module.float64)
+    lower = lut[base_index]
+    upper = lut[base_index + 1]
+    return lower + (upper - lower) * fraction
+
+
+def _build_auto_levels_full_histogram_rgb_float(np_module, image_rgb_float):
+    """@brief Build the full 16-bit luminance histogram for auto-levels curves.
+
+    @details Builds the uncompressed `0..65535` luminance histogram required by
+    the RawTherapee `complexCurve(...)` contrast-centering step while preserving
+    float-only image buffers.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_float {object} Normalized RGB float tensor.
+    @return {object} Full-resolution uint64 histogram.
+    @satisfies REQ-100, REQ-119
+    """
+
+    normalized = _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=image_rgb_float,
+    ).astype(np_module.float64)
+    luminance = (
+        _AUTO_LEVELS_TONECURVE_LUMINANCE_WEIGHTS[0] * normalized[..., 0]
+        + _AUTO_LEVELS_TONECURVE_LUMINANCE_WEIGHTS[1] * normalized[..., 1]
+        + _AUTO_LEVELS_TONECURVE_LUMINANCE_WEIGHTS[2] * normalized[..., 2]
+    )
+    histogram_index = np_module.clip(
+        (luminance * _AUTO_LEVELS_CODE_MAX).astype(np_module.int64),
+        0,
+        _AUTO_LEVELS_CODE_BIN_COUNT - 1,
+    )
+    return np_module.bincount(
+        histogram_index.ravel(),
+        minlength=_AUTO_LEVELS_CODE_BIN_COUNT,
+    ).astype(np_module.uint64)
+
+
+def _rt_hlcurve_float(np_module, exp_scale, comp, hlrange, levels_code):
+    """@brief Evaluate RawTherapee highlight-curve overflow branch.
+
+    @details Ports `CurveFactory::hlcurve(...)` for channel samples above the
+    dense LUT range while staying in float arithmetic and code-value units only
+    for the local formula evaluation.
+    @param np_module {ModuleType} Imported numpy module.
+    @param exp_scale {float} Exposure scaling factor `2^expcomp`.
+    @param comp {float} Highlight-compression coefficient.
+    @param hlrange {float} Highlight range in RawTherapee code units.
+    @param levels_code {object} Code-domain sample tensor.
+    @return {object} Tone factors for the overflow samples.
+    @satisfies REQ-100, REQ-119
+    """
+
+    if comp <= 0.0:
+        return np_module.full_like(
+            np_module.asarray(levels_code, dtype=np_module.float64),
+            float(exp_scale),
+            dtype=np_module.float64,
+        )
+    levels = np_module.asarray(levels_code, dtype=np_module.float64)
+    value = levels + (float(hlrange) - float(_AUTO_LEVELS_CODE_BIN_COUNT))
+    value = np_module.where(value == 0.0, 0.000001, value)
+    y_value = value * float(exp_scale) / float(hlrange)
+    y_value *= float(comp)
+    y_value = np_module.where(y_value <= -1.0, -0.999999, y_value)
+    ratio = float(hlrange) / (value * float(comp))
+    return np_module.log1p(y_value) * ratio
+
+
+def _build_auto_levels_tone_curve_state(np_module, image_rgb_float, auto_levels_metrics):
+    """@brief Build RawTherapee-equivalent auto-levels curve state.
+
+    @details Ports the curve-building path of `CurveFactory::complexCurve(...)`
+    into normalized float execution: full-resolution histogram, highlight curve,
+    shadow curve, brightness curve, contrast curve, and inverse-gamma output
+    tonecurve. Shadow compression remains fixed to RawTherapee default `0`.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_float {object} Normalized RGB float tensor.
+    @param auto_levels_metrics {dict[str, int|float]} Metrics from `_compute_auto_levels_from_histogram(...)`.
+    @return {dict[str, object]} Tone-curve state dictionary.
+    @satisfies REQ-100, REQ-118, REQ-119
+    """
+
+    histogram = _build_auto_levels_full_histogram_rgb_float(
+        np_module=np_module,
+        image_rgb_float=image_rgb_float,
+    ).astype(np_module.float64)
+    gain = float(auto_levels_metrics.get("gain", 1.0))
+    expcomp = float(
+        auto_levels_metrics.get(
+            "expcomp",
+            math.log(max(gain, 1e-12), 2.0),
+        )
+    )
+    black = float(
+        auto_levels_metrics.get(
+            "black_normalized",
+            float(auto_levels_metrics.get("black", 0.0)) / _AUTO_LEVELS_CODE_MAX,
+        )
+    )
+    brightness = int(auto_levels_metrics.get("brightness", 0))
+    contrast = int(auto_levels_metrics.get("contrast", 0))
+    hlcompr = int(auto_levels_metrics.get("hlcompr", 0))
+    hlcomprthresh = int(auto_levels_metrics.get("hlcomprthresh", 0))
+
+    brightness_curve = None
+    if brightness != 0:
+        if brightness > 0:
+            x_points = (0.0, 0.1, 0.7, 1.0)
+            y_points = (
+                0.0,
+                0.1 + brightness / 150.0,
+                min(1.0, 0.7 + brightness / 300.0),
+                1.0,
+            )
+        else:
+            x_points = (
+                0.0,
+                max(0.0, 0.1 - brightness / 150.0),
+                0.7 - brightness / 300.0,
+                1.0,
+            )
+            y_points = (0.0, 0.1, 0.7, 1.0)
+        brightness_curve = _build_rt_nurbs_curve_lut(
+            np_module=np_module,
+            x_points=x_points,
+            y_points=y_points,
+            sample_count=_AUTO_LEVELS_CODE_BIN_COUNT,
+        )
+
+    exp_scale = math.pow(2.0, expcomp)
+    comp = (max(0.0, expcomp) + 1.0) * float(hlcompr) / 100.0
+    shoulder = (
+        (float(_AUTO_LEVELS_CODE_BIN_COUNT) / max(1.0, exp_scale))
+        * (float(hlcomprthresh) / 200.0)
+    ) + 0.1
+    hlrange = float(_AUTO_LEVELS_CODE_BIN_COUNT) - shoulder
+
+    highlight_curve = np_module.full(
+        _AUTO_LEVELS_CODE_BIN_COUNT,
+        exp_scale,
+        dtype=np_module.float64,
+    )
+    if comp > 0.0:
+        start_index = min(
+            _AUTO_LEVELS_CODE_BIN_COUNT,
+            max(0, int(shoulder) + 1),
+        )
+        if start_index < _AUTO_LEVELS_CODE_BIN_COUNT:
+            curve_indices = np_module.arange(
+                start_index,
+                _AUTO_LEVELS_CODE_BIN_COUNT,
+                dtype=np_module.float64,
+            )
+            r_value = ((curve_indices - shoulder) * comp) / (
+                float(_AUTO_LEVELS_CODE_BIN_COUNT) - shoulder
+            )
+            highlight_curve[start_index:] = np_module.log1p(
+                r_value * exp_scale
+            ) / r_value
+
+    shadow_curve = np_module.ones(
+        _AUTO_LEVELS_CODE_BIN_COUNT,
+        dtype=np_module.float64,
+    )
+    if black != 0.0:
+        normalized_codes = (
+            np_module.arange(_AUTO_LEVELS_CODE_BIN_COUNT, dtype=np_module.float64)
+            / _AUTO_LEVELS_CODE_MAX
+        )
+        first_value = 1.0 / _AUTO_LEVELS_CODE_MAX
+        shadow_curve[0] = _rt_simplebasecurve_scalar(
+            first_value,
+            black,
+            0.0,
+        ) / first_value
+        shadow_curve[1:] = np_module.asarray(
+            [
+                _rt_simplebasecurve_scalar(float(value), black, 0.0) / float(value)
+                for value in normalized_codes[1:]
+            ],
+            dtype=np_module.float64,
+        )
+
+    code_indices = np_module.arange(
+        _AUTO_LEVELS_CODE_BIN_COUNT,
+        dtype=np_module.float64,
+    )
+    gamma_curve = _rt_gamma2(
+        np_module,
+        code_indices / _AUTO_LEVELS_CODE_MAX,
+    ).astype(np_module.float64)
+    if brightness_curve is not None:
+        dcurve = np_module.clip(
+            _sample_auto_levels_lut_float(
+                np_module=np_module,
+                lut_values=brightness_curve,
+                indices=gamma_curve * _AUTO_LEVELS_CODE_MAX,
+            ),
+            0.0,
+            1.0,
+        )
+    else:
+        dcurve = gamma_curve
+
+    if contrast != 0:
+        highlighted_codes = code_indices * highlight_curve
+        shadow_factors = _sample_auto_levels_lut_float(
+            np_module=np_module,
+            lut_values=shadow_curve,
+            indices=highlighted_codes,
+        )
+        contrasted_input = shadow_factors * highlighted_codes
+        dcurve_samples = _sample_auto_levels_lut_float(
+            np_module=np_module,
+            lut_values=dcurve,
+            indices=contrasted_input,
+        )
+        histogram_sum = float(histogram.sum())
+        average_luminance = float(
+            np_module.dot(dcurve_samples, histogram) / max(histogram_sum, 1.0)
+        )
+        contrast_curve = _build_rt_nurbs_curve_lut(
+            np_module=np_module,
+            x_points=(
+                0.0,
+                average_luminance
+                - average_luminance * (0.6 - contrast / 250.0),
+                average_luminance
+                + (1.0 - average_luminance) * (0.6 - contrast / 250.0),
+                1.0,
+            ),
+            y_points=(
+                0.0,
+                average_luminance
+                - average_luminance * (0.6 + contrast / 250.0),
+                average_luminance
+                + (1.0 - average_luminance) * (0.6 + contrast / 250.0),
+                1.0,
+            ),
+            sample_count=_AUTO_LEVELS_CODE_BIN_COUNT,
+        )
+        dcurve = _sample_auto_levels_lut_float(
+            np_module=np_module,
+            lut_values=contrast_curve,
+            indices=dcurve * _AUTO_LEVELS_CODE_MAX,
+        )
+
+    tone_curve = _rt_igamma2(np_module, dcurve).astype(np_module.float64)
+    return {
+        "highlight_curve": highlight_curve,
+        "shadow_curve": shadow_curve,
+        "tone_curve": tone_curve,
+        "exp_scale": float(exp_scale),
+        "comp": float(comp),
+        "hlrange": float(hlrange),
+    }
+
+
+def _apply_auto_levels_tonal_transform_float(
+    np_module,
+    image_rgb_float,
+    auto_levels_metrics,
+):
+    """@brief Apply RawTherapee-equivalent auto-levels tonal transformation.
+
+    @details Executes the float-domain port of RawTherapee auto-levels tone
+    processing in the same stage order as `rgbProc(...)`: highlight curve,
+    shadow curve, then output tonecurve. Exposure scaling is carried by the
+    highlight curve baseline instead of a separate gain-only multiply.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_float {object} Normalized RGB float tensor.
+    @param auto_levels_metrics {dict[str, int|float]} Metrics from `_compute_auto_levels_from_histogram(...)`.
+    @return {object} Tonally transformed RGB float tensor.
+    @satisfies REQ-100, REQ-119
+    """
+
+    normalized_input = _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=image_rgb_float,
+    ).astype(np_module.float64)
+    tone_curve_state = _build_auto_levels_tone_curve_state(
+        np_module=np_module,
+        image_rgb_float=normalized_input,
+        auto_levels_metrics=auto_levels_metrics,
+    )
+    image_code = normalized_input * _AUTO_LEVELS_CODE_MAX
+    highlight_curve = tone_curve_state["highlight_curve"]
+    exp_scale = float(tone_curve_state["exp_scale"])
+    comp = float(tone_curve_state["comp"])
+    hlrange = float(tone_curve_state["hlrange"])
+
+    channel_factors = []
+    for channel_index in range(3):
+        channel_code = image_code[..., channel_index]
+        tone_factor = _sample_auto_levels_lut_float(
+            np_module=np_module,
+            lut_values=highlight_curve,
+            indices=channel_code,
+        )
+        if comp > 0.0:
+            tone_factor = np_module.where(
+                channel_code <= _AUTO_LEVELS_CODE_MAX,
+                tone_factor,
+                _rt_hlcurve_float(
+                    np_module=np_module,
+                    exp_scale=exp_scale,
+                    comp=comp,
+                    hlrange=hlrange,
+                    levels_code=channel_code,
+                ),
+            )
+        channel_factors.append(tone_factor)
+    highlight_factor = (
+        channel_factors[0] + channel_factors[1] + channel_factors[2]
+    ) / 3.0
+    image_code *= highlight_factor[..., None]
+
+    black_normalized = float(
+        auto_levels_metrics.get(
+            "black_normalized",
+            float(auto_levels_metrics.get("black", 0.0)) / _AUTO_LEVELS_CODE_MAX,
+        )
+    )
+    if black_normalized != 0.0:
+        luminance_code = (
+            _AUTO_LEVELS_TONECURVE_LUMINANCE_WEIGHTS[0] * image_code[..., 0]
+            + _AUTO_LEVELS_TONECURVE_LUMINANCE_WEIGHTS[1] * image_code[..., 1]
+            + _AUTO_LEVELS_TONECURVE_LUMINANCE_WEIGHTS[2] * image_code[..., 2]
+        )
+        shadow_factor = _sample_auto_levels_lut_float(
+            np_module=np_module,
+            lut_values=tone_curve_state["shadow_curve"],
+            indices=luminance_code,
+        )
+        image_code *= shadow_factor[..., None]
+
+    tone_mapped = _sample_auto_levels_lut_float(
+        np_module=np_module,
+        lut_values=tone_curve_state["tone_curve"],
+        indices=image_code,
+    )
+    all_channels_oog = np_module.logical_or(
+        image_code < 0.0,
+        image_code > _AUTO_LEVELS_CODE_MAX,
+    ).all(axis=-1, keepdims=True)
+    return np_module.where(
+        all_channels_oog,
+        image_code / _AUTO_LEVELS_CODE_MAX,
+        tone_mapped,
+    )
+
+
+def _auto_levels_has_full_tone_metrics(auto_levels_metrics):
+    """@brief Check whether auto-levels metrics support full tone processing.
+
+    @details Verifies the presence of the full RawTherapee-compatible metric set
+    consumed by `_apply_auto_levels_tonal_transform_float(...)`. Legacy tests
+    may monkeypatch `_compute_auto_levels_from_histogram(...)` with partial
+    dictionaries containing only `gain`; such patched metrics must keep the
+    historical gain-only fallback path.
+    @param auto_levels_metrics {dict[str, int|float]} Histogram-derived metrics dictionary.
+    @return {bool} `True` when all full tone-transform metrics are present.
+    @satisfies REQ-100, REQ-119
+    """
+
+    required_keys = (
+        "expcomp",
+        "black_normalized",
+        "brightness",
+        "contrast",
+        "hlcompr",
+        "hlcomprthresh",
+    )
+    return all(metric_key in auto_levels_metrics for metric_key in required_keys)
+
+
 def _call_auto_levels_compat_helper(
     np_module,
     primary_callable,
@@ -7849,17 +8512,17 @@ def _call_auto_levels_compat_helper(
 def _apply_auto_levels_float(np_module, image_rgb_float, auto_levels_options):
     """@brief Apply auto-levels stage on RGB float tensor.
 
-    @details Executes the RawTherapee-compatible histogram analysis on a
-    normalized RGB float tensor, applies gain derived from exposure
-    compensation, conditionally runs float-native highlight reconstruction,
-    optionally normalizes overflowing RGB triplets back into gamut, and returns
-    normalized RGB float output without any internal `*65535` or `/65535`
-    staging.
+    @details Executes RawTherapee-compatible histogram analysis on a normalized
+    RGB float tensor, applies the full float-domain tonal transformation driven
+    by exposure, black, brightness, contrast, and highlight-compression
+    metrics, conditionally runs float-native highlight reconstruction, and
+    optionally normalizes overflowing RGB triplets back into gamut without any
+    production uint16 staging buffers.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} RGB float tensor.
     @param auto_levels_options {AutoLevelsOptions} Parsed auto-levels options.
     @return {object} RGB float tensor after auto-levels stage.
-    @satisfies REQ-100, REQ-101, REQ-102, REQ-119, REQ-120
+    @satisfies REQ-100, REQ-101, REQ-102, REQ-119, REQ-120, REQ-165
     """
 
     normalized_input = _normalize_float_rgb_image(
@@ -7877,8 +8540,15 @@ def _apply_auto_levels_float(np_module, image_rgb_float, auto_levels_options):
         histcompr=auto_levels_options.histcompr,
         clip_percent=auto_levels_options.clip_percent,
     )
-    gain = float(auto_levels_metrics["gain"])
-    image_float = normalized_input.astype(np_module.float64) * gain
+    if _auto_levels_has_full_tone_metrics(auto_levels_metrics):
+        image_float = _apply_auto_levels_tonal_transform_float(
+            np_module=np_module,
+            image_rgb_float=normalized_input,
+            auto_levels_metrics=auto_levels_metrics,
+        )
+    else:
+        gain = float(auto_levels_metrics.get("gain", 1.0))
+        image_float = normalized_input.astype(np_module.float64) * gain
     if auto_levels_options.highlight_reconstruction_enabled:
         method = auto_levels_options.highlight_reconstruction_method
         if method == "Luminance Recovery":
