@@ -3,14 +3,15 @@
 
 @details Implements single-pass linear RAW extraction with one maximum-
 resolution camera-WB-aware RGB base image, derives three synthetic exposures
-(`ev_zero-ev`, `ev_zero`, `ev_zero+ev`) by NumPy EV scaling, merges them
-through selected `luminance-hdr-cli`, selected OpenCV (`Debevec`,
-`Robertson`, `Mertens`), or selected HDR+ tile-based flow with deterministic
-parameters, then writes final JPG to user-selected output path. Temporary
-workspace artifacts are isolated in a temporary directory and removed
-automatically on success and failure, while optional debug checkpoints persist
-in the output directory when `--debug` is enabled.
-    @satisfies PRJ-001, PRJ-002, DES-003, DES-008, DES-009, REQ-008, REQ-009, REQ-010, REQ-012, REQ-013, REQ-014, REQ-018, REQ-032, REQ-034, REQ-037, REQ-041, REQ-052, REQ-100, REQ-106, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-141, REQ-142, REQ-143, REQ-144, REQ-145, REQ-146, REQ-148, REQ-149, REQ-152, REQ-153, REQ-154, REQ-157, REQ-158, REQ-159, REQ-160
+(`ev_zero-ev`, `ev_zero`, `ev_zero+ev`) by NumPy EV scaling, emits one
+diagnostic source-gamma line from RAW metadata without feeding it into the
+numeric pipeline, merges through selected `luminance-hdr-cli`, selected OpenCV
+(`Debevec`, `Robertson`, `Mertens`), or selected HDR+ tile-based flow with
+deterministic parameters, then writes final JPG to user-selected output path.
+Temporary workspace artifacts are isolated in a temporary directory and
+removed automatically on success and failure, while optional debug checkpoints
+persist in the output directory when `--debug` is enabled.
+    @satisfies PRJ-001, PRJ-002, DES-003, DES-008, DES-009, REQ-008, REQ-009, REQ-010, REQ-012, REQ-013, REQ-014, REQ-018, REQ-020, REQ-032, REQ-034, REQ-037, REQ-041, REQ-052, REQ-100, REQ-106, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-141, REQ-142, REQ-143, REQ-144, REQ-145, REQ-146, REQ-148, REQ-149, REQ-152, REQ-153, REQ-154, REQ-157, REQ-158, REQ-159, REQ-160, REQ-163, REQ-164
 """
 
 import os
@@ -36,7 +37,6 @@ PROGRAM = "dng2jpg"
 DESCRIPTION = (
     "Convert DNG to HDR-merged JPG with luminance-hdr-cli, OpenCV, or HDR+ backend."
 )
-DEFAULT_GAMMA = (2.222, 4.5)
 DEFAULT_POST_GAMMA = 1.0
 DEFAULT_BRIGHTNESS = 1.0
 DEFAULT_CONTRAST = 1.0
@@ -506,6 +506,26 @@ class DebugArtifactContext:
 
 
 @dataclass(frozen=True)
+class SourceGammaInfo:
+    """@brief Hold one source-gamma diagnostic payload derived from RAW metadata.
+
+    @details Encapsulates one deterministic runtime diagnostic resolved from RAW
+    metadata only. The payload is observational and MUST NOT participate in HDR
+    bracket extraction, HDR merge dispatch, or static postprocess state
+    resolution.
+    @param label {str} Deterministic source-gamma classification label.
+    @param gamma_value {float|None} Numeric gamma value when derivable; `None` when metadata cannot resolve one.
+    @param evidence {str} Metadata field or hint bundle used to classify the label.
+    @return {None} Immutable dataclass container.
+    @satisfies REQ-157, REQ-163, REQ-164
+    """
+
+    label: str
+    gamma_value: float | None
+    evidence: str
+
+
+@dataclass(frozen=True)
 class LuminanceOptions:
     """@brief Hold deterministic luminance-hdr-cli option values.
 
@@ -861,17 +881,6 @@ def print_help(version):
     _print_help_option(
         "--auto-ev-pct=<0..100>",
         f"Scale the joint automatic solver required `ev_delta` toward zero before supported-value clamping. Default: `{DEFAULT_AUTO_EV_PCT:g}`.",
-    )
-    _print_help_option(
-        "--gamma=<a,b>",
-        (
-            "Compatibility gamma pair option. Both values must be positive; "
-            "HDR bracket extraction remains linear and camera-WB-aware."
-        ),
-        (
-            f"Default: `{DEFAULT_GAMMA[0]},{DEFAULT_GAMMA[1]}`.",
-            "Accepted for CLI compatibility and runtime diagnostics only.",
-        ),
     )
 
     _print_help_section("Step 3 - HDR backend selection and backend-local configuration")
@@ -1685,6 +1694,258 @@ def _extract_base_rgb_linear_float(raw_handle, np_module):
     )
 
 
+def _normalize_source_gamma_label(label_raw):
+    """@brief Normalize one source-gamma label token.
+
+    @details Trims surrounding whitespace, collapses empty values to `unknown`,
+    and preserves the remaining token verbatim for deterministic runtime
+    diagnostics.
+    @param label_raw {object} Candidate label payload derived from RAW metadata.
+    @return {str} Normalized diagnostic label.
+    @satisfies REQ-163, REQ-164
+    """
+
+    if label_raw is None:
+        return "unknown"
+    label_text = str(label_raw).strip()
+    if not label_text:
+        return "unknown"
+    return label_text
+
+
+def _decode_raw_metadata_text(metadata_raw):
+    """@brief Decode one RAW metadata token to deterministic text.
+
+    @details Accepts `bytes`, `bytearray`, `str`, and sequence-like metadata
+    payloads, strips null terminators, joins sequence entries with `/`, and
+    returns `None` when no stable textual representation exists.
+    @param metadata_raw {object} Candidate RAW metadata payload.
+    @return {str|None} Normalized text token or `None`.
+    @satisfies REQ-163
+    """
+
+    if metadata_raw is None:
+        return None
+    if isinstance(metadata_raw, (bytes, bytearray)):
+        decoded = bytes(metadata_raw).decode("utf-8", errors="ignore")
+        normalized = decoded.replace("\x00", "").strip()
+        return normalized or None
+    if isinstance(metadata_raw, str):
+        normalized = metadata_raw.replace("\x00", "").strip()
+        return normalized or None
+    if isinstance(metadata_raw, (tuple, list)):
+        parts = []
+        for item in metadata_raw:
+            part = _decode_raw_metadata_text(item)
+            if part:
+                parts.append(part)
+        if not parts:
+            return None
+        return "/".join(parts)
+    return None
+
+
+def _classify_explicit_source_gamma(raw_handle):
+    """@brief Classify source gamma from explicit profile or color-space metadata.
+
+    @details Inspects common RAW metadata attributes that can already carry an
+    explicit transfer-function declaration, maps recognized tokens to
+    deterministic label/gamma pairs, and returns `None` when no explicit
+    classification is available.
+    @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
+    @return {SourceGammaInfo|None} Classified explicit profile diagnostic or `None`.
+    @satisfies REQ-157, REQ-163
+    """
+
+    explicit_fields = (
+        "color_space",
+        "output_color",
+        "profile_name",
+        "icc_profile_name",
+        "color_profile",
+    )
+    field_values = []
+    for field_name in explicit_fields:
+        field_text = _decode_raw_metadata_text(getattr(raw_handle, field_name, None))
+        if field_text:
+            field_values.append(field_text)
+    if not field_values:
+        return None
+    combined_text = " ".join(field_values).lower()
+    explicit_profiles = (
+        ("srgb", "sRGB", 2.2),
+        ("rec709", "Rec.709", 2.2),
+        ("bt709", "BT.709", 2.2),
+        ("adobe", "Adobe RGB", 2.2),
+        ("display p3", "Display P3", 2.2),
+        ("prophoto", "ProPhoto RGB", 1.8),
+        ("linear", "Linear", 1.0),
+    )
+    for token, label, gamma_value in explicit_profiles:
+        if token in combined_text:
+            return SourceGammaInfo(
+                label=label,
+                gamma_value=gamma_value,
+                evidence="explicit-profile",
+            )
+    return SourceGammaInfo(
+        label=_normalize_source_gamma_label(field_values[0]),
+        gamma_value=None,
+        evidence="explicit-profile",
+    )
+
+
+def _classify_tone_curve_gamma(raw_handle):
+    """@brief Classify source gamma from `rawpy.tone_curve` metadata.
+
+    @details Reads the optional tone-curve payload, estimates one effective
+    power-law gamma from valid interior samples, and suppresses the result when
+    the curve is absent, too short, degenerate, or non-finite.
+    @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
+    @return {SourceGammaInfo|None} Tone-curve diagnostic or `None`.
+    @satisfies REQ-157, REQ-163
+    """
+
+    tone_curve = getattr(raw_handle, "tone_curve", None)
+    if tone_curve is None or len(tone_curve) < 16:
+        return None
+    max_index = float(len(tone_curve) - 1)
+    max_value = max(float(max(tone_curve)), 0.0)
+    if max_index <= 0.0 or max_value <= 0.0:
+        return None
+    gamma_estimates = []
+    for sample_point in (0.25, 0.50, 0.75):
+        sample_index = int(round(sample_point * max_index))
+        if sample_index <= 0 or sample_index >= len(tone_curve):
+            continue
+        x_value = sample_index / max_index
+        y_value = float(tone_curve[sample_index]) / max_value
+        if x_value <= 0.0 or y_value <= 0.0 or y_value >= 1.0:
+            continue
+        gamma_estimates.append(math.log(x_value) / math.log(y_value))
+    if not gamma_estimates:
+        return None
+    gamma_value = sum(gamma_estimates) / len(gamma_estimates)
+    if not math.isfinite(gamma_value) or gamma_value <= 0.0:
+        return None
+    rounded_gamma = round(gamma_value, 4)
+    if abs(rounded_gamma - 1.0) <= 0.1:
+        label = "Linear"
+    elif abs(rounded_gamma - 1.8) <= 0.2:
+        label = "Tone curve gamma 1.8"
+    elif abs(rounded_gamma - 2.2) <= 0.2:
+        label = "Tone curve gamma 2.2"
+    else:
+        label = "Tone curve gamma"
+    return SourceGammaInfo(
+        label=label,
+        gamma_value=rounded_gamma,
+        evidence="tone-curve",
+    )
+
+
+def _has_nonzero_matrix(matrix_raw):
+    """@brief Determine whether one RAW metadata matrix carries non-zero values.
+
+    @details Iterates nested list/tuple/numpy-like matrix payloads and returns
+    `True` when any element coerces to a finite non-zero scalar.
+    @param matrix_raw {object} Candidate RAW metadata matrix.
+    @return {bool} `True` when matrix evidence is non-zero.
+    @satisfies REQ-163
+    """
+
+    if matrix_raw is None:
+        return False
+    if isinstance(matrix_raw, (tuple, list)):
+        return any(_has_nonzero_matrix(item) for item in matrix_raw)
+    try:
+        matrix_value = float(matrix_raw)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(matrix_value) and matrix_value != 0.0
+
+
+def _classify_matrix_hint_gamma(raw_handle):
+    """@brief Classify source gamma from matrix and color-description hints.
+
+    @details Uses `rgb_xyz_matrix`, `color_matrix`, and `color_desc` as weaker
+    evidence than explicit profiles or tone curves. Numeric gamma remains
+    undetermined for this class of evidence.
+    @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
+    @return {SourceGammaInfo|None} Matrix-hint diagnostic or `None`.
+    @satisfies REQ-157, REQ-163
+    """
+
+    rgb_xyz_present = _has_nonzero_matrix(getattr(raw_handle, "rgb_xyz_matrix", None))
+    color_matrix_present = _has_nonzero_matrix(getattr(raw_handle, "color_matrix", None))
+    color_desc = _decode_raw_metadata_text(getattr(raw_handle, "color_desc", None))
+    if not rgb_xyz_present and not color_matrix_present and color_desc is None:
+        return None
+    if color_desc:
+        label = f"Camera color metadata ({color_desc})"
+    elif rgb_xyz_present and color_matrix_present:
+        label = "Camera color metadata"
+    elif rgb_xyz_present:
+        label = "RGB-XYZ metadata"
+    else:
+        label = "Color matrix metadata"
+    return SourceGammaInfo(
+        label=label,
+        gamma_value=None,
+        evidence="matrix-hint",
+    )
+
+
+def _extract_source_gamma_info(raw_handle):
+    """@brief Derive source-gamma diagnostics from RAW metadata only.
+
+    @details Applies deterministic evidence priority: explicit profile or
+    color-space metadata first, then `rawpy.tone_curve`, then weaker camera
+    color-matrix hints (`rgb_xyz_matrix`, `color_matrix`, `color_desc`), and
+    finally emits `unknown` when no metadata source can support classification.
+    @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
+    @return {SourceGammaInfo} Deterministic source-gamma diagnostic payload.
+    @satisfies REQ-157, REQ-163
+    """
+
+    explicit_info = _classify_explicit_source_gamma(raw_handle)
+    if explicit_info is not None:
+        return explicit_info
+    tone_curve_info = _classify_tone_curve_gamma(raw_handle)
+    if tone_curve_info is not None:
+        return tone_curve_info
+    matrix_hint_info = _classify_matrix_hint_gamma(raw_handle)
+    if matrix_hint_info is not None:
+        return matrix_hint_info
+    return SourceGammaInfo(
+        label="unknown",
+        gamma_value=None,
+        evidence="insufficient-metadata",
+    )
+
+
+def _describe_source_gamma_info(source_gamma_info):
+    """@brief Format one deterministic source-gamma runtime diagnostic line.
+
+    @details Renders one stable `print_info` payload that always includes both a
+    source-gamma label and a numeric gamma value or the literal
+    `undetermined`.
+    @param source_gamma_info {SourceGammaInfo} Derived source-gamma metadata payload.
+    @return {str} Deterministic runtime diagnostic line.
+    @satisfies REQ-164
+    """
+
+    gamma_text = "undetermined"
+    if source_gamma_info.gamma_value is not None:
+        gamma_text = f"{source_gamma_info.gamma_value:g}"
+    return (
+        "Source gamma info: "
+        f"label={source_gamma_info.label}; "
+        f"gamma={gamma_text}; "
+        f"evidence={source_gamma_info.evidence}"
+    )
+
+
 def _coerce_positive_luminance(value, fallback):
     """@brief Coerce luminance scalar to positive range for logarithmic math.
 
@@ -2153,45 +2414,6 @@ def _parse_luminance_text_option(option_name, option_raw):
         print_error(f"Invalid {option_name} value: {option_raw}")
         return None
     return option_value
-
-
-def _parse_gamma_option(gamma_raw):
-    """@brief Parse and validate one gamma option value pair.
-
-    @details Accepts comma-separated positive float pair in `a,b` format with
-    optional surrounding parentheses, normalizes to `(a, b)` tuple, and rejects
-    malformed, non-numeric, or non-positive values. Parsed values are retained
-    for CLI compatibility diagnostics and do not alter linear HDR bracket
-    extraction.
-    @param gamma_raw {str} Raw gamma token extracted from CLI args.
-    @return {tuple[float, float]|None} Parsed gamma tuple when valid; `None` otherwise.
-    @satisfies REQ-020, REQ-064, REQ-157
-    """
-
-    gamma_text = gamma_raw.strip()
-    if gamma_text.startswith("(") and gamma_text.endswith(")"):
-        gamma_text = gamma_text[1:-1].strip()
-
-    gamma_parts = [part.strip() for part in gamma_text.split(",")]
-    if len(gamma_parts) != 2 or not gamma_parts[0] or not gamma_parts[1]:
-        print_error(f"Invalid --gamma value: {gamma_raw}")
-        print_error("Expected format: --gamma=<a,b> with positive numeric values.")
-        return None
-
-    try:
-        gamma_a = float(gamma_parts[0])
-        gamma_b = float(gamma_parts[1])
-    except ValueError:
-        print_error(f"Invalid --gamma value: {gamma_raw}")
-        print_error("Expected format: --gamma=<a,b> with positive numeric values.")
-        return None
-
-    if gamma_a <= 0.0 or gamma_b <= 0.0:
-        print_error(f"Invalid --gamma value: {gamma_raw}")
-        print_error("Gamma values must be greater than zero.")
-        return None
-
-    return (gamma_a, gamma_b)
 
 
 def _parse_positive_float_option(option_name, option_raw):
@@ -2963,7 +3185,6 @@ def _parse_run_options(args):
     (`--ev=<value>`/`--ev <value>` plus optional `--ev-zero=<value>`),
     automatic exposure selector (`--auto-ev[=<enable|disable>]`) with explicit
     mutual exclusion against `--ev`, optional `--auto-ev-pct=<0..100>`,
-    optional `--gamma=<a,b>` or `--gamma <a,b>` retained for compatibility diagnostics only,
     optional postprocess controls, optional auto-brightness stage and
     `--ab-*` knobs, optional auto-levels stage and `--al-*` knobs,
     optional shared auto-adjust knobs, optional backend selector
@@ -2971,11 +3192,11 @@ def _parse_run_options(args):
     OpenCV backend controls, HDR+ backend controls, and luminance backend controls
     including explicit `--tmo*` passthrough options and optional
     auto-adjust enable selector (`--auto-adjust <enable|disable>`), plus
-    optional `--debug` persistent checkpoint emission; rejects unknown options
-    and invalid arity.
+    optional `--debug` persistent checkpoint emission; rejects removed
+    `--gamma`, rejects unknown options, and rejects invalid arity.
     @param args {list[str]} Raw command argument vector.
-    @return {tuple[Path, Path, float|None, bool, tuple[float, float], PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, float]|None} Parsed `(input, output, ev, auto_ev, gamma, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, auto_ev_pct)` tuple; `None` on parse failure.
-    @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146
+    @return {tuple[Path, Path, float|None, bool, PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, float]|None} Parsed `(input, output, ev, auto_ev, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, auto_ev_pct)` tuple; `None` on parse failure.
+    @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-020, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146
     """
 
     positional = []
@@ -2984,7 +3205,6 @@ def _parse_run_options(args):
     ev_zero = 0.0
     ev_zero_specified = False
     auto_ev_pct = DEFAULT_AUTO_EV_PCT
-    gamma_value = DEFAULT_GAMMA
     post_gamma = DEFAULT_POST_GAMMA
     brightness = DEFAULT_BRIGHTNESS
     contrast = DEFAULT_CONTRAST
@@ -3456,24 +3676,12 @@ def _parse_run_options(args):
             idx += 1
             continue
 
-        if token == "--gamma":
-            if idx + 1 >= len(args):
-                print_error("Missing value for --gamma")
-                return None
-            parsed_gamma = _parse_gamma_option(args[idx + 1])
-            if parsed_gamma is None:
-                return None
-            gamma_value = parsed_gamma
-            idx += 2
-            continue
-
-        if token.startswith("--gamma="):
-            parsed_gamma = _parse_gamma_option(token.split("=", 1)[1])
-            if parsed_gamma is None:
-                return None
-            gamma_value = parsed_gamma
+        if token == "--gamma" or token.startswith("--gamma="):
+            print_error("Removed option: --gamma")
             idx += 1
-            continue
+            if token == "--gamma":
+                return None
+            return None
 
         if token == "--post-gamma":
             if idx + 1 >= len(args):
@@ -3602,7 +3810,7 @@ def _parse_run_options(args):
     if len(positional) != 2:
         print_error(
             "Usage: dng2jpg <input.dng> <output.jpg> "
-            "[--ev=<value>] [--auto-ev=<enable|disable>] [--ev-zero=<value>] [--gamma=<a,b>]"
+            "[--ev=<value>] [--auto-ev=<enable|disable>] [--ev-zero=<value>]"
         )
         return None
 
@@ -3699,7 +3907,6 @@ def _parse_run_options(args):
         Path(positional[1]),
         ev_value,
         auto_ev_enabled,
-        gamma_value,
         PostprocessOptions(
             post_gamma=post_gamma,
             brightness=brightness,
@@ -4363,27 +4570,24 @@ def _extract_bracket_images_float(
     raw_handle,
     np_module,
     multipliers,
-    gamma_value,
     base_rgb_float=None,
 ):
     """@brief Extract three normalized RGB float brackets from one RAW handle.
 
-    @details Ignores the parsed CLI gamma pair for HDR extraction, reuses an
-    optional precomputed normalized linear base tensor when available, otherwise
-    executes one deterministic linear camera-WB-aware RAW postprocess call, and
-    derives canonical bracket tensors by NumPy EV scaling and `[0,1]` clipping
-    without exposing TIFF artifacts outside this step. Complexity: O(H*W).
-    Side effects: at most one RAW postprocess invocation.
+    @details Reuses an optional precomputed normalized linear base tensor when
+    available, otherwise executes one deterministic linear camera-WB-aware RAW
+    postprocess call, and derives canonical bracket tensors by NumPy EV
+    scaling and `[0,1]` clipping without exposing TIFF artifacts outside this
+    step. Complexity: O(H*W). Side effects: at most one RAW postprocess
+    invocation.
     @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
     @param np_module {ModuleType} Imported numpy module.
     @param multipliers {tuple[float, float, float]} Ordered exposure multipliers.
-    @param gamma_value {tuple[float, float]} Parsed CLI gamma pair retained for compatibility diagnostics only.
     @param base_rgb_float {object|None} Optional precomputed normalized linear RGB float base tensor.
     @return {list[object]} Ordered RGB float bracket tensors.
     @satisfies REQ-010, REQ-157, REQ-158, REQ-159, REQ-160
     """
 
-    del gamma_value
     labels = ("ev_minus", "ev_zero", "ev_plus")
     if base_rgb_float is None:
         base_rgb_float = _extract_base_rgb_linear_float(
@@ -4745,7 +4949,6 @@ def _run_opencv_hdr_merge(
     ev_value,
     ev_zero,
     source_exposure_time_seconds,
-    gamma_value,
     opencv_merge_options,
     auto_adjust_dependencies,
 ):
@@ -4762,7 +4965,6 @@ def _run_opencv_hdr_merge(
     @param ev_value {float} EV bracket delta used to generate exposure files.
     @param ev_zero {float} Central EV used to generate exposure files.
     @param source_exposure_time_seconds {float|None} Positive EXIF `ExposureTime` in seconds for the extracted linear base image.
-    @param gamma_value {tuple[float, float]} Parsed CLI gamma pair retained for compatibility with existing call sites.
     @param opencv_merge_options {OpenCvMergeOptions} OpenCV merge backend controls.
     @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
     @return {object} Normalized RGB float merged image.
@@ -4770,7 +4972,6 @@ def _run_opencv_hdr_merge(
     @satisfies REQ-107, REQ-108, REQ-109, REQ-110, REQ-142, REQ-143, REQ-144, REQ-152, REQ-153, REQ-154, REQ-160, REQ-161, REQ-162
     """
 
-    del gamma_value
     if auto_adjust_dependencies is not None:
         cv2_module, np_module = auto_adjust_dependencies
     else:
@@ -8848,7 +9049,6 @@ def run(args):
         output_jpg,
         ev_value,
         auto_ev_enabled,
-        gamma_value,
         postprocess_options,
         enable_luminance,
         enable_opencv,
@@ -8916,10 +9116,6 @@ def run(args):
         if piexif_module is None:
             return 1
     print_info(f"Reading DNG input: {input_dng}")
-    print_info(
-        "Parsed compatibility gamma pair: "
-        f"{gamma_value[0]:g},{gamma_value[1]:g} (ignored by linear HDR extraction)"
-    )
     print_info(
         "Postprocess factors: "
         f"gamma={postprocess_options.post_gamma:g}, "
@@ -9015,11 +9211,13 @@ def run(args):
 
         try:
             with rawpy_module.imread(str(input_dng)) as raw_handle:
+                source_gamma_info = _extract_source_gamma_info(raw_handle)
                 bits_per_color = _detect_dng_bits_per_color(raw_handle)
                 base_max_ev = _calculate_max_ev_from_bits(bits_per_color)
                 base_rgb_float = None
                 preview_luminance_stats = None
                 effective_ev_value = None
+                print_info(_describe_source_gamma_info(source_gamma_info))
                 if auto_ev_enabled:
                     preview_luminance_stats = _extract_normalized_preview_luminance_stats(
                         raw_handle
@@ -9122,7 +9320,6 @@ def run(args):
                     raw_handle=raw_handle,
                     np_module=numpy_module,
                     multipliers=multipliers,
-                    gamma_value=gamma_value,
                     base_rgb_float=base_rgb_float,
                 )
                 if debug_context is not None:
@@ -9164,7 +9361,6 @@ def run(args):
                     ev_value=effective_ev_value,
                     ev_zero=resolved_ev_zero,
                     source_exposure_time_seconds=source_exposure_time_seconds,
-                    gamma_value=gamma_value,
                     opencv_merge_options=opencv_merge_options,
                     auto_adjust_dependencies=auto_adjust_dependencies,
                 )

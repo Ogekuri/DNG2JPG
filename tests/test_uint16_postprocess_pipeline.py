@@ -788,7 +788,7 @@ def test_parse_run_options_accepts_remaining_auto_brightness_controls() -> None:
     )
 
     assert parsed is not None
-    postprocess = parsed[5]
+    postprocess = parsed[4]
     assert postprocess.auto_brightness_enabled is True
     assert postprocess.auto_brightness_options == dng2jpg_module.AutoBrightnessOptions(
         key_value=0.22,
@@ -819,7 +819,7 @@ def test_parse_run_options_accepts_auto_adjust_clahe_controls() -> None:
     )
 
     assert parsed is not None
-    postprocess = parsed[5]
+    postprocess = parsed[4]
     assert postprocess.auto_adjust_enabled is True
     assert postprocess.auto_adjust_options == dng2jpg_module.AutoAdjustOptions(
         enable_local_contrast=False,
@@ -1099,17 +1099,15 @@ def test_parse_run_options_accepts_hdr_merge_opencv_backend() -> None:
     _output_path = parsed[1]
     _ev_value = parsed[2]
     _auto_ev_enabled = parsed[3]
-    _gamma_value = parsed[4]
-    _postprocess = parsed[5]
-    enable_luminance = parsed[6]
-    enable_opencv = parsed[7]
-    opencv_merge_options = parsed[9]
+    _postprocess = parsed[4]
+    enable_luminance = parsed[5]
+    enable_opencv = parsed[6]
+    opencv_merge_options = parsed[8]
     del (
         _input_path,
         _output_path,
         _ev_value,
         _auto_ev_enabled,
-        _gamma_value,
         _postprocess,
     )
     assert enable_luminance is False
@@ -1129,9 +1127,9 @@ def test_parse_run_options_defaults_hdr_merge_to_opencv() -> None:
         ["input.dng", "output.jpg", "--ev=1"]
     )
     assert parsed is not None
-    assert parsed[7] is True
-    assert parsed[6] is False
-    assert parsed[11] is False
+    assert parsed[6] is True
+    assert parsed[5] is False
+    assert parsed[10] is False
 
 
 def test_resolve_default_postprocess_opencv_uses_updated_static_defaults() -> None:
@@ -1204,7 +1202,6 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
         "--auto-ev=<enable|disable>",
         "--ev-zero=<value>",
         "--auto-ev-pct=<0..100>",
-        "--gamma=<a,b>",
         "--hdr-merge <Luminace-HDR|OpenCV|HDR-Plus>",
         "--opencv-merge-algorithm=<name>",
         "--opencv-tonemap=<bool>",
@@ -1254,6 +1251,7 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
     ]
     for token in required_tokens:
         assert token in output
+    assert "--gamma=<a,b>" not in output
     assert "--auto-zero=<enable|disable>" not in output
     assert "--auto-zero-pct=<0..100>" not in output
 
@@ -1264,7 +1262,6 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
     assert "Effective only when `--hdr-merge HDR-Plus`." in output
     assert "Effective only when `--hdr-merge Luminace-HDR`." in output
     assert "Default: `OpenCV`." in output
-    assert "Accepted for CLI compatibility and runtime diagnostics only." in output
     assert "Default: `Robertson`." in output
     assert "Default: `enable`." in output
     assert "Static postprocess defaults when omitted:" in output
@@ -1317,7 +1314,7 @@ def test_parse_run_options_static_ev_defaults_ev_zero_to_zero() -> None:
     assert parsed_static is not None
     assert parsed_static[2] == 1.25
     assert parsed_static[3] is False
-    assert parsed_static[12] == 0.0
+    assert parsed_static[11] == 0.0
 
 
 def test_parse_run_options_static_ev_preserves_manual_ev_zero() -> None:
@@ -1329,7 +1326,7 @@ def test_parse_run_options_static_ev_preserves_manual_ev_zero() -> None:
     assert parsed_static is not None
     assert parsed_static[2] == 1.25
     assert parsed_static[3] is False
-    assert parsed_static[12] == 0.5
+    assert parsed_static[11] == 0.5
 
 
 def test_parse_run_options_rejects_ev_zero_without_ev(capsys) -> None:
@@ -1386,7 +1383,7 @@ def test_parse_run_options_defaults_enable_auto_adjust() -> None:
         ["input.dng", "output.jpg"]
     )
     assert parsed is not None
-    assert parsed[5].auto_adjust_enabled is True
+    assert parsed[4].auto_adjust_enabled is True
 
 
 def test_parse_run_options_disables_auto_adjust_and_rejects_knobs() -> None:
@@ -1396,7 +1393,7 @@ def test_parse_run_options_disables_auto_adjust_and_rejects_knobs() -> None:
         ["input.dng", "output.jpg", "--auto-adjust=disable"]
     )
     assert parsed_disabled is not None
-    assert parsed_disabled[5].auto_adjust_enabled is False
+    assert parsed_disabled[4].auto_adjust_enabled is False
 
     parsed_with_knob = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         [
@@ -1423,8 +1420,8 @@ def test_parse_run_options_enables_debug_flag() -> None:
     )
 
     assert parsed is not None
-    assert parsed[5].debug_enabled is True
-    assert parsed[7] is True
+    assert parsed[4].debug_enabled is True
+    assert parsed[6] is True
 
 
 def test_collect_missing_external_executables_reports_luminance_dependency(
@@ -1682,7 +1679,6 @@ def test_run_opencv_hdr_merge_keeps_mertens_inputs_as_float32() -> None:
         ev_value=1.0,
         ev_zero=0.0,
         source_exposure_time_seconds=0.125,
-        gamma_value=dng2jpg_module.DEFAULT_GAMMA,
         opencv_merge_options=dng2jpg_module.OpenCvMergeOptions(
             merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_MERTENS
         ),
@@ -1731,7 +1727,7 @@ def test_parse_run_options_accepts_opencv_controls_and_defaults() -> None:
         ["input.dng", "output.jpg", "--ev=1", "--hdr-merge=OpenCV"]
     )
     assert parsed_default is not None
-    default_options = parsed_default[9]
+    default_options = parsed_default[8]
     assert default_options == dng2jpg_module.OpenCvMergeOptions(
         merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_ROBERTSON,
         tonemap_enabled=True,
@@ -1750,7 +1746,7 @@ def test_parse_run_options_accepts_opencv_controls_and_defaults() -> None:
         ]
     )
     assert parsed_override is not None
-    override_options = parsed_override[9]
+    override_options = parsed_override[8]
     assert override_options == dng2jpg_module.OpenCvMergeOptions(
         merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_DEBEVEC,
         tonemap_enabled=False,
@@ -1810,7 +1806,6 @@ def test_run_opencv_hdr_merge_dispatches_debevec_uint8_radiance_path_with_tonema
         ev_value=1.0,
         ev_zero=1.5,
         source_exposure_time_seconds=0.125,
-        gamma_value=(2.0, 1.0),
         opencv_merge_options=dng2jpg_module.OpenCvMergeOptions(
             merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_DEBEVEC,
             tonemap_enabled=True,
@@ -1864,7 +1859,6 @@ def test_run_opencv_hdr_merge_dispatches_robertson_uint8_radiance_path() -> None
         ev_value=0.5,
         ev_zero=-0.5,
         source_exposure_time_seconds=0.125,
-        gamma_value=(1.0, 1.0),
         opencv_merge_options=dng2jpg_module.OpenCvMergeOptions(
             merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_ROBERTSON,
             tonemap_enabled=False,
@@ -1918,7 +1912,6 @@ def test_run_opencv_hdr_merge_skips_tonemap_for_mertens() -> None:
         ev_value=1.0,
         ev_zero=0.0,
         source_exposure_time_seconds=0.125,
-        gamma_value=dng2jpg_module.DEFAULT_GAMMA,
         opencv_merge_options=dng2jpg_module.OpenCvMergeOptions(
             merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_MERTENS,
             tonemap_enabled=True,
@@ -1977,7 +1970,6 @@ def test_extract_bracket_images_float_uses_single_linear_base_pass() -> None:
         raw_handle=fake_raw,
         np_module=np,
         multipliers=multipliers,
-        gamma_value=(9.9, 9.9),
     )
 
     assert len(fake_raw.calls) == 1
@@ -1999,57 +1991,54 @@ def test_extract_bracket_images_float_uses_single_linear_base_pass() -> None:
         )
 
 
-def test_parse_run_options_accepts_gamma_for_compatibility() -> None:
-    """Parser must retain compatibility gamma parsing without changing CLI shape."""
+def test_parse_run_options_rejects_removed_gamma_option() -> None:
+    """Parser must reject removed `--gamma` option syntax."""
 
     parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         ["input.dng", "output.jpg", "--gamma=1.7,3.4"]
     )
 
-    assert parsed is not None
-    assert parsed[4] == (1.7, 3.4)
+    assert parsed is None
 
 
-def test_run_opencv_hdr_merge_ignores_gamma_value_for_linear_inputs() -> None:
-    """OpenCV radiance merge must ignore gamma while using backend-local uint8 payloads."""
+def test_extract_source_gamma_info_prefers_explicit_profile_metadata() -> None:
+    """Source gamma diagnostics must prefer explicit profile metadata."""
 
-    fake_cv2 = _FakeOpenCvModule()
-    bracket_images_float = [
-        np.full((1, 1, 3), 0.2, dtype=np.float32),
-        np.full((1, 1, 3), 0.4, dtype=np.float32),
-        np.full((1, 1, 3), 0.8, dtype=np.float32),
-    ]
+    class _FakeRawHandle:
+        output_color = "sRGB"
+        tone_curve = [0, 128, 255]
+        rgb_xyz_matrix = [[1.0, 0.0, 0.0]]
+        color_matrix = [[1.0, 0.0, 0.0]]
+        color_desc = b"RGBG"
 
-    _ = dng2jpg_module._run_opencv_hdr_merge(  # pylint: disable=protected-access
-        bracket_images_float=bracket_images_float,
-        ev_value=0.5,
-        ev_zero=0.0,
-        source_exposure_time_seconds=0.125,
-        gamma_value=(9.9, 9.9),
-        opencv_merge_options=dng2jpg_module.OpenCvMergeOptions(
-            merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_ROBERTSON,
-            tonemap_enabled=False,
-        ),
-        auto_adjust_dependencies=(fake_cv2, np),
+    source_gamma_info = dng2jpg_module._extract_source_gamma_info(  # pylint: disable=protected-access
+        _FakeRawHandle()
     )
 
-    assert fake_cv2.merge_robertson.last_inputs is not None
-    assert fake_cv2.calibrate_robertson.last_inputs is not None
-    np.testing.assert_array_equal(
-        fake_cv2.merge_robertson.last_inputs[0],
-        np.full((1, 1, 3), 51, dtype=np.uint8),
+    assert source_gamma_info == dng2jpg_module.SourceGammaInfo(
+        label="sRGB",
+        gamma_value=2.2,
+        evidence="explicit-profile",
     )
-    np.testing.assert_array_equal(
-        fake_cv2.merge_robertson.last_inputs[1],
-        np.full((1, 1, 3), 102, dtype=np.uint8),
+
+
+def test_extract_source_gamma_info_reports_unknown_without_metadata() -> None:
+    """Source gamma diagnostics must fall back to unknown when metadata is insufficient."""
+
+    class _FakeRawHandle:
+        tone_curve = []
+        rgb_xyz_matrix = None
+        color_matrix = None
+        color_desc = None
+
+    source_gamma_info = dng2jpg_module._extract_source_gamma_info(  # pylint: disable=protected-access
+        _FakeRawHandle()
     )
-    np.testing.assert_array_equal(
-        fake_cv2.calibrate_robertson.last_inputs[0],
-        fake_cv2.merge_robertson.last_inputs[0],
-    )
-    np.testing.assert_array_equal(
-        fake_cv2.calibrate_robertson.last_inputs[1],
-        fake_cv2.merge_robertson.last_inputs[1],
+
+    assert source_gamma_info == dng2jpg_module.SourceGammaInfo(
+        label="unknown",
+        gamma_value=None,
+        evidence="insufficient-metadata",
     )
 
 
@@ -2117,7 +2106,7 @@ def test_parse_run_options_accepts_extended_auto_levels_knobs() -> None:
         ]
     )
     assert parsed is not None
-    postprocess = parsed[5]
+    postprocess = parsed[4]
     assert postprocess.auto_levels_enabled is True
     assert postprocess.auto_levels_options.clip_percent == 0.5
     assert postprocess.auto_levels_options.clip_out_of_gamut is False
@@ -2325,8 +2314,8 @@ def test_parse_run_options_accepts_hdrplus_controls() -> None:
     )
 
     assert parsed is not None
-    hdrplus_options = parsed[10]
-    enable_hdr_plus = parsed[11]
+    hdrplus_options = parsed[9]
+    enable_hdr_plus = parsed[10]
     assert enable_hdr_plus is True
     assert hdrplus_options == dng2jpg_module.HdrPlusOptions(
         proxy_mode="bt709",
@@ -2983,6 +2972,93 @@ def test_run_static_ev_uses_manual_center_and_reports_static_mode(
     assert "Using static EV center (ev_zero): 0.5" in output
     assert "Using EV bracket delta: 1 (static)" in output
     assert "Auto-EV heuristic" not in output
+
+
+def test_run_prints_source_gamma_diagnostics(monkeypatch, tmp_path, capsys) -> None:
+    """Runtime must print deterministic source gamma diagnostics from RAW metadata."""
+
+    input_dng = tmp_path / "scene.dng"
+    input_dng.write_bytes(b"fake-dng")
+    output_jpg = tmp_path / "scene.jpg"
+
+    class _FakeRawHandle:
+        def __init__(self) -> None:
+            self.raw_image_visible = np.zeros((2, 2), dtype=np.uint16)
+            self.white_level = int(16383)
+            self.output_color = "ProPhoto RGB"
+            self.tone_curve = [0, 64, 128, 192, 255]
+            self.rgb_xyz_matrix = None
+            self.color_matrix = None
+            self.color_desc = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            del exc_type, exc, tb
+
+        def postprocess(
+            self,
+            *,
+            bright,
+            output_bps,
+            use_camera_wb,
+            no_auto_bright,
+            gamma,
+            user_flip,
+        ) -> np.ndarray:
+            del bright, output_bps, use_camera_wb, no_auto_bright, gamma, user_flip
+            return np.full((2, 2, 3), 32768, dtype=np.uint16)
+
+    class _FakeRawPyModule:
+        LibRawError = RuntimeError
+
+        @staticmethod
+        def imread(_path: str) -> _FakeRawHandle:
+            return _FakeRawHandle()
+
+    fake_imageio_module = _FakeImageIoModule(
+        merged_rgb_u16=np.full((2, 2, 3), 32768, dtype=np.uint16)
+    )
+    fake_pil_module = _FakePilModule()
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_load_image_dependencies",
+        lambda: (_FakeRawPyModule(), fake_imageio_module, fake_pil_module),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_extract_dng_exif_payload_and_timestamp",
+        lambda **_kwargs: (None, None, 1, 0.125),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_resolve_auto_adjust_dependencies",
+        lambda: (_FakeOpenCvModule(), np),
+    )
+    monkeypatch.setattr(dng2jpg_module, "_encode_jpg", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_sync_output_file_timestamps_from_exif",
+        lambda **_kwargs: None,
+    )
+
+    exit_code = dng2jpg_module.run(
+        [
+            str(input_dng),
+            str(output_jpg),
+            "--ev=1",
+            "--hdr-merge=OpenCV",
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert (
+        "Source gamma info: label=ProPhoto RGB; gamma=1.8; evidence=explicit-profile"
+        in output
+    )
 def test_run_opencv_hdr_merge_requires_exif_exposure_time_for_radiance_modes() -> None:
     """OpenCV radiance modes must reject missing EXIF exposure time."""
 
@@ -2999,7 +3075,6 @@ def test_run_opencv_hdr_merge_requires_exif_exposure_time_for_radiance_modes() -
             ev_value=1.0,
             ev_zero=0.0,
             source_exposure_time_seconds=None,
-            gamma_value=dng2jpg_module.DEFAULT_GAMMA,
             opencv_merge_options=dng2jpg_module.OpenCvMergeOptions(
                 merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_DEBEVEC,
             ),
