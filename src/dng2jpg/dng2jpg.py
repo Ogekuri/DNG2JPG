@@ -11,7 +11,7 @@ deterministic parameters, then writes final JPG to user-selected output path.
 Temporary workspace artifacts are isolated in a temporary directory and
 removed automatically on success and failure, while optional debug checkpoints
 persist in the output directory when `--debug` is enabled.
-    @satisfies PRJ-001, PRJ-002, DES-003, DES-008, DES-009, REQ-008, REQ-009, REQ-010, REQ-012, REQ-013, REQ-014, REQ-018, REQ-020, REQ-032, REQ-034, REQ-037, REQ-041, REQ-052, REQ-100, REQ-106, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-141, REQ-142, REQ-143, REQ-144, REQ-145, REQ-146, REQ-148, REQ-149, REQ-152, REQ-153, REQ-154, REQ-157, REQ-158, REQ-159, REQ-160, REQ-163, REQ-164, REQ-165
+    @satisfies PRJ-001, PRJ-002, DES-003, DES-008, DES-009, REQ-008, REQ-009, REQ-010, REQ-012, REQ-013, REQ-014, REQ-018, REQ-020, REQ-032, REQ-034, REQ-037, REQ-041, REQ-052, REQ-100, REQ-106, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-141, REQ-142, REQ-143, REQ-144, REQ-145, REQ-146, REQ-148, REQ-149, REQ-152, REQ-153, REQ-154, REQ-157, REQ-158, REQ-159, REQ-160, REQ-163, REQ-164, REQ-165, REQ-173, REQ-174, REQ-175, REQ-176
 """
 
 import os
@@ -132,6 +132,11 @@ HDRPLUS_TEMPORAL_MIN_DIST = DEFAULT_HDRPLUS_TEMPORAL_MIN_DIST
 HDRPLUS_TEMPORAL_MAX_DIST = DEFAULT_HDRPLUS_TEMPORAL_MAX_DIST
 _HDRPLUS_PROXY_MODES = ("rggb", "bt709", "mean")
 EV_STEP = 0.25
+_AUTO_EV_HIGHLIGHT_EDGE_THRESHOLD = 0.002
+_AUTO_EV_SHADOW_EDGE_THRESHOLD = 0.005
+_AUTO_EV_HIGHLIGHT_SATURATION_THRESHOLD = 0.01
+_AUTO_EV_SHADOW_CRUSH_THRESHOLD = 0.03
+_AUTO_EV_DETAIL_RETENTION_THRESHOLD = 0.85
 MIN_SUPPORTED_BITS_PER_COLOR = 9
 DEFAULT_DNG_BITS_PER_COLOR = 14
 SUPPORTED_EV_VALUES = tuple(
@@ -616,21 +621,21 @@ class AutoEvHistogramSolution:
     """@brief Hold one automatic EV histogram-analysis solution.
 
     @details Stores the automatic EV triplet `(ev_minus, ev_zero, ev_plus)`
-    derived from three-method histogram analysis of the normalized linear
-    HDR base RGB image. The most conservative correction (smallest absolute
-    value) is selected, clamped to `[-SAFE_ZERO_MAX, +SAFE_ZERO_MAX]`,
-    quantized on `0.25` step, and the bracket fork is maximized to
-    `ev_zero ± MAX_BRACKET`.
+    derived from three-method histogram analysis of the normalized linear HDR
+    base RGB image. The most conservative correction (smallest absolute value)
+    is selected, clamped to `[-SAFE_ZERO_MAX, +SAFE_ZERO_MAX]`, quantized on
+    `0.25` step, and paired with the largest histogram-validated symmetric
+    bracket amplitude up to bit-depth `MAX_BRACKET`.
     @param ev_zero {float} Selected center EV for RAW bracket extraction.
-    @param ev_minus {float} Darkest EV for RAW bracket extraction (`ev_zero - MAX_BRACKET`).
-    @param ev_plus {float} Brightest EV for RAW bracket extraction (`ev_zero + MAX_BRACKET`).
-    @param max_bracket {float} Effective `MAX_BRACKET = BASE_MAX - abs(ev_zero)`.
+    @param ev_minus {float} Darkest EV for RAW bracket extraction (`ev_zero - max_bracket`).
+    @param ev_plus {float} Brightest EV for RAW bracket extraction (`ev_zero + max_bracket`).
+    @param max_bracket {float} Histogram-validated automatic bracket amplitude in EV.
     @param ev_ettr {float} ETTR method EV correction (rounded to one decimal).
     @param ev_entropy {float} Entropy Optimization method EV correction (rounded to one decimal).
     @param ev_detail {float} Detail Preservation method EV correction (rounded to one decimal).
     @param ev_conservative {float} Most conservative raw correction before clamping/quantization.
     @return {None} Immutable histogram-analysis solution container.
-    @satisfies REQ-008, REQ-009, REQ-052, REQ-166, REQ-167, REQ-168, REQ-169, REQ-170, REQ-171, REQ-172
+    @satisfies REQ-008, REQ-009, REQ-052, REQ-166, REQ-167, REQ-168, REQ-169, REQ-170, REQ-171, REQ-172, REQ-173, REQ-174, REQ-175, REQ-176
     """
 
     ev_zero: float
@@ -1928,6 +1933,174 @@ def _compute_histogram_ev_corrections(np_module, cv2_module, base_rgb_float):
     return (round(best_entropy_ev, 1), round(ev_ettr, 1), round(ev_detail, 1))
 
 
+def _analyze_auto_ev_bracket_quality(
+    np_module,
+    cv2_module,
+    bracket_image_float,
+    reference_detail_weights,
+):
+    """@brief Classify one synthetic auto-EV bracket as pass or fail.
+
+    @details Normalizes one synthetic bracket image, derives BT.709 luminance,
+    computes 256-bin gamma-domain histogram edge occupancy, direct linear-domain
+    shadow/highlight saturation ratios, and weighted detail retention from
+    Sobel-gradient energy constrained by reference-detail weights. Returns a
+    machine-readable metrics dictionary and a boolean pass flag. Complexity:
+    `O(H*W)`. Side effects: none.
+    @param np_module {ModuleType} Imported numpy module.
+    @param cv2_module {ModuleType} Imported OpenCV module.
+    @param bracket_image_float {object} Synthetic normalized RGB bracket image on `[0,1]`.
+    @param reference_detail_weights {object} Normalized detail-weight map from the base image.
+    @return {tuple[bool, dict[str, float]]} `(is_valid, metrics)` quality verdict and measured ratios.
+    @satisfies REQ-175, REQ-176, TST-051
+    """
+
+    normalized_rgb = _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=bracket_image_float,
+    ).astype(np_module.float32, copy=False)
+    luminance_linear = _calculate_bt709_luminance(
+        np_module=np_module,
+        image_rgb_float=normalized_rgb,
+    ).astype(np_module.float32, copy=False)
+    gamma_corrected = np_module.power(
+        np_module.clip(luminance_linear, 0.0, 1.0), 1.0 / 2.2
+    )
+    quantized_8bit = np_module.clip(
+        np_module.round(gamma_corrected * 255.0), 0.0, 255.0
+    ).astype(np_module.uint8)
+    histogram = cv2_module.calcHist([quantized_8bit], [0], None, [256], [0, 256])
+    histogram = histogram.astype(np_module.float64).flatten()
+    histogram_sum = float(histogram.sum())
+    if histogram_sum <= 0.0:
+        metrics = {
+            "highlight_edge_ratio": 0.0,
+            "shadow_edge_ratio": 0.0,
+            "highlight_saturated_ratio": 0.0,
+            "shadow_crushed_ratio": 0.0,
+            "detail_retention_ratio": 1.0,
+        }
+        return True, metrics
+    probabilities = histogram / histogram_sum
+    eps = 1e-6
+    log_luminance = np_module.log(luminance_linear + eps)
+    gradient_x = cv2_module.Sobel(log_luminance, cv2_module.CV_32F, 1, 0, ksize=3)
+    gradient_y = cv2_module.Sobel(log_luminance, cv2_module.CV_32F, 0, 1, ksize=3)
+    detail_map = np_module.sqrt(gradient_x * gradient_x + gradient_y * gradient_y)
+    detail_map = cv2_module.GaussianBlur(detail_map, (3, 3), 0).astype(
+        np_module.float32, copy=False
+    )
+    detail_weights = np_module.asarray(reference_detail_weights, dtype=np_module.float32)
+    weighted_detail = float(np_module.sum(detail_weights * detail_map))
+    reference_weight_sum = float(np_module.sum(detail_weights))
+    detail_retention_ratio = (
+        weighted_detail / max(reference_weight_sum, eps)
+        if reference_weight_sum > 0.0
+        else 1.0
+    )
+    metrics = {
+        "highlight_edge_ratio": float(probabilities[255]),
+        "shadow_edge_ratio": float(probabilities[0]),
+        "highlight_saturated_ratio": float(np_module.mean(luminance_linear >= 0.995)),
+        "shadow_crushed_ratio": float(np_module.mean(luminance_linear <= 0.005)),
+        "detail_retention_ratio": float(detail_retention_ratio),
+    }
+    is_valid = (
+        metrics["highlight_edge_ratio"] <= _AUTO_EV_HIGHLIGHT_EDGE_THRESHOLD
+        and metrics["shadow_edge_ratio"] <= _AUTO_EV_SHADOW_EDGE_THRESHOLD
+        and metrics["highlight_saturated_ratio"] <= _AUTO_EV_HIGHLIGHT_SATURATION_THRESHOLD
+        and metrics["shadow_crushed_ratio"] <= _AUTO_EV_SHADOW_CRUSH_THRESHOLD
+        and metrics["detail_retention_ratio"] >= _AUTO_EV_DETAIL_RETENTION_THRESHOLD
+    )
+    return is_valid, metrics
+
+
+def _resolve_auto_ev_bracket_amplitude(
+    np_module,
+    cv2_module,
+    base_rgb_float,
+    ev_zero,
+    base_max_ev,
+):
+    """@brief Resolve largest histogram-validated automatic bracket amplitude.
+
+    @details Scans symmetric bracket amplitudes from `0.25` to the quantized
+    bit-depth ceiling `MAX_BRACKET` with `0.25` step. For each candidate
+    amplitude, synthesizes the dark and bright brackets from the normalized
+    linear HDR base image, applies histogram/clipping/detail-loss validation to
+    both frames, stops at the first failure, and returns the previous passing
+    amplitude. If the first tested amplitude fails, returns `0.25` to preserve
+    a non-zero automatic bracket width. Complexity: `O(K*H*W)` for `K`
+    amplitude samples. Side effects: none.
+    @param np_module {ModuleType} Imported numpy module.
+    @param cv2_module {ModuleType} Imported OpenCV module.
+    @param base_rgb_float {object} Normalized linear RGB base image on `[0,1]`.
+    @param ev_zero {float} Quantized automatic center EV.
+    @param base_max_ev {float} Bit-derived `BASE_MAX` ceiling.
+    @return {float} Largest passing automatic bracket amplitude on `0.25` EV grid.
+    @satisfies REQ-170, REQ-173, REQ-174, REQ-175, REQ-176, TST-049, TST-050, TST-051
+    """
+
+    normalized_rgb = _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=base_rgb_float,
+    ).astype(np_module.float32, copy=False)
+    luminance_linear = _calculate_bt709_luminance(
+        np_module=np_module,
+        image_rgb_float=normalized_rgb,
+    ).astype(np_module.float32, copy=False)
+    eps = 1e-6
+    log_luminance = np_module.log(luminance_linear + eps)
+    gradient_x = cv2_module.Sobel(log_luminance, cv2_module.CV_32F, 1, 0, ksize=3)
+    gradient_y = cv2_module.Sobel(log_luminance, cv2_module.CV_32F, 0, 1, ksize=3)
+    detail_map = np_module.sqrt(gradient_x * gradient_x + gradient_y * gradient_y)
+    detail_map = cv2_module.GaussianBlur(detail_map, (3, 3), 0).astype(
+        np_module.float32, copy=False
+    )
+    detail_sum = float(detail_map.sum())
+    if detail_sum > 0.0:
+        reference_detail_weights = detail_map / (detail_sum + eps)
+    else:
+        reference_detail_weights = np_module.ones_like(detail_map, dtype=np_module.float32)
+    bit_depth_max_bracket = max(0.0, round(base_max_ev - abs(ev_zero), 2))
+    max_bracket = round(
+        math.floor((bit_depth_max_bracket / EV_STEP) + 1e-9) * EV_STEP, 2
+    )
+    if max_bracket < EV_STEP:
+        return EV_STEP
+    candidate_amplitudes = [
+        round(index * EV_STEP, 2)
+        for index in range(1, int(math.floor((max_bracket / EV_STEP) + 1e-9)) + 1)
+    ]
+    previous_passing_amplitude = EV_STEP
+    for amplitude in candidate_amplitudes:
+        multipliers = (
+            2.0 ** float(ev_zero - amplitude),
+            2.0 ** float(ev_zero + amplitude),
+        )
+        dark_image, bright_image = _build_bracket_images_from_linear_base_float(
+            np_module=np_module,
+            base_rgb_float=normalized_rgb,
+            multipliers=multipliers,
+        )
+        dark_valid, _ = _analyze_auto_ev_bracket_quality(
+            np_module=np_module,
+            cv2_module=cv2_module,
+            bracket_image_float=dark_image,
+            reference_detail_weights=reference_detail_weights,
+        )
+        bright_valid, _ = _analyze_auto_ev_bracket_quality(
+            np_module=np_module,
+            cv2_module=cv2_module,
+            bracket_image_float=bright_image,
+            reference_detail_weights=reference_detail_weights,
+        )
+        if not dark_valid or not bright_valid:
+            return previous_passing_amplitude
+        previous_passing_amplitude = amplitude
+    return previous_passing_amplitude
+
+
 def _resolve_auto_ev_histogram_solution(
     np_module, cv2_module, base_rgb_float, base_max_ev
 ):
@@ -1935,19 +2108,20 @@ def _resolve_auto_ev_histogram_solution(
 
     @details Executes three-method histogram analysis on the normalized linear
     HDR base RGB image, selects the most conservative correction (smallest
-    absolute value), clamps to `[-SAFE_ZERO_MAX, +SAFE_ZERO_MAX]`, quantizes
-    on `0.25` EV step, derives `MAX_BRACKET = BASE_MAX - abs(ev_zero)`, and
-    computes `ev_minus = ev_zero - MAX_BRACKET`, `ev_plus = ev_zero + MAX_BRACKET`.
-    Emits deterministic runtime diagnostics for the histogram corrections,
-    selected conservative ev_zero, and bracket fork.
-    Complexity: delegated to `_compute_histogram_ev_corrections`. Side effects:
-    `print_info` diagnostic output.
+    absolute value), clamps to `[-SAFE_ZERO_MAX, +SAFE_ZERO_MAX]`, quantizes on
+    `0.25` EV step, scans symmetric bracket amplitudes from `0.25` to the
+    bit-depth ceiling, stops at the first histogram-validation failure, and
+    returns the previous passing amplitude. Emits deterministic runtime
+    diagnostics for the histogram corrections, selected conservative ev_zero,
+    and resolved bracket fork. Complexity: delegated to
+    `_compute_histogram_ev_corrections` plus bracket-quality scans. Side
+    effects: `print_info` diagnostic output.
     @param np_module {ModuleType} Imported numpy module.
     @param cv2_module {ModuleType} Imported OpenCV module.
     @param base_rgb_float {object} Normalized linear RGB base image on `[0,1]`.
     @param base_max_ev {float} Bit-derived `BASE_MAX` ceiling.
     @return {AutoEvHistogramSolution} Resolved automatic EV histogram solution.
-    @satisfies REQ-008, REQ-009, REQ-019, REQ-028, REQ-052, REQ-166, REQ-167, REQ-168, REQ-169, REQ-170, REQ-171, REQ-172
+    @satisfies REQ-008, REQ-009, REQ-019, REQ-028, REQ-052, REQ-166, REQ-167, REQ-168, REQ-169, REQ-170, REQ-171, REQ-172, REQ-173, REQ-174, REQ-175, REQ-176
     """
 
     ev_entropy, ev_ettr, ev_detail = _compute_histogram_ev_corrections(
@@ -1966,10 +2140,12 @@ def _resolve_auto_ev_histogram_solution(
         )
         if abs(ev_zero) > safe_zero_max + 1e-9:
             ev_zero = 0.0
-    max_bracket = round(base_max_ev - abs(ev_zero), 2)
-    max_bracket = max(0.0, max_bracket)
-    max_bracket_quantized = round(
-        math.floor((max_bracket / EV_STEP) + 1e-9) * EV_STEP, 2
+    max_bracket_quantized = _resolve_auto_ev_bracket_amplitude(
+        np_module=np_module,
+        cv2_module=cv2_module,
+        base_rgb_float=base_rgb_float,
+        ev_zero=ev_zero,
+        base_max_ev=base_max_ev,
     )
     ev_minus = round(ev_zero - max_bracket_quantized, 2)
     ev_plus = round(ev_zero + max_bracket_quantized, 2)
@@ -4189,7 +4365,7 @@ def _extract_bracket_images_float(
     @param rawpy_module {ModuleType} Imported `rawpy` module exposing `ColorSpace.raw`.
     @param base_rgb_float {object|None} Optional precomputed normalized linear RGB float base tensor.
     @return {list[object]} Ordered RGB float bracket tensors.
-    @satisfies REQ-010, REQ-157, REQ-158, REQ-159, REQ-160
+    @satisfies REQ-010, REQ-157, REQ-158, REQ-159, REQ-160, REQ-175
     """
 
     labels = ("ev_minus", "ev_zero", "ev_plus")

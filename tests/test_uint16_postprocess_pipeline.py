@@ -1547,7 +1547,7 @@ def test_compute_histogram_ev_corrections_returns_three_floats() -> None:
 def test_resolve_auto_ev_histogram_solution_selects_conservative_quantized_bracket(
     capsys,
 ) -> None:
-    """Histogram solution must select the most conservative ev_zero, quantize on 0.25, and derive MAX_BRACKET."""
+    """Histogram solution must select conservative ev_zero and largest passing bracket."""
 
     import cv2 as cv2_module
 
@@ -1570,10 +1570,11 @@ def test_resolve_auto_ev_histogram_solution_selects_conservative_quantized_brack
     safe_zero_max = max(0.0, base_max_ev - 1.0)
     assert abs(solution.ev_zero) <= safe_zero_max + 1e-9
     assert round(solution.ev_zero / 0.25) * 0.25 == pytest.approx(solution.ev_zero, abs=1e-9)
-    expected_max_bracket = round(
+    max_bit_depth_bracket = round(
         math.floor(((base_max_ev - abs(solution.ev_zero)) / 0.25) + 1e-9) * 0.25, 2
     )
-    assert solution.max_bracket == pytest.approx(expected_max_bracket, abs=1e-9)
+    assert solution.max_bracket >= 0.25
+    assert solution.max_bracket <= max_bit_depth_bracket + 1e-9
     assert solution.ev_minus == pytest.approx(solution.ev_zero - solution.max_bracket, abs=1e-9)
     assert solution.ev_plus == pytest.approx(solution.ev_zero + solution.max_bracket, abs=1e-9)
     assert abs(solution.ev_conservative) == min(
@@ -1608,6 +1609,7 @@ def test_auto_ev_histogram_solver_edge_cases() -> None:
     )
     safe_zero_max = max(0.0, base_max_ev - 1.0)
     assert abs(solution_black.ev_zero) <= safe_zero_max + 1e-9
+    assert solution_black.max_bracket == pytest.approx(0.25, abs=1e-9)
 
     midtone_image = np.full((4, 4, 3), 0.5, dtype=np.float32)
     ev_entropy_m, ev_ettr_m, ev_detail_m = dng2jpg_module._compute_histogram_ev_corrections(  # pylint: disable=protected-access
@@ -1626,6 +1628,114 @@ def test_auto_ev_histogram_solver_edge_cases() -> None:
         base_max_ev=base_max_ev,
     )
     assert abs(solution_midtone.ev_zero) <= safe_zero_max + 1e-9
+
+
+def test_resolve_auto_ev_histogram_solution_stops_at_previous_passing_amplitude(monkeypatch) -> None:
+    """Auto-EV bracket scan must stop at first failure and keep previous amplitude."""
+
+    import cv2 as cv2_module
+
+    base_rgb_float = np.full((4, 4, 3), 0.35, dtype=np.float32)
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_compute_histogram_ev_corrections",
+        lambda **_kwargs: (0.0, 0.0, 0.0),
+    )
+    amplitudes_seen: list[float] = []
+
+    def _fake_quality_scan(**kwargs):
+        bracket_image = kwargs["bracket_image_float"]
+        amplitude = round(abs(math.log2(float(np.max(bracket_image)) / 0.35)), 2)
+        amplitude = round(round(amplitude / 0.25) * 0.25, 2)
+        amplitudes_seen.append(amplitude)
+        return amplitude <= 0.5, {"detail_retention_ratio": 1.0}
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_analyze_auto_ev_bracket_quality",
+        _fake_quality_scan,
+    )
+
+    solution = dng2jpg_module._resolve_auto_ev_histogram_solution(  # pylint: disable=protected-access
+        np_module=np,
+        cv2_module=cv2_module,
+        base_rgb_float=base_rgb_float,
+        base_max_ev=2.0,
+    )
+
+    assert solution.max_bracket == pytest.approx(0.5, abs=1e-9)
+    assert max(amplitudes_seen) >= 0.75
+
+
+def test_resolve_auto_ev_histogram_solution_keeps_minimum_bracket_when_first_step_fails(
+    monkeypatch,
+) -> None:
+    """Auto-EV bracket scan must keep 0.25 when the first tested amplitude fails."""
+
+    import cv2 as cv2_module
+
+    base_rgb_float = np.full((4, 4, 3), 0.35, dtype=np.float32)
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_compute_histogram_ev_corrections",
+        lambda **_kwargs: (0.0, 0.0, 0.0),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_analyze_auto_ev_bracket_quality",
+        lambda **_kwargs: (False, {"detail_retention_ratio": 0.0}),
+    )
+
+    solution = dng2jpg_module._resolve_auto_ev_histogram_solution(  # pylint: disable=protected-access
+        np_module=np,
+        cv2_module=cv2_module,
+        base_rgb_float=base_rgb_float,
+        base_max_ev=2.0,
+    )
+
+    assert solution.max_bracket == pytest.approx(0.25, abs=1e-9)
+    assert solution.ev_minus == pytest.approx(solution.ev_zero - 0.25, abs=1e-9)
+    assert solution.ev_plus == pytest.approx(solution.ev_zero + 0.25, abs=1e-9)
+
+
+def test_auto_ev_bracket_quality_analysis_detects_clipping_and_preserves_balanced_frame() -> None:
+    """Bracket quality analysis must reject clipping and accept balanced brackets."""
+
+    fake_cv2 = _FakeOpenCvModule()
+    balanced = np.array(
+        [
+            [[0.12, 0.12, 0.12], [0.22, 0.22, 0.22]],
+            [[0.42, 0.42, 0.42], [0.62, 0.62, 0.62]],
+        ],
+        dtype=np.float32,
+    )
+    clipped = np.array(
+        [
+            [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
+            [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]],
+        ],
+        dtype=np.float32,
+    )
+    reference_detail_weights = np.full((2, 2), 0.25, dtype=np.float32)
+
+    balanced_valid, balanced_metrics = dng2jpg_module._analyze_auto_ev_bracket_quality(  # pylint: disable=protected-access
+        np_module=np,
+        cv2_module=fake_cv2,
+        bracket_image_float=balanced,
+        reference_detail_weights=reference_detail_weights,
+    )
+    clipped_valid, clipped_metrics = dng2jpg_module._analyze_auto_ev_bracket_quality(  # pylint: disable=protected-access
+        np_module=np,
+        cv2_module=fake_cv2,
+        bracket_image_float=clipped,
+        reference_detail_weights=reference_detail_weights,
+    )
+
+    assert balanced_valid is True
+    assert balanced_metrics["highlight_saturated_ratio"] < clipped_metrics["highlight_saturated_ratio"]
+    assert clipped_valid is False
+    assert clipped_metrics["highlight_edge_ratio"] >= dng2jpg_module._AUTO_EV_HIGHLIGHT_EDGE_THRESHOLD
 
 
 def test_run_opencv_hdr_merge_keeps_mertens_inputs_as_float32() -> None:
