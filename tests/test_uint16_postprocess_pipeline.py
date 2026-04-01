@@ -80,12 +80,30 @@ class _FakeExifRatio:
 class _FakeExifData:
     """Minimal EXIF mapping shim for `_extract_dng_exif_payload_and_timestamp` tests."""
 
-    def __init__(self, values: dict[int, object], payload: bytes = b"fake-exif") -> None:
+    def __init__(
+        self,
+        values: dict[int, object],
+        payload: bytes = b"fake-exif",
+        ifd_values: dict[int, dict[int, object]] | None = None,
+    ) -> None:
         self._values = dict(values)
         self._payload = payload
+        self._ifd_values = (
+            {
+                ifd_tag: dict(ifd_payload)
+                for ifd_tag, ifd_payload in (ifd_values or {}).items()
+            }
+            if ifd_values is not None
+            else {}
+        )
 
     def get(self, key: int):
         return self._values.get(key)
+
+    def get_ifd(self, key: int):
+        if key not in self._ifd_values:
+            raise KeyError(key)
+        return self._ifd_values[key]
 
     def tobytes(self) -> bytes:
         return self._payload
@@ -1428,6 +1446,35 @@ def test_extract_dng_exif_payload_and_timestamp_reads_datetime_priority_and_expo
     assert payload == b"fake-exif"
     assert orientation == 6
     assert exposure_time_seconds == 0.125
+    assert timestamp is not None
+
+
+def test_extract_dng_exif_payload_and_timestamp_reads_nested_exif_ifd_exposure_time() -> None:
+    """Nested EXIF IFD exposure time must be accepted when top-level EXIF omits it."""
+
+    fake_exif = _FakeExifData(
+        {
+            dng2jpg_module._EXIF_TAG_DATETIME: b"2024:01:02 03:04:05",  # pylint: disable=protected-access
+            dng2jpg_module._EXIF_TAG_ORIENTATION: 6,  # pylint: disable=protected-access
+        },
+        ifd_values={
+            34665: {
+                dng2jpg_module._EXIF_TAG_DATETIME_ORIGINAL: b"2024:01:02 03:04:05",  # pylint: disable=protected-access
+                dng2jpg_module._EXIF_TAG_EXPOSURE_TIME: _FakeExifRatio(1, 60),  # pylint: disable=protected-access
+            }
+        },
+    )
+
+    payload, timestamp, orientation, exposure_time_seconds = (
+        dng2jpg_module._extract_dng_exif_payload_and_timestamp(  # pylint: disable=protected-access
+            pil_image_module=_FakeExifPilModule(fake_exif),
+            input_dng=Path("input.dng"),
+        )
+    )
+
+    assert payload == b"fake-exif"
+    assert orientation == 6
+    assert exposure_time_seconds == 1.0 / 60.0
     assert timestamp is not None
 
 

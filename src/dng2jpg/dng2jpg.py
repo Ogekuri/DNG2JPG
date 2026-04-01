@@ -155,6 +155,7 @@ _EXIF_TAG_DATETIME = 306
 _EXIF_TAG_DATETIME_ORIGINAL = 36867
 _EXIF_TAG_DATETIME_DIGITIZED = 36868
 _EXIF_TAG_EXPOSURE_TIME = 33434
+_EXIF_IFD_POINTER = 34665
 _EXIF_VALID_ORIENTATIONS = (1, 2, 3, 4, 5, 6, 7, 8)
 _THUMBNAIL_MAX_SIZE = (256, 256)
 _AUTO_ADJUST_KNOB_OPTIONS = (
@@ -3956,9 +3957,11 @@ def _extract_dng_exif_payload_and_timestamp(pil_image_module, input_dng):
     @details Opens input DNG via Pillow, suppresses known non-actionable
     `PIL.TiffImagePlugin` metadata warning for malformed TIFF tag `33723`, reads
     EXIF mapping without orientation mutation, serializes payload for JPEG save
-    while source image handle is still open,
-    resolves source orientation from EXIF tag `274`, parses EXIF `ExposureTime`
-    to positive seconds, and resolves filesystem timestamp priority:
+    while source image handle is still open, resolves source orientation from
+    EXIF tag `274`, resolves datetime/exposure metadata from the top-level EXIF
+    mapping with fallback to the nested EXIF IFD (`34665`) when Pillow omits
+    those tags from the root mapping, parses EXIF `ExposureTime` to positive
+    seconds, and resolves filesystem timestamp priority:
     `DateTimeOriginal`(36867) > `DateTimeDigitized`(36868) > `DateTime`(306).
     @param pil_image_module {ModuleType} Imported Pillow Image module.
     @param input_dng {Path} Source DNG path.
@@ -3984,8 +3987,34 @@ def _extract_dng_exif_payload_and_timestamp(pil_image_module, input_dng):
                 exif_payload = (
                     exif_data.tobytes() if hasattr(exif_data, "tobytes") else None
                 )
+
+                exif_ifd_data = None
+                if hasattr(exif_data, "get_ifd"):
+                    try:
+                        exif_ifd_data = exif_data.get_ifd(_EXIF_IFD_POINTER)
+                    except (KeyError, TypeError, ValueError, AttributeError):
+                        exif_ifd_data = None
+
+                def _read_exif_value(exif_tag):
+                    """@brief Resolve one EXIF value from root EXIF data with nested-IFD fallback.
+
+                    @details Reads the requested EXIF tag from the top-level Pillow
+                    EXIF mapping first, then falls back to the nested EXIF IFD payload
+                    when available. Complexity: O(1). Side effects: none.
+                    @param exif_tag {int} Numeric EXIF tag identifier.
+                    @return {object|None} Raw EXIF value or `None` when absent in both locations.
+                    @satisfies REQ-161
+                    """
+
+                    root_value = exif_data.get(exif_tag)
+                    if root_value is not None:
+                        return root_value
+                    if exif_ifd_data is None or not hasattr(exif_ifd_data, "get"):
+                        return None
+                    return exif_ifd_data.get(exif_tag)
+
                 source_orientation = 1
-                orientation_raw = exif_data.get(_EXIF_TAG_ORIENTATION)
+                orientation_raw = _read_exif_value(_EXIF_TAG_ORIENTATION)
                 if orientation_raw is not None:
                     try:
                         orientation_value = int(orientation_raw)
@@ -4000,12 +4029,12 @@ def _extract_dng_exif_payload_and_timestamp(pil_image_module, input_dng):
                     _EXIF_TAG_DATETIME,
                 ):
                     exif_timestamp = _parse_exif_datetime_to_timestamp(
-                        exif_data.get(exif_tag)
+                        _read_exif_value(exif_tag)
                     )
                     if exif_timestamp is not None:
                         break
                 exposure_time_seconds = _parse_exif_exposure_time_to_seconds(
-                    exif_data.get(_EXIF_TAG_EXPOSURE_TIME)
+                    _read_exif_value(_EXIF_TAG_EXPOSURE_TIME)
                 )
                 return (
                     exif_payload,

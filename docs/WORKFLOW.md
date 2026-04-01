@@ -155,7 +155,7 @@
         - `print_error(...)`: emit dependency diagnostics [`src/shell_scripts/utils.py`]
       - `_load_image_dependencies(...)`: import rawpy/imageio/pillow dependencies [`src/dng2jpg/dng2jpg.py`]
         - `print_error(...)`: emit dependency diagnostics [`src/shell_scripts/utils.py`]
-      - `_extract_dng_exif_payload_and_timestamp(...)`: read DNG EXIF payload/timestamp/orientation/exposure-time metadata [`src/dng2jpg/dng2jpg.py`]
+      - `_extract_dng_exif_payload_and_timestamp(...)`: read DNG EXIF payload/timestamp/orientation/exposure-time metadata from the root EXIF mapping with nested EXIF-IFD fallback for tags Pillow omits at top level [`src/dng2jpg/dng2jpg.py`]
         - `_parse_exif_datetime_to_timestamp(...)`: parse EXIF datetime into POSIX timestamp [`src/dng2jpg/dng2jpg.py`]
         - `_parse_exif_exposure_time_to_seconds(...)`: parse EXIF `ExposureTime` into positive seconds [`src/dng2jpg/dng2jpg.py`]
       - `_load_piexif_dependency(...)`: import piexif when EXIF payload is present [`src/dng2jpg/dng2jpg.py`]
