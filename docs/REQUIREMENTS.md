@@ -142,7 +142,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-029**: MUST compute EV-zero safe ceiling with `SAFE_ZERO_MAX=((bits_per_color-8)/2)-1`.
 - **REQ-030**: MUST quantize EV and EV-zero computations on `0.25` EV step granularity.
 - **REQ-031**: MUST derive adaptive EV from normalized preview luminance percentiles `0.1`, `50.0`, and `99.9`.
-- **REQ-032**: MUST evaluate `miglior_ev`, `ev_ettr`, and `ev_dettaglio` on the normalized linear gamma=`1` RGB image and use them as soft anchors while prioritizing the resolved auto-exposure shadow and highlight targets.
+- **REQ-032**: MUST evaluate `miglior_ev`, `ev_ettr`, and `ev_dettaglio` on the normalized linear gamma=`1` RGB image and use them as soft anchors while prioritizing highlight and shadow headroom constraints.
 - **REQ-033**: MUST parse and preserve `--tmo*` passthrough option payloads for luminance command forwarding.
 - **REQ-034**: MUST order luminance backend bracket inputs as `ev_minus`, `ev_zero`, `ev_plus`.
 - **REQ-035**: MUST execute `luminance-hdr-cli` from output TIFF parent directory to isolate sidecar artifacts in temporary workspace.
@@ -161,7 +161,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-049**: SHOULD provide both `dng2jpg` and `d2j` as equivalent user-invokable CLI aliases.
 - **REQ-050**: MUST implement `/tmp/auto-brightness.py` auto-brightness step order on normalized RGB float input/output: normalize sRGB, linearize, compute BT.709 luminance, tonemap luminance, rescale RGB, optionally desaturate, then re-encode sRGB.
 - **REQ-051**: MUST support exactly one auto-adjust pipeline with one validated knob model containing shared controls and CLAHE-luma controls.
-- **REQ-052**: MUST print deterministic and human-readable runtime diagnostics for input path, gamma, postprocess factors, backend, exposure mode, automatic candidate anchors, clipping-risk metrics, selected `(ev_zero, ev_delta)`, EV triplet, and OpenCV radiance exposure calculations/results.
+- **REQ-052**: MUST print deterministic runtime diagnostics for input path, gamma, postprocess factors, backend, exposure mode, automatic candidate anchors, clipping-risk metrics, selected `(ev_zero, ev_delta)`, EV triplet, and OpenCV radiance exposure calculations/results.
 - **REQ-103**: MUST classify normalized BT.709 luminance as `low-key` when `median<0.35 && p95<0.85`, `high-key` when `median>0.65 && p05>0.15`, else `normal-key`.
 - **REQ-104**: MUST map luminance with `L=(a/Lw_bar)*Y`, percentile-derived robust `Lwhite`, and burn-out compression `Ld=(L*(1+L/Lwhite^2))/(1+L)` before linear-domain chromaticity-preserving RGB scaling.
 - **REQ-105**: MUST desaturate only overflowing linear RGB pixels by blending toward `(Ld,Ld,Ld)` with the minimal factor that restores `max(R,G,B)<=1` while preserving luminance.
@@ -174,10 +174,6 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-119**: MUST apply a RawTherapee-equivalent float-domain tonal transformation that consumes `expcomp`, `black`, `brightness`, `contrast`, `hlcompr`, and `hlcomprthresh`, including per-channel overflow handling, exposure scaling, highlight curve, brightness curve, contrast curve, inverse-gamma output mapping, and default shadow compression `0`.
 - **REQ-120**: MUST execute optional highlight reconstruction after the auto-levels tonal transformation, using `--al-highlight-reconstruction` as the explicit enable toggle, mapping `Color Propagation` to RawTherapee `Color` and `Inpaint Opposed` to RawTherapee `Coloropp`.
 - **REQ-165**: MUST apply `Clip out-of-gamut colors` after the complete auto-levels tonal transformation and optional highlight reconstruction using the RawTherapee `filmlike_clip` hue-stable clipping family instead of isotropic ratio-preserving normalization.
-- **REQ-166**: MUST expose `--auto-ev-shadow-target` and `--auto-ev-highlight-target` as `--auto-ev`-scoped numeric configuration options, defaulting to `0.05` and `0.90`.
-- **REQ-167**: MUST validate `--auto-ev-shadow-target` and `--auto-ev-highlight-target` only when `--auto-ev` resolves to `enable` and MUST reject resolved values outside the open interval `(0,1)`.
-- **REQ-168**: MUST compute automatic `shadow_need` and `highlight_need` from the resolved auto-exposure target values instead of fixed constants.
-- **REQ-169**: MUST print auto-exposure diagnostics as labeled sentences that identify the resolved targets, the resolved anchors, the clipping-risk interpretation, and the reason the selected `(ev_zero, ev_delta)` satisfies or misses each guardrail.
 - **REQ-121**: MUST compute `log_avg_lum`, `median_lum`, `p05`, `p95`, `shadow_clip_in<=1/255`, and `highlight_clip_in>=254/255` from normalized luminance before key-value selection.
 - **REQ-122**: MUST auto-select base Reinhard `a` as `0.09`, `0.18`, or `0.36`, boost when `p95<0.60 && median<0.35`, attenuate when `p05>0.40 && median>0.65`, then clamp to `[a_min,a_max]`.
 - **REQ-123**: MUST execute auto-adjust stages in this exact order on RGB float buffers: selective blur, adaptive level, CLAHE-luma, sigmoidal contrast, HSL vibrance, and high-pass overlay.

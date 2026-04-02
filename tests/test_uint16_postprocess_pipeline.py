@@ -1202,8 +1202,6 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
         "--auto-ev=<enable|disable>",
         "--ev-zero=<value>",
         "--auto-ev-pct=<0..100>",
-        "--auto-ev-shadow-target=<(0,1)>",
-        "--auto-ev-highlight-target=<(0,1)>",
         "--hdr-merge <Luminace-HDR|OpenCV|HDR-Plus>",
         "--opencv-merge-algorithm=<name>",
         "--opencv-tonemap=<bool>",
@@ -1526,7 +1524,7 @@ def test_optimize_joint_ev_zero_and_delta_reduces_span_vs_legacy_minimum_center(
         bits_per_color=bits_per_color,
         base_max_ev=base_max_ev,
         preview_luminance_stats=preview_stats,
-        auto_ev_options=dng2jpg_module.AutoEvOptions(auto_ev_pct=100.0),
+        auto_ev_pct=100.0,
         evaluations=evaluations,
     )
 
@@ -1560,7 +1558,7 @@ def test_optimize_joint_ev_zero_and_delta_reduces_span_vs_legacy_minimum_center(
         anchors=anchors,
         p_low=preview_stats[0],
         p_high=preview_stats[2],
-        auto_ev_options=dng2jpg_module.AutoEvOptions(auto_ev_pct=100.0),
+        auto_ev_pct=100.0,
     )
 
     assert solution.ev_delta < legacy_solution.ev_delta
@@ -1598,10 +1596,10 @@ def test_optimize_joint_ev_zero_and_delta_uses_deterministic_tie_breaks(
         anchors,
         p_low,
         p_high,
-        auto_ev_options,
+        auto_ev_pct,
         clipping_risk_stats,
     ):
-        del bits_per_color, anchors, p_low, p_high, auto_ev_options, clipping_risk_stats
+        del bits_per_color, anchors, p_low, p_high, auto_ev_pct, clipping_risk_stats
         return dng2jpg_module.JointAutoEvSolution(
             ev_zero=ev_zero_candidate,
             ev_delta=0.25,
@@ -1625,7 +1623,7 @@ def test_optimize_joint_ev_zero_and_delta_uses_deterministic_tie_breaks(
         bits_per_color=16,
         base_max_ev=4.0,
         preview_luminance_stats=(0.05, 0.5, 0.9),
-        auto_ev_options=dng2jpg_module.AutoEvOptions(auto_ev_pct=100.0),
+        auto_ev_pct=100.0,
         evaluations=evaluations,
     )
 
@@ -1646,14 +1644,14 @@ def test_optimize_joint_ev_zero_and_delta_applies_auto_ev_pct_scaling() -> None:
         bits_per_color=16,
         base_max_ev=4.0,
         preview_luminance_stats=preview_stats,
-        auto_ev_options=dng2jpg_module.AutoEvOptions(auto_ev_pct=100.0),
+        auto_ev_pct=100.0,
         evaluations=evaluations,
     )
     scaled_solution = dng2jpg_module._optimize_joint_ev_zero_and_delta(  # pylint: disable=protected-access
         bits_per_color=16,
         base_max_ev=4.0,
         preview_luminance_stats=preview_stats,
-        auto_ev_options=dng2jpg_module.AutoEvOptions(auto_ev_pct=50.0),
+        auto_ev_pct=50.0,
         evaluations=evaluations,
     )
 
@@ -1710,7 +1708,7 @@ def test_optimize_joint_ev_zero_and_delta_contracts_delta_when_clipping_cap_is_t
         bits_per_color=16,
         base_max_ev=4.0,
         preview_luminance_stats=preview_stats,
-        auto_ev_options=dng2jpg_module.AutoEvOptions(auto_ev_pct=50.0),
+        auto_ev_pct=50.0,
         evaluations=evaluations,
         clipping_risk_stats=clipping_risk_stats,
     )
@@ -1720,36 +1718,6 @@ def test_optimize_joint_ev_zero_and_delta_contracts_delta_when_clipping_cap_is_t
     assert solution.clipping_safe_delta <= 0.35
     assert solution.predicted_plus_clip <= dng2jpg_module.AUTO_EV_PLUS_CLIP_TARGET_FRACTION
     assert solution.predicted_center_clip <= 0.00001
-
-
-def test_evaluate_joint_auto_ev_candidate_uses_configured_targets() -> None:
-    """Configured auto-EV targets must affect shadow and highlight guardrail demand."""
-
-    default_solution = dng2jpg_module._evaluate_joint_auto_ev_candidate(  # pylint: disable=protected-access
-        bits_per_color=16,
-        ev_zero_candidate=0.0,
-        anchors=(0.0, 0.0, 0.0),
-        p_low=0.02,
-        p_high=0.80,
-        auto_ev_options=dng2jpg_module.AutoEvOptions(),
-    )
-    configured_solution = dng2jpg_module._evaluate_joint_auto_ev_candidate(  # pylint: disable=protected-access
-        bits_per_color=16,
-        ev_zero_candidate=0.0,
-        anchors=(0.0, 0.0, 0.0),
-        p_low=0.02,
-        p_high=0.80,
-        auto_ev_options=dng2jpg_module.AutoEvOptions(
-            auto_ev_pct=100.0,
-            shadow_target=0.10,
-            highlight_target=0.95,
-        ),
-    )
-
-    assert configured_solution.shadow_need > default_solution.shadow_need
-    assert configured_solution.required_delta > default_solution.required_delta
-    assert configured_solution.shadow_target == 0.10
-    assert configured_solution.highlight_target == 0.95
 
 
 def test_run_opencv_hdr_merge_keeps_mertens_inputs_as_float32() -> None:
@@ -2572,44 +2540,6 @@ def test_parse_run_options_accepts_hdrplus_controls() -> None:
     )
 
 
-def test_parse_run_options_accepts_auto_ev_targets() -> None:
-    """Parser must expose auto-EV target overrides only through auto-EV options."""
-
-    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        [
-            "input.dng",
-            "output.jpg",
-            "--auto-ev=enable",
-            "--auto-ev-pct=75",
-            "--auto-ev-shadow-target=0.08",
-            "--auto-ev-highlight-target=0.94",
-        ]
-    )
-
-    assert parsed is not None
-    auto_ev_options = parsed[12]
-    assert auto_ev_options == dng2jpg_module.AutoEvOptions(
-        auto_ev_pct=75.0,
-        shadow_target=0.08,
-        highlight_target=0.94,
-    )
-
-
-def test_parse_run_options_rejects_auto_ev_targets_when_auto_ev_disabled() -> None:
-    """Parser must reject auto-EV knob overrides outside enabled auto-EV mode."""
-
-    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        [
-            "input.dng",
-            "output.jpg",
-            "--ev=1",
-            "--auto-ev-shadow-target=0.08",
-        ]
-    )
-
-    assert parsed is None
-
-
 def test_parse_run_options_rejects_invalid_hdrplus_controls() -> None:
     """Parser must reject inconsistent HDR+ temporal threshold combinations."""
 
@@ -3157,12 +3087,9 @@ def test_run_auto_ev_prints_joint_candidate_diagnostics(monkeypatch, tmp_path, c
     assert "Auto-EV heuristic miglior_ev:" in output
     assert "Auto-EV heuristic ev_ettr:" in output
     assert "Auto-EV heuristic ev_dettaglio:" in output
-    assert "Auto-EV targets:" in output
-    assert "Auto-EV anchors considered for ev_zero:" in output
-    assert "Auto-EV clipping-risk summary:" in output
-    assert "Auto-EV selected plan:" in output
-    assert "Auto-EV guardrail outcome:" in output
-    assert "Auto-EV predicted clipping after selection:" in output
+    assert "Auto-EV regularization anchors:" in output
+    assert "Auto-EV clipping-risk metrics:" in output
+    assert "Auto-EV selected joint solution:" in output
     assert "Export EV triplet:" in output
 
 
