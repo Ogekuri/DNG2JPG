@@ -15,6 +15,7 @@ persist in the output directory when `--debug` is enabled.
 """
 
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -4641,6 +4642,22 @@ def _order_hdr_plus_reference_paths(bracket_paths):
     return [ordered_paths[1], ordered_paths[0], ordered_paths[2]]
 
 
+def _format_external_command_for_log(command):
+    """@brief Format one external command argv into deterministic shell-like text.
+
+    @details Converts one sequence of raw argv tokens into one reproducible
+    shell-style command string using POSIX quoting rules so runtime diagnostics
+    can report the exact external command syntax and parameters without relying
+    on shell execution. Complexity: `O(n)` in total token length. Side effects:
+    none.
+    @param command {Sequence[str]} External command argv tokens in execution order.
+    @return {str} One shell-quoted command string suitable for runtime logging.
+    @satisfies REQ-011
+    """
+
+    return shlex.join(command)
+
+
 def _run_luminance_hdr_cli(
     bracket_images_float,
     temp_dir,
@@ -4655,8 +4672,9 @@ def _run_luminance_hdr_cli(
     @details Builds deterministic luminance-hdr-cli argv using EV sequence
     centered around zero-reference (`-ev_value,0,+ev_value`) even when extraction
     uses non-zero `ev_zero`, serializes float inputs to local 16-bit TIFFs,
-    forwards deterministic HDR/TMO arguments, isolates sidecar artifacts in a
-    backend-specific temporary directory, then reloads the produced TIFF as
+    forwards deterministic HDR/TMO arguments, emits one runtime log line with
+    the full executed command syntax and parameters, isolates sidecar artifacts
+    in a backend-specific temporary directory, then reloads the produced TIFF as
     normalized RGB float `[0,1]`.
     @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors.
     @param temp_dir {Path} Temporary workspace root.
@@ -4699,6 +4717,10 @@ def _run_luminance_hdr_cli(
         str(output_hdr_tiff),
         *[str(path) for path in ordered_paths],
     ]
+    print_info(
+        "Luminance-HDR command: "
+        f"{_format_external_command_for_log(command)}"
+    )
     original_working_directory = Path.cwd()
     backend_working_directory = output_hdr_tiff.parent
     try:

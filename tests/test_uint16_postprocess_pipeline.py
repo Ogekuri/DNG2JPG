@@ -1477,6 +1477,58 @@ def test_build_ev_times_from_ev_zero_and_delta_matches_bracket_sequence() -> Non
     )
 
 
+def test_run_luminance_hdr_cli_prints_full_command_syntax(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    """Luminance backend must log the full external command syntax with parameters."""
+
+    bracket_images_float = [
+        np.full((1, 1, 3), 0.1, dtype=np.float32),
+        np.full((1, 1, 3), 0.5, dtype=np.float32),
+        np.full((1, 1, 3), 0.9, dtype=np.float32),
+    ]
+    imageio_module = _FakeImageIoModule(
+        merged_rgb_u16=np.full((1, 1, 3), 32768, dtype=np.uint16)
+    )
+
+    monkeypatch.setattr(
+        dng2jpg_module.subprocess,
+        "run",
+        lambda command, check: None,
+    )
+
+    output = dng2jpg_module._run_luminance_hdr_cli(  # pylint: disable=protected-access
+        bracket_images_float=bracket_images_float,
+        temp_dir=tmp_path,
+        imageio_module=imageio_module,
+        np_module=np,
+        ev_value=1.0,
+        ev_zero=0.0,
+        luminance_options=dng2jpg_module.LuminanceOptions(
+            hdr_model="debevec",
+            hdr_weight="flat",
+            hdr_response_curve="srgb",
+            tmo="mantiuk08",
+            tmo_extra_args=("--tmoFerRho", "0.4"),
+        ),
+    )
+
+    captured = capsys.readouterr().out
+    assert "Luminance-HDR command: luminance-hdr-cli" in captured
+    assert "-e -1,0,1" in captured
+    assert "--hdrModel debevec" in captured
+    assert "--hdrWeight flat" in captured
+    assert "--hdrResponseCurve srgb" in captured
+    assert "--tmo mantiuk08" in captured
+    assert "--ldrTiff 16b" in captured
+    assert "--tmoFerRho 0.4" in captured
+    assert "-o" in captured
+    assert "ev_minus.tif" in captured
+    assert "ev_zero.tif" in captured
+    assert "ev_plus.tif" in captured
+    assert output.shape == (1, 1, 3)
+
+
 def test_extract_dng_exif_payload_and_timestamp_reads_datetime_priority_and_exposure_time() -> None:
     """EXIF extraction must prioritize datetime tags and parse exposure time seconds."""
 

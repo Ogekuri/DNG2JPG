@@ -115,7 +115,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-158**: MUST normalize the extracted HDR base image to RGB float `[0,1]` before any bracket arithmetic.
 - **REQ-159**: MUST derive `ev_minus`, `ev_zero`, and `ev_plus` only by EV scaling and `[0,1]` clipping of the normalized HDR base image.
 - **REQ-160**: MUST preserve the ordered float triplet `(ev_minus, ev_zero, ev_plus)` as the only cross-stage HDR bracket contract.
-- **REQ-011**: MUST run `luminance-hdr-cli` with deterministic HDR/TMO arguments for luminance backend, confining any required 16-bit TIFF intermediates to the backend step and returning normalized RGB float output.
+- **REQ-011**: MUST run `luminance-hdr-cli` with deterministic HDR/TMO arguments for luminance backend, MUST print the full executed command syntax with parameters to runtime output, confine any required 16-bit TIFF intermediates to the backend step, and return normalized RGB float output.
 - **REQ-012**: MUST exchange normalized OpenCV-compatible RGB float tensors `[0,1]` between merge, auto-brightness, auto-levels, static postprocess, auto-adjust, and final-save preparation stages.
 - **REQ-013**: MUST execute post-gamma, brightness, contrast, saturation, optional auto-brightness, and optional auto-levels in this exact order on RGB float stage interfaces before any optional auto-adjust stage.
 - **REQ-106**: MUST execute optional auto-adjust stage after static postprocess and before final JPEG quantization/write, preserve RGB float input/output interfaces, and confine any required float-to-uint16 or TIFF16 conversions to the auto-adjust step itself.
@@ -308,7 +308,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-008 | `src/dng2jpg/dng2jpg.py::_resolve_joint_auto_ev_solution`, `_optimize_joint_ev_zero_and_delta`; excerpt: solves `ev_zero` and `ev_delta` jointly from linear-image heuristics and preview statistics. |
 | REQ-009 | `src/dng2jpg/dng2jpg.py::_resolve_joint_auto_ev_solution`; excerpt: treats `--auto-ev` as the only automatic exposure path and emits the symmetric EV triplet. |
 | REQ-010 | `src/dng2jpg/dng2jpg.py::_extract_base_rgb_linear_float`, `_extract_bracket_images_float`; excerpt: executes one linear camera-WB-aware `rawpy.postprocess(...)` call before bracket derivation. |
-| REQ-011 | `src/dng2jpg/dng2jpg.py::_run_luminance_hdr_cli`; excerpt: deterministic luminance args, `--ldrTiff 16b`, and backend-local TIFF artifact handling. |
+| REQ-011 | `src/dng2jpg/dng2jpg.py::_run_luminance_hdr_cli`, `_format_external_command_for_log`; excerpt: deterministic luminance args, emitted full command syntax with parameters, `--ldrTiff 16b`, and backend-local TIFF artifact handling. |
 | REQ-012 | `src/dng2jpg/dng2jpg.py::_encode_jpg`, `_apply_static_postprocess_float`; excerpt: keeps merge/postprocess/auto-adjust/final-save buffers on normalized RGB float interfaces. |
 | REQ-013 | `src/dng2jpg/dng2jpg.py::_encode_jpg`; excerpt: auto-brightness executes before auto-levels and postprocess factors; optional auto-adjust executes before final JPEG save. |
 | REQ-014 | `src/dng2jpg/dng2jpg.py::_encode_jpg`, `_sync_output_file_timestamps_from_exif`; excerpt: writes refreshed EXIF metadata before applying `os.utime` from EXIF timestamp. |
