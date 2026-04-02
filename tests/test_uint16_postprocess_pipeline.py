@@ -1258,6 +1258,7 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
     assert "--auto-zero-pct=<0..100>" not in output
 
     assert "Value options accept both `--option value` and `--option=value` forms." in output
+    assert "Only accepted value: `linear`." in output
     assert "Allowed values: Debevec, Robertson, Mertens." in output
     assert "Allowed values: rggb, bt709, mean." in output
     assert "Effective only when `--hdr-merge OpenCV`." in output
@@ -1495,10 +1496,16 @@ def test_run_luminance_hdr_cli_prints_full_command_syntax(
         merged_rgb_u16=np.full((1, 1, 3), 32768, dtype=np.uint16)
     )
 
+    recorded_command: list[str] = []
+
+    def _fake_subprocess_run(command: list[str], check: bool) -> None:
+        del check  # Unused by deterministic subprocess stub.
+        recorded_command[:] = list(command)
+
     monkeypatch.setattr(
         dng2jpg_module.subprocess,
         "run",
-        lambda command, check: None,
+        _fake_subprocess_run,
     )
 
     output = dng2jpg_module._run_luminance_hdr_cli(  # pylint: disable=protected-access
@@ -1511,7 +1518,7 @@ def test_run_luminance_hdr_cli_prints_full_command_syntax(
         luminance_options=dng2jpg_module.LuminanceOptions(
             hdr_model="debevec",
             hdr_weight="flat",
-            hdr_response_curve="srgb",
+            hdr_response_curve="linear",
             tmo="mantiuk08",
             tmo_extra_args=("--tmoFerRho", "0.4"),
         ),
@@ -1520,9 +1527,12 @@ def test_run_luminance_hdr_cli_prints_full_command_syntax(
     captured = capsys.readouterr().out
     assert "Luminance-HDR command: luminance-hdr-cli" in captured
     assert "-e -1,0,1" in captured
+    assert "-g 1" in captured
+    assert "-S 1" in captured
+    assert "-G 1" in captured
     assert "--hdrModel debevec" in captured
     assert "--hdrWeight flat" in captured
-    assert "--hdrResponseCurve srgb" in captured
+    assert "--hdrResponseCurve linear" in captured
     assert "--tmo mantiuk08" in captured
     assert "--ldrTiff 16b" in captured
     assert "--tmoFerRho 0.4" in captured
@@ -1530,7 +1540,44 @@ def test_run_luminance_hdr_cli_prints_full_command_syntax(
     assert "ev_minus.tif" in captured
     assert "ev_zero.tif" in captured
     assert "ev_plus.tif" in captured
+    assert recorded_command[:13] == [
+        "luminance-hdr-cli",
+        "-e",
+        "-1,0,1",
+        "-g",
+        "1",
+        "-S",
+        "1",
+        "-G",
+        "1",
+        "--hdrModel",
+        "debevec",
+        "--hdrWeight",
+        "flat",
+    ]
+    assert "--hdrResponseCurve" in recorded_command
+    assert recorded_command[recorded_command.index("--hdrResponseCurve") + 1] == "linear"
     assert output.shape == (1, 1, 3)
+
+
+def test_parse_run_options_rejects_non_linear_luminance_response_curve(capsys) -> None:
+    """Luminance response-curve parser must reject non-linear command overrides."""
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        [
+            "input.dng",
+            "output.jpg",
+            "--hdr-merge=Luminace-HDR",
+            "--luminance-hdr-response-curve=srgb",
+        ]
+    )
+
+    assert parsed is None
+    captured = capsys.readouterr()
+    assert (
+        "--luminance-hdr-response-curve only accepts `linear`" in captured.err
+        or "--luminance-hdr-response-curve only accepts `linear`" in captured.out
+    )
 
 
 def test_extract_dng_exif_payload_and_timestamp_reads_datetime_priority_and_exposure_time() -> None:

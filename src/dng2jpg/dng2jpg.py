@@ -101,7 +101,7 @@ _AUTO_LEVELS_HIGHLIGHT_METHODS = (
 )
 DEFAULT_LUMINANCE_HDR_MODEL = "debevec"
 DEFAULT_LUMINANCE_HDR_WEIGHT = "flat"
-DEFAULT_LUMINANCE_HDR_RESPONSE_CURVE = "srgb"
+DEFAULT_LUMINANCE_HDR_RESPONSE_CURVE = "linear"
 DEFAULT_LUMINANCE_TMO = "mantiuk08"
 DEFAULT_AUTO_ADJUST_ENABLED = True
 HDR_MERGE_MODE_LUMINANCE = "Luminace-HDR"
@@ -523,7 +523,8 @@ class LuminanceOptions:
     """@brief Hold deterministic luminance-hdr-cli option values.
 
     @details Encapsulates luminance backend model and tone-mapping parameters
-    forwarded to `luminance-hdr-cli` command generation.
+    forwarded to `luminance-hdr-cli` command generation. The response-curve
+    payload is constrained to the repository linear HDR bracket contract.
     @param hdr_model {str} Luminance HDR model (`--hdrModel`).
     @param hdr_weight {str} Luminance weighting function (`--hdrWeight`).
     @param hdr_response_curve {str} Luminance response curve (`--hdrResponseCurve`).
@@ -970,7 +971,9 @@ def print_help(version):
     )
     _print_help_option(
         "--luminance-hdr-response-curve=<name>",
-        f"Luminance response-curve text forwarded to `luminance-hdr-cli`. Effective only when `--hdr-merge {HDR_MERGE_MODE_LUMINANCE}`. Default: `{DEFAULT_LUMINANCE_HDR_RESPONSE_CURVE}`.",
+        "Luminance response-curve selector constrained to the repository "
+        f"linear HDR contract. Effective only when `--hdr-merge {HDR_MERGE_MODE_LUMINANCE}`. "
+        f"Only accepted value: `{DEFAULT_LUMINANCE_HDR_RESPONSE_CURVE}`.",
     )
     _print_help_option(
         "--luminance-tmo=<name>",
@@ -2314,6 +2317,33 @@ def _parse_luminance_text_option(option_name, option_raw):
     return option_value
 
 
+def _parse_luminance_response_curve_option(option_raw):
+    """@brief Parse one luminance response-curve selector under the linear backend contract.
+
+    @details Normalizes one raw `--luminance-hdr-response-curve` token through
+    the shared luminance text parser, then enforces the repository luminance
+    backend contract requiring deterministic `linear` response-curve forwarding.
+    Complexity: `O(n)` in token length. Side effects: emits deterministic parse
+    diagnostics on invalid values.
+    @param option_raw {str} Raw CLI payload for `--luminance-hdr-response-curve`.
+    @return {str|None} Canonical `linear` token when valid; `None` otherwise.
+    @satisfies REQ-011
+    """
+
+    option_value = _parse_luminance_text_option(
+        "--luminance-hdr-response-curve", option_raw
+    )
+    if option_value is None:
+        return None
+    if option_value != DEFAULT_LUMINANCE_HDR_RESPONSE_CURVE:
+        print_error(
+            "--luminance-hdr-response-curve only accepts "
+            f"`{DEFAULT_LUMINANCE_HDR_RESPONSE_CURVE}`"
+        )
+        return None
+    return option_value
+
+
 def _parse_positive_float_option(option_name, option_raw):
     """@brief Parse and validate one positive float option value.
 
@@ -3423,9 +3453,7 @@ def _parse_run_options(args):
             if idx + 1 >= len(args):
                 print_error("Missing value for --luminance-hdr-response-curve")
                 return None
-            parsed_value = _parse_luminance_text_option(
-                "--luminance-hdr-response-curve", args[idx + 1]
-            )
+            parsed_value = _parse_luminance_response_curve_option(args[idx + 1])
             if parsed_value is None:
                 return None
             luminance_hdr_response_curve = parsed_value
@@ -3434,8 +3462,8 @@ def _parse_run_options(args):
             continue
 
         if token.startswith("--luminance-hdr-response-curve="):
-            parsed_value = _parse_luminance_text_option(
-                "--luminance-hdr-response-curve", token.split("=", 1)[1]
+            parsed_value = _parse_luminance_response_curve_option(
+                token.split("=", 1)[1]
             )
             if parsed_value is None:
                 return None
@@ -4702,6 +4730,12 @@ def _run_luminance_hdr_cli(
         "luminance-hdr-cli",
         "-e",
         f"{-ev_value:g},0,{ev_value:g}",
+        "-g",
+        "1",
+        "-S",
+        "1",
+        "-G",
+        "1",
         "--hdrModel",
         luminance_options.hdr_model,
         "--hdrWeight",
