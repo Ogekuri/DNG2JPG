@@ -43,6 +43,8 @@ DEFAULT_CONTRAST = 1.0
 DEFAULT_SATURATION = 1.0
 DEFAULT_JPG_COMPRESSION = 15
 DEFAULT_AUTO_EV_PCT = 50.0
+DEFAULT_AUTO_EV_SHADOW_TARGET = 0.05
+DEFAULT_AUTO_EV_HIGHLIGHT_TARGET = 0.90
 DEFAULT_AA_BLUR_SIGMA = 0.9
 DEFAULT_AA_BLUR_THRESHOLD_PCT = 5.0
 DEFAULT_AA_LEVEL_LOW_PCT = 0.1
@@ -144,8 +146,6 @@ SUPPORTED_EV_VALUES = tuple(
 AUTO_EV_LOW_PERCENTILE = 0.1
 AUTO_EV_HIGH_PERCENTILE = 99.9
 AUTO_EV_MEDIAN_PERCENTILE = 50.0
-AUTO_EV_TARGET_SHADOW = 0.05
-AUTO_EV_TARGET_HIGHLIGHT = 0.90
 AUTO_EV_MEDIAN_TARGET = 0.5
 AUTO_EV_PLUS_CLIP_TARGET_FRACTION = 0.001
 AUTO_EV_CENTER_CLIP_TARGET_FRACTION = 0.0
@@ -195,6 +195,11 @@ _HDRPLUS_KNOB_OPTIONS = (
     "--hdrplus-temporal-factor",
     "--hdrplus-temporal-min-dist",
     "--hdrplus-temporal-max-dist",
+)
+_AUTO_EV_KNOB_OPTIONS = (
+    "--auto-ev-pct",
+    "--auto-ev-shadow-target",
+    "--auto-ev-highlight-target",
 )
 _OPENCV_KNOB_OPTIONS = (
     "--opencv-merge-algorithm",
@@ -365,6 +370,28 @@ _LUMINANCE_CONTROL_TABLE_ROWS = (
     ("`vanhateren`", "`--tmoVanHaterenPupilArea`"),
     ("`lischinski`", "`--tmoLischinskiAlpha`"),
 )
+
+
+@dataclass(frozen=True)
+class AutoEvOptions:
+    """@brief Hold validated `--auto-ev` knob values.
+
+    @details Stores the percentage scaler applied to the required symmetric
+    automatic bracket delta together with the resolved shadow and highlight
+    luminance targets consumed by the automatic guardrail solver. Values are
+    immutable after CLI parsing so diagnostics and solver behavior remain
+    deterministic across the conversion pipeline. Complexity: `O(1)`. Side
+    effects: none.
+    @param auto_ev_pct {float} Percentage scaler in inclusive range `[0,100]`.
+    @param shadow_target {float} Open-interval `(0,1)` luminance target used by shadow guardrail demand.
+    @param highlight_target {float} Open-interval `(0,1)` luminance target used by highlight guardrail demand.
+    @return {None} Immutable dataclass container.
+    @satisfies REQ-019, REQ-166, REQ-167, REQ-168, REQ-169
+    """
+
+    auto_ev_pct: float = DEFAULT_AUTO_EV_PCT
+    shadow_target: float = DEFAULT_AUTO_EV_SHADOW_TARGET
+    highlight_target: float = DEFAULT_AUTO_EV_HIGHLIGHT_TARGET
 
 
 @dataclass(frozen=True)
@@ -645,8 +672,10 @@ class JointAutoEvSolution:
     @param clipping_safe_delta {float} Histogram-derived maximum symmetric delta allowed by plus-bracket clipping guardrails at `ev_zero`.
     @param predicted_center_clip {float} Predicted any-channel clipping fraction for the center bracket at `ev_zero`.
     @param predicted_plus_clip {float} Predicted any-channel clipping fraction for the plus bracket at `ev_zero+ev_delta`.
+    @param shadow_target {float} Resolved shadow luminance target used during candidate evaluation.
+    @param highlight_target {float} Resolved highlight luminance target used during candidate evaluation.
     @return {None} Immutable joint auto-exposure solution container.
-    @satisfies REQ-008, REQ-009, REQ-028, REQ-032, REQ-052
+    @satisfies REQ-008, REQ-009, REQ-028, REQ-032, REQ-052, REQ-168, REQ-169
     """
 
     ev_zero: float
@@ -659,6 +688,8 @@ class JointAutoEvSolution:
     zero_reg: float
     score: float
     anchors: tuple[float, float, float]
+    shadow_target: float = DEFAULT_AUTO_EV_SHADOW_TARGET
+    highlight_target: float = DEFAULT_AUTO_EV_HIGHLIGHT_TARGET
     clipping_safe_delta: float = 0.0
     predicted_center_clip: float = 0.0
     predicted_plus_clip: float = 0.0
@@ -924,7 +955,15 @@ def print_help(version):
     )
     _print_help_option(
         "--auto-ev-pct=<0..100>",
-        f"Scale the joint automatic solver required `ev_delta` toward zero before supported-value clamping. Default: `{DEFAULT_AUTO_EV_PCT:g}`.",
+        f"Scale the joint automatic solver required `ev_delta` toward zero before supported-value clamping. Effective only when `--auto-ev enable`. Default: `{DEFAULT_AUTO_EV_PCT:g}`.",
+    )
+    _print_help_option(
+        "--auto-ev-shadow-target=<(0,1)>",
+        f"Shadow luminance target used by the auto-exposure guardrail demand. Effective only when `--auto-ev enable`. Default: `{DEFAULT_AUTO_EV_SHADOW_TARGET:.2f}`.",
+    )
+    _print_help_option(
+        "--auto-ev-highlight-target=<(0,1)>",
+        f"Highlight luminance target used by the auto-exposure guardrail demand. Effective only when `--auto-ev enable`. Default: `{DEFAULT_AUTO_EV_HIGHLIGHT_TARGET:.2f}`.",
     )
 
     _print_help_section("Step 3 - HDR backend selection and backend-local configuration")
@@ -1462,6 +1501,31 @@ def _parse_percentage_option(option_name, option_raw):
     if option_value < 0.0 or option_value > 100.0:
         print_error(f"Invalid {option_name} value: {option_raw}")
         print_error("Allowed range: 0..100")
+        return None
+    return option_value
+
+
+def _parse_unit_interval_open_float_option(option_name, option_raw):
+    """@brief Parse and validate one open-unit-interval float option value.
+
+    @details Converts option token to `float`, requires the strict interval
+    `(0,1)`, and emits deterministic parse errors on malformed values. The
+    helper is used by `--auto-ev`-scoped luminance targets so the solver can
+    avoid invalid logarithm operands and ambiguous endpoint semantics.
+    @param option_name {str} Long-option identifier used in error messages.
+    @param option_raw {str} Raw option token value from CLI args.
+    @return {float|None} Parsed float value when valid; `None` otherwise.
+    @satisfies REQ-166, REQ-167
+    """
+
+    try:
+        option_value = float(option_raw)
+    except ValueError:
+        print_error(f"Invalid {option_name} value: {option_raw}")
+        return None
+    if option_value <= 0.0 or option_value >= 1.0:
+        print_error(f"Invalid {option_name} value: {option_raw}")
+        print_error(f"{option_name} must be greater than 0 and less than 1.")
         return None
     return option_value
 
@@ -2374,7 +2438,7 @@ def _evaluate_joint_auto_ev_candidate(
     anchors,
     p_low,
     p_high,
-    auto_ev_pct,
+    auto_ev_options,
     clipping_risk_stats=None,
 ):
     """@brief Evaluate one discrete joint automatic exposure candidate.
@@ -2390,10 +2454,10 @@ def _evaluate_joint_auto_ev_candidate(
     @param anchors {tuple[float, float, float]} Quantized center regularization anchors.
     @param p_low {float} Normalized low-percentile preview luminance.
     @param p_high {float} Normalized high-percentile preview luminance.
-    @param auto_ev_pct {float} Percentage scaler applied to the required automatic delta.
+    @param auto_ev_options {AutoEvOptions} Resolved automatic-exposure scalar and target configuration.
     @param clipping_risk_stats {AutoEvClippingRiskStats|None} Optional histogram-derived clipping-risk metrics from the linear base RGB image.
     @return {JointAutoEvSolution} Fully scored candidate solution.
-    @satisfies REQ-008, REQ-009, REQ-019, REQ-028, REQ-030, REQ-031, REQ-032, REQ-052
+    @satisfies REQ-008, REQ-009, REQ-019, REQ-028, REQ-030, REQ-031, REQ-032, REQ-052, REQ-168, REQ-169
     """
 
     clipping_safe_delta = None
@@ -2417,10 +2481,14 @@ def _evaluate_joint_auto_ev_candidate(
             )
         except ValueError:
             invalid_clipping_candidate = True
-    shadow_need = max(0.0, math.log2(AUTO_EV_TARGET_SHADOW / p_low) - ev_zero_candidate)
+    shadow_need = max(
+        0.0,
+        math.log2(float(auto_ev_options.shadow_target) / p_low) - ev_zero_candidate,
+    )
     highlight_need = max(
         0.0,
-        ev_zero_candidate - math.log2(AUTO_EV_TARGET_HIGHLIGHT / p_high),
+        ev_zero_candidate
+        - math.log2(float(auto_ev_options.highlight_target) / p_high),
     )
     raw_required_delta = max(shadow_need, highlight_need, EV_STEP)
     required_delta = _quantize_ev_to_supported(
@@ -2428,7 +2496,7 @@ def _evaluate_joint_auto_ev_candidate(
         supported_deltas,
     )
     effective_delta = _clamp_ev_to_supported(
-        _apply_auto_percentage_scaling(required_delta, auto_ev_pct),
+        _apply_auto_percentage_scaling(required_delta, auto_ev_options.auto_ev_pct),
         bit_supported_deltas,
     )
     if clipping_safe_delta is not None and not invalid_clipping_candidate:
@@ -2492,6 +2560,8 @@ def _evaluate_joint_auto_ev_candidate(
         zero_reg=round(zero_reg, 6),
         score=round(score, 6),
         anchors=anchors,
+        shadow_target=round(float(auto_ev_options.shadow_target), 6),
+        highlight_target=round(float(auto_ev_options.highlight_target), 6),
         clipping_safe_delta=round(clipping_safe_delta or 0.0, 6),
         predicted_center_clip=round(predicted_center_clip, 6),
         predicted_plus_clip=round(predicted_plus_clip, 6),
@@ -2502,7 +2572,7 @@ def _optimize_joint_ev_zero_and_delta(
     bits_per_color,
     base_max_ev,
     preview_luminance_stats,
-    auto_ev_pct,
+    auto_ev_options,
     evaluations,
     clipping_risk_stats=None,
 ):
@@ -2515,11 +2585,11 @@ def _optimize_joint_ev_zero_and_delta(
     @param bits_per_color {int} Detected source DNG bits per color.
     @param base_max_ev {float} Bit-derived `BASE_MAX` ceiling.
     @param preview_luminance_stats {tuple[float, float, float]} Normalized preview `(p_low, p_median, p_high)` statistics.
-    @param auto_ev_pct {float} Percentage scaler applied to the required automatic delta.
+    @param auto_ev_options {AutoEvOptions} Resolved automatic-exposure scalar and target configuration.
     @param evaluations {AutoZeroEvaluation} Raw center heuristics from the linear base image.
     @param clipping_risk_stats {AutoEvClippingRiskStats|None} Optional histogram-derived clipping-risk metrics from the linear base RGB image.
     @return {JointAutoEvSolution} Selected joint automatic solution.
-    @satisfies REQ-008, REQ-009, REQ-019, REQ-028, REQ-029, REQ-030, REQ-031, REQ-032, REQ-052
+    @satisfies REQ-008, REQ-009, REQ-019, REQ-028, REQ-029, REQ-030, REQ-031, REQ-032, REQ-052, REQ-168, REQ-169
     """
 
     safe_ev_zero_max = _calculate_safe_ev_zero_max(base_max_ev)
@@ -2538,7 +2608,7 @@ def _optimize_joint_ev_zero_and_delta(
             anchors=anchors,
             p_low=p_low,
             p_high=p_high,
-            auto_ev_pct=auto_ev_pct,
+            auto_ev_options=auto_ev_options,
             clipping_risk_stats=clipping_risk_stats,
         )
         shadow_limited_by_clipping = (
@@ -2571,7 +2641,7 @@ def _resolve_joint_auto_ev_solution(
     raw_handle,
     bits_per_color,
     base_max_ev,
-    auto_ev_pct,
+    auto_ev_options,
     auto_adjust_dependencies=None,
     preview_luminance_stats=None,
     base_rgb_float=None,
@@ -2586,14 +2656,14 @@ def _resolve_joint_auto_ev_solution(
     @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
     @param bits_per_color {int} Detected source DNG bits per color.
     @param base_max_ev {float} Bit-derived `BASE_MAX` ceiling.
-    @param auto_ev_pct {float} Percentage scaler applied to the required automatic delta.
+    @param auto_ev_options {AutoEvOptions} Resolved automatic-exposure scalar and target configuration.
     @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2_module, numpy_module)` tuple.
     @param preview_luminance_stats {tuple[float, float, float]|None} Optional precomputed preview luminance statistics.
     @param base_rgb_float {object|None} Optional precomputed normalized linear base RGB image.
     @param clipping_risk_stats {AutoEvClippingRiskStats|None} Optional histogram-derived clipping-risk metrics for the normalized linear base RGB image.
     @return {JointAutoEvSolution} Selected joint automatic exposure solution.
     @exception RuntimeError Raised when required `cv2` or `numpy` dependencies are unavailable.
-    @satisfies REQ-008, REQ-009, REQ-028, REQ-031, REQ-032, REQ-037, REQ-052
+    @satisfies REQ-008, REQ-009, REQ-028, REQ-031, REQ-032, REQ-037, REQ-052, REQ-168, REQ-169
     """
 
     if auto_adjust_dependencies is None:
@@ -2624,7 +2694,7 @@ def _resolve_joint_auto_ev_solution(
         bits_per_color=bits_per_color,
         base_max_ev=base_max_ev,
         preview_luminance_stats=preview_luminance_stats,
-        auto_ev_pct=auto_ev_pct,
+        auto_ev_options=auto_ev_options,
         evaluations=evaluations,
         clipping_risk_stats=clipping_risk_stats,
     )
@@ -2632,28 +2702,42 @@ def _resolve_joint_auto_ev_solution(
     print_info(f"Auto-EV heuristic ev_ettr: {evaluations.ev_ettr:+.1f} EV")
     print_info(f"Auto-EV heuristic ev_dettaglio: {evaluations.ev_dettaglio:+.1f} EV")
     print_info(
-        "Auto-EV regularization anchors: "
-        + ", ".join(f"{anchor:+.2f}" for anchor in solution.anchors)
+        "Auto-EV targets: "
+        f"shadow={solution.shadow_target:.2f}, "
+        f"highlight={solution.highlight_target:.2f}, "
+        f"delta-scaling={float(auto_ev_options.auto_ev_pct):g}%"
     )
     print_info(
-        "Auto-EV clipping-risk metrics: "
-        f"p99.9MaxRGB={clipping_risk_stats.p99_9_max_rgb:.6f}, "
-        f"p99.99MaxRGB={clipping_risk_stats.p99_99_max_rgb:.6f}, "
-        f"baseClipAny={clipping_risk_stats.base_clip_any:.6f}, "
-        f"safeCenterEV={clipping_risk_stats.safe_center_ev:.2f}, "
-        f"safePlusEV={clipping_risk_stats.safe_plus_ev:.2f}"
+        "Auto-EV anchors considered for ev_zero: "
+        + ", ".join(f"{anchor:+.2f} EV" for anchor in solution.anchors)
     )
     print_info(
-        "Auto-EV selected joint solution: "
-        f"ev_zero={solution.ev_zero:+.2f}, "
-        f"ev_delta={solution.ev_delta:.2f}, "
-        f"required_delta={solution.required_delta:.2f}, "
-        f"clipping_safe_delta={solution.clipping_safe_delta:.2f}, "
-        f"score={solution.score:.6f}, "
-        f"uncovered_shadow={solution.uncovered_shadow:.6f}, "
-        f"uncovered_highlight={solution.uncovered_highlight:.6f}, "
-        f"predicted_center_clip={solution.predicted_center_clip:.6f}, "
-        f"predicted_plus_clip={solution.predicted_plus_clip:.6f}"
+        "Auto-EV clipping-risk summary: "
+        f"99.9th percentile max RGB={clipping_risk_stats.p99_9_max_rgb:.6f}, "
+        f"99.99th percentile max RGB={clipping_risk_stats.p99_99_max_rgb:.6f}, "
+        f"already-clipped base pixels={clipping_risk_stats.base_clip_any:.6f}, "
+        f"safe center limit={clipping_risk_stats.safe_center_ev:.2f} EV, "
+        f"safe plus limit={clipping_risk_stats.safe_plus_ev:.2f} EV"
+    )
+    print_info(
+        "Auto-EV selected plan: "
+        f"center={solution.ev_zero:+.2f} EV, "
+        f"bracket half-span={solution.ev_delta:.2f} EV, "
+        f"guardrail-complete half-span={solution.required_delta:.2f} EV, "
+        f"clipping-safe half-span={solution.clipping_safe_delta:.2f} EV"
+    )
+    print_info(
+        "Auto-EV guardrail outcome: "
+        f"shadow need={solution.shadow_need:.6f} EV, "
+        f"highlight need={solution.highlight_need:.6f} EV, "
+        f"remaining shadow miss={solution.uncovered_shadow:.6f} EV, "
+        f"remaining highlight miss={solution.uncovered_highlight:.6f} EV"
+    )
+    print_info(
+        "Auto-EV predicted clipping after selection: "
+        f"center frame={solution.predicted_center_clip:.6f}, "
+        f"plus frame={solution.predicted_plus_clip:.6f}, "
+        f"solver score={solution.score:.6f}"
     )
     return solution
 
@@ -3457,6 +3541,8 @@ def _parse_run_options(args):
     (`--ev=<value>`/`--ev <value>` plus optional `--ev-zero=<value>`),
     automatic exposure selector (`--auto-ev[=<enable|disable>]`) with explicit
     mutual exclusion against `--ev`, optional `--auto-ev-pct=<0..100>`,
+    optional `--auto-ev-shadow-target=<(0,1)>`, and optional
+    `--auto-ev-highlight-target=<(0,1)>`,
     optional postprocess controls, optional auto-brightness stage and
     `--ab-*` knobs, optional auto-levels stage and `--al-*` knobs,
     optional shared auto-adjust knobs, optional backend selector
@@ -3467,8 +3553,8 @@ def _parse_run_options(args):
     optional `--debug` persistent checkpoint emission; rejects removed
     `--gamma`, rejects unknown options, and rejects invalid arity.
     @param args {list[str]} Raw command argument vector.
-    @return {tuple[Path, Path, float|None, bool, PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, float]|None} Parsed `(input, output, ev, auto_ev, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, auto_ev_pct)` tuple; `None` on parse failure.
-    @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-020, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146
+    @return {tuple[Path, Path, float|None, bool, PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, AutoEvOptions]|None} Parsed `(input, output, ev, auto_ev, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, auto_ev_options)` tuple; `None` on parse failure.
+    @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-019, REQ-020, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146, REQ-166, REQ-167
     """
 
     positional = []
@@ -3476,7 +3562,7 @@ def _parse_run_options(args):
     auto_ev_enabled = None
     ev_zero = 0.0
     ev_zero_specified = False
-    auto_ev_pct = DEFAULT_AUTO_EV_PCT
+    auto_ev_options = AutoEvOptions()
     post_gamma = DEFAULT_POST_GAMMA
     brightness = DEFAULT_BRIGHTNESS
     contrast = DEFAULT_CONTRAST
@@ -3916,7 +4002,11 @@ def _parse_run_options(args):
             parsed_auto_ev_pct = _parse_percentage_option("--auto-ev-pct", args[idx + 1])
             if parsed_auto_ev_pct is None:
                 return None
-            auto_ev_pct = parsed_auto_ev_pct
+            auto_ev_options = AutoEvOptions(
+                auto_ev_pct=parsed_auto_ev_pct,
+                shadow_target=auto_ev_options.shadow_target,
+                highlight_target=auto_ev_options.highlight_target,
+            )
             idx += 2
             continue
 
@@ -3926,7 +4016,73 @@ def _parse_run_options(args):
             )
             if parsed_auto_ev_pct is None:
                 return None
-            auto_ev_pct = parsed_auto_ev_pct
+            auto_ev_options = AutoEvOptions(
+                auto_ev_pct=parsed_auto_ev_pct,
+                shadow_target=auto_ev_options.shadow_target,
+                highlight_target=auto_ev_options.highlight_target,
+            )
+            idx += 1
+            continue
+
+        if token == "--auto-ev-shadow-target":
+            if idx + 1 >= len(args):
+                print_error("Missing value for --auto-ev-shadow-target")
+                return None
+            parsed_shadow_target = _parse_unit_interval_open_float_option(
+                "--auto-ev-shadow-target", args[idx + 1]
+            )
+            if parsed_shadow_target is None:
+                return None
+            auto_ev_options = AutoEvOptions(
+                auto_ev_pct=auto_ev_options.auto_ev_pct,
+                shadow_target=parsed_shadow_target,
+                highlight_target=auto_ev_options.highlight_target,
+            )
+            idx += 2
+            continue
+
+        if token.startswith("--auto-ev-shadow-target="):
+            parsed_shadow_target = _parse_unit_interval_open_float_option(
+                "--auto-ev-shadow-target", token.split("=", 1)[1]
+            )
+            if parsed_shadow_target is None:
+                return None
+            auto_ev_options = AutoEvOptions(
+                auto_ev_pct=auto_ev_options.auto_ev_pct,
+                shadow_target=parsed_shadow_target,
+                highlight_target=auto_ev_options.highlight_target,
+            )
+            idx += 1
+            continue
+
+        if token == "--auto-ev-highlight-target":
+            if idx + 1 >= len(args):
+                print_error("Missing value for --auto-ev-highlight-target")
+                return None
+            parsed_highlight_target = _parse_unit_interval_open_float_option(
+                "--auto-ev-highlight-target", args[idx + 1]
+            )
+            if parsed_highlight_target is None:
+                return None
+            auto_ev_options = AutoEvOptions(
+                auto_ev_pct=auto_ev_options.auto_ev_pct,
+                shadow_target=auto_ev_options.shadow_target,
+                highlight_target=parsed_highlight_target,
+            )
+            idx += 2
+            continue
+
+        if token.startswith("--auto-ev-highlight-target="):
+            parsed_highlight_target = _parse_unit_interval_open_float_option(
+                "--auto-ev-highlight-target", token.split("=", 1)[1]
+            )
+            if parsed_highlight_target is None:
+                return None
+            auto_ev_options = AutoEvOptions(
+                auto_ev_pct=auto_ev_options.auto_ev_pct,
+                shadow_target=auto_ev_options.shadow_target,
+                highlight_target=parsed_highlight_target,
+            )
             idx += 1
             continue
 
@@ -4103,6 +4259,26 @@ def _parse_run_options(args):
         else:
             print_error("--ev-zero requires --ev")
         return None
+    if not auto_ev_enabled and auto_ev_options != AutoEvOptions():
+        invalid_knob = next(
+            option_name
+            for option_name in _AUTO_EV_KNOB_OPTIONS
+            if (
+                option_name == "--auto-ev-pct"
+                and auto_ev_options.auto_ev_pct != DEFAULT_AUTO_EV_PCT
+            )
+            or (
+                option_name == "--auto-ev-shadow-target"
+                and auto_ev_options.shadow_target != DEFAULT_AUTO_EV_SHADOW_TARGET
+            )
+            or (
+                option_name == "--auto-ev-highlight-target"
+                and auto_ev_options.highlight_target
+                != DEFAULT_AUTO_EV_HIGHLIGHT_TARGET
+            )
+        )
+        print_error(f"Auto-EV knob {invalid_knob} requires --auto-ev enable")
+        return None
 
     if hdr_merge_mode not in _HDR_MERGE_MODES:
         print_error(f"Invalid --hdr-merge value: {hdr_merge_mode}")
@@ -4209,7 +4385,7 @@ def _parse_run_options(args):
         hdrplus_options,
         enable_hdr_plus,
         ev_zero,
-        auto_ev_pct,
+        auto_ev_options,
     )
 
 
@@ -10110,7 +10286,7 @@ def run(args):
         hdrplus_options,
         enable_hdr_plus,
         ev_zero,
-        auto_ev_pct,
+        auto_ev_options,
     ) = parsed
 
     if input_dng.suffix.lower() != ".dng":
@@ -10283,7 +10459,7 @@ def run(args):
                         raw_handle=raw_handle,
                         bits_per_color=bits_per_color,
                         base_max_ev=base_max_ev,
-                        auto_ev_pct=auto_ev_pct,
+                        auto_ev_options=auto_ev_options,
                         auto_adjust_dependencies=auto_adjust_dependencies,
                         preview_luminance_stats=preview_luminance_stats,
                         base_rgb_float=base_rgb_float,
