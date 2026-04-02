@@ -175,7 +175,7 @@
         - `print_info(...)`: emit source-gamma diagnostics [`src/shell_scripts/utils.py`]
       - `_extract_exif_gamma_tags(...)`: extract EXIF color-space and color-profile evidence via `exifread` binary stream processing from source RAW/DNG file with `exiftool` subprocess fallback for vendor MakerNotes [`src/dng2jpg/dng2jpg.py`]
         - `_exiftool_color_space_fallback(...)`: extract color-space evidence via `exiftool` subprocess when `exifread` yields no `ColorSpace` tag [`src/dng2jpg/dng2jpg.py`]
-      - `_describe_exif_gamma_tags(...)`: format one deterministic EXIF merge-gamma input diagnostic line exposing `ColorSpace`, `InteroperabilityIndex`, `ImageModel`, and `ImageMake` [`src/dng2jpg/dng2jpg.py`]
+      - `_describe_exif_gamma_tags(...)`: format one deterministic EXIF merge-gamma input diagnostic line exposing `ColorSpace`, `InteroperabilityIndex`, `ImageModel`, `ImageMake`, and human-readable `ColorProfile` label [`src/dng2jpg/dng2jpg.py`]
         - `print_info(...)`: emit EXIF merge-gamma input diagnostics [`src/shell_scripts/utils.py`]
       - `_resolve_auto_merge_gamma(...)`: resolve backend-final merge transfer from EXIF color-space evidence with sRGB default fallback [`src/dng2jpg/dng2jpg.py`]
       - `_describe_resolved_merge_gamma(...)`: format one deterministic merge-gamma runtime diagnostic line exposing request mode, resolved transfer, explicit linear-segment parameters, explicit curve-segment parameters, and evidence token [`src/dng2jpg/dng2jpg.py`]

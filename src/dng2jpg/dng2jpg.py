@@ -3487,9 +3487,12 @@ def _describe_exif_gamma_tags(exif_gamma_tags):
     """@brief Format one deterministic EXIF merge-gamma input diagnostic line.
 
     @details Renders one stable runtime payload exposing the normalized EXIF
-    `ColorSpace`, `InteroperabilityIndex`, `ImageModel`, and `ImageMake` values
-    consumed by automatic merge-gamma resolution. Missing values are rendered
-    as `missing`.
+    `ColorSpace`, `InteroperabilityIndex`, `ImageModel`, `ImageMake`, and a
+    human-readable `ColorProfile` label derived from `ColorSpace` and
+    `InteroperabilityIndex`. Mapping: `ColorSpace==1` -> `sRGB`,
+    `ColorSpace==2` or `InteroperabilityIndex` containing `R03` -> `Adobe RGB`,
+    `ColorSpace==65535` -> `Uncalibrated`, otherwise `Unknown`. Missing values
+    are rendered as `missing`.
     @param exif_gamma_tags {ExifGammaTags} Normalized EXIF merge-gamma evidence payload.
     @return {str} Deterministic runtime diagnostic line.
     @satisfies REQ-172
@@ -3499,12 +3502,27 @@ def _describe_exif_gamma_tags(exif_gamma_tags):
     interop_text = exif_gamma_tags.interoperability_index or "missing"
     model_text = exif_gamma_tags.image_model or "missing"
     make_text = exif_gamma_tags.image_make or "missing"
+    color_space = exif_gamma_tags.color_space
+    interop_index = exif_gamma_tags.interoperability_index
+    if color_space == "1":
+        color_profile_label = "sRGB"
+    elif color_space == "2" or (
+        interop_index is not None and "R03" in interop_index.upper()
+    ):
+        color_profile_label = "Adobe RGB"
+    elif color_space == "65535":
+        color_profile_label = "Uncalibrated"
+    elif color_space is None:
+        color_profile_label = "Unknown"
+    else:
+        color_profile_label = "Unknown"
     return (
         "Merge gamma EXIF inputs: "
         f"ColorSpace={color_space_text}; "
         f"InteroperabilityIndex={interop_text}; "
         f"ImageModel={model_text}; "
-        f"ImageMake={make_text}"
+        f"ImageMake={make_text}; "
+        f"ColorProfile={color_profile_label}"
     )
 
 
