@@ -3515,6 +3515,7 @@ def test_run_prints_merge_gamma_diagnostics(monkeypatch, tmp_path, capsys) -> No
     assert exit_code == 0
     output = capsys.readouterr().out
     assert "Merge gamma request: auto" in output
+    assert "Merge gamma EXIF inputs: ColorSpace=1; InteroperabilityIndex=missing" in output
     assert (
         "Merge gamma: request=auto; transfer=srgb; label=sRGB; params=-; evidence=exif-colorspace=1"
         in output

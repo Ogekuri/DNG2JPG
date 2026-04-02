@@ -131,6 +131,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-169**: MUST resolve `--gamma=auto` from original RAW/DNG EXIF color-space evidence before fallback to source-gamma diagnostics, mapping sRGB to IEC 61966-2-1 transfer, Adobe RGB to power gamma `2.19921875`, and unresolved evidence to linear transfer.
 - **REQ-170**: MUST apply resolved merge gamma only as the last backend-local step of `OpenCV` and `HDR-Plus` HDR merge pipelines, after backend normalization and before shared static postprocess, without introducing additional clipping above backend normalization.
 - **REQ-171**: MUST print deterministic merge-gamma runtime diagnostics containing the user request, resolved transfer label, parameter payload, and evidence source.
+- **REQ-172**: MUST print normalized EXIF merge-gamma inputs containing `ColorSpace` and `InteroperabilityIndex` values whenever `--gamma=auto` is resolved from RAW/DNG metadata.
 - **REQ-157**: MUST derive source gamma diagnostics from RAW metadata without modifying HDR bracket extraction, which remains linear and camera-WB-aware.
 - **REQ-163**: MUST classify source gamma diagnostics by preferring explicit profile or color-space metadata, then `rawpy.tone_curve`, then `rgb_xyz_matrix`, `color_matrix`, and `color_desc`, and MUST report `unknown` when evidence is insufficient.
 - **REQ-164**: MUST print source gamma diagnostics as one deterministic runtime line containing both a source-gamma label and either a numeric gamma value or `undetermined`.
@@ -280,6 +281,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-051**: MUST verify OpenCV backend applies resolved merge gamma as the final backend-local float step without extra clipping around the gamma transfer.
 - **TST-052**: MUST verify HDR+ backend applies resolved merge gamma as the final backend-local float step without extra clipping around the gamma transfer.
 - **TST-053**: MUST verify runtime diagnostics print deterministic merge-gamma request and resolved-transfer lines.
+- **TST-054**: MUST verify automatic merge-gamma diagnostics print normalized EXIF `ColorSpace` and `InteroperabilityIndex` inputs used during resolution.
 - **TST-040**: MUST verify float-only OpenCV Mertens output applies OpenCV-equivalent `255x` exposure-fusion scaling before final `[0,1]` normalization.
 
 ## 5. Evidence Matrix

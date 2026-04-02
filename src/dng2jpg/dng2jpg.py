@@ -3418,6 +3418,26 @@ def _describe_resolved_merge_gamma(resolved_merge_gamma):
     )
 
 
+def _describe_exif_gamma_tags(exif_gamma_tags):
+    """@brief Format one deterministic EXIF merge-gamma input diagnostic line.
+
+    @details Renders one stable runtime payload exposing the normalized EXIF
+    `ColorSpace` and `InteroperabilityIndex` values consumed by automatic
+    merge-gamma resolution. Missing values are rendered as `missing`.
+    @param exif_gamma_tags {ExifGammaTags} Normalized EXIF merge-gamma evidence payload.
+    @return {str} Deterministic runtime diagnostic line.
+    @satisfies REQ-172
+    """
+
+    color_space_text = exif_gamma_tags.color_space or "missing"
+    interop_text = exif_gamma_tags.interoperability_index or "missing"
+    return (
+        "Merge gamma EXIF inputs: "
+        f"ColorSpace={color_space_text}; "
+        f"InteroperabilityIndex={interop_text}"
+    )
+
+
 def _ensure_three_channel_float_array_no_clip(np_module, image_data):
     """@brief Normalize one image payload to three-channel float tensor without upper clipping.
 
@@ -10488,6 +10508,7 @@ def run(args):
                         pil_image_module=pil_image_module,
                         input_dng=input_dng,
                     )
+                    print_info(_describe_exif_gamma_tags(exif_gamma_tags))
                     resolved_merge_gamma = _resolve_auto_merge_gamma(
                         exif_gamma_tags=exif_gamma_tags,
                         source_gamma_info=source_gamma_info,
