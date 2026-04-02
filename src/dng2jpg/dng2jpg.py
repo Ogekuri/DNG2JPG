@@ -5340,12 +5340,14 @@ def _normalize_opencv_hdr_to_unit_range(np_module, hdr_rgb_float32):
     """@brief Normalize OpenCV HDR tensor to unit range with deterministic bounds.
 
     @details Normalizes arbitrary OpenCV HDR or fusion output to one congruent
-    RGB float contract. Negative and non-finite values are cleared, values above
-    unit range are scaled down by global maximum, and the final tensor is
-    clamped into `[0,1]`.
+    RGB float contract. Negative and non-finite values are cleared via
+    `np.maximum(0.0)` floor, and values above unit range are scaled down by
+    global maximum; no final `[0,1]` clipping is applied because the
+    floor-and-scale sequence guarantees the output is bounded within `[0,1]`
+    deterministically.
     @param np_module {ModuleType} Imported numpy module.
     @param hdr_rgb_float32 {object} OpenCV HDR or fusion RGB tensor.
-    @return {object} Normalized RGB float tensor clamped to `[0,1]`.
+    @return {object} Normalized RGB float tensor bounded within `[0,1]` by floor-and-scale normalization.
     @satisfies REQ-110, REQ-143, REQ-144
     """
 
@@ -5357,7 +5359,7 @@ def _normalize_opencv_hdr_to_unit_range(np_module, hdr_rgb_float32):
     if max_value > 1.0:
         hdr_rgb_float64 = hdr_rgb_float64 / max_value
     normalized = hdr_rgb_float64
-    return np_module.clip(normalized, 0.0, 1.0).astype(np_module.float32)
+    return normalized.astype(np_module.float32)
 
 
 def _run_opencv_merge_mertens(cv2_module, np_module, exposures_float):
@@ -6283,8 +6285,8 @@ def _hdrplus_merge_spatial_rgb(np_module, temporal_tiles, width, height):
     raised-cosine weights over `32` samples, gathers four overlapping tiles for
     each output pixel using source index formulas derived from `tile_0`,
     `tile_1`, `idx_0`, and `idx_1`, then computes one weighted RGB sum and
-    returns the continuous normalized float32 result without a final quantized
-    lattice projection.
+    returns the continuous normalized float32 result without stage-local
+    `[0,1]` clipping or quantized lattice projection.
     @param np_module {ModuleType} Imported numpy module.
     @param temporal_tiles {object} Temporally merged normalized RGB float32 tile tensor with shape `(Ty,Tx,32,32,3)`.
     @param width {int} Output image width.
@@ -6346,7 +6348,7 @@ def _hdrplus_merge_spatial_rgb(np_module, temporal_tiles, width, height):
         + (weight_01[..., None] * val_01)
         + (weight_11[..., None] * val_11)
     ).astype(np_module.float32)
-    return np_module.clip(merged_image, 0.0, 1.0).astype(np_module.float32)
+    return merged_image
 
 
 def _run_hdr_plus_merge(
@@ -6582,13 +6584,15 @@ def _normalize_float_rgb_image(np_module, image_data):
 def _write_rgb_float_tiff16(imageio_module, np_module, output_path, image_rgb_float):
     """@brief Serialize one RGB float tensor as 16-bit TIFF payload.
 
-    @details Normalizes the source image to RGB float `[0,1]`, converts it to
-    `uint16`, and writes the result through `imageio`. This helper localizes
-    float-to-TIFF16 adaptation inside steps that depend on file-based tools.
+    @details Normalizes the source image to RGB float, clamps to `[0,1]`
+    before quantization to ensure correct uint16 scaling when upstream pipeline
+    stages emit unbounded float values, converts to `uint16`, and writes the
+    result through `imageio`. This helper localizes float-to-TIFF16 adaptation
+    inside steps that depend on file-based tools.
     @param imageio_module {ModuleType} Imported imageio module with `imwrite`.
     @param np_module {ModuleType} Imported numpy module.
     @param output_path {Path} Output TIFF path.
-    @param image_rgb_float {object} RGB float tensor in `[0,1]`.
+    @param image_rgb_float {object} RGB float tensor, potentially unbounded.
     @return {None} Side effects only.
     @satisfies REQ-106
     """
@@ -6597,6 +6601,7 @@ def _write_rgb_float_tiff16(imageio_module, np_module, output_path, image_rgb_fl
         np_module=np_module,
         image_data=image_rgb_float,
     )
+    normalized = np_module.clip(normalized, 0.0, 1.0)
     imageio_module.imwrite(
         str(output_path),
         _to_uint16_image_array(np_module=np_module, image_data=normalized),
@@ -6832,12 +6837,12 @@ def _apply_post_gamma_float(np_module, image_rgb_float, gamma_value):
     """@brief Apply static post-gamma over RGB float tensor.
 
     @details Executes the legacy static gamma equation on normalized RGB float
-    data (`output = input^(1/gamma)`), preserves the original stage-local
-    clipping semantics, and removes the previous uint16 LUT adaptation layer.
+    data (`output = input^(1/gamma)`) without intermediate stage-local `[0,1]`
+    clipping, preserving float headroom for downstream pipeline stages.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} RGB float image tensor.
     @param gamma_value {float} Static post-gamma factor.
-    @return {object} RGB float tensor after gamma stage.
+    @return {object} RGB float tensor after gamma stage without stage-local clipping.
     @satisfies REQ-012, REQ-013, REQ-132, REQ-134
     """
 
@@ -6851,19 +6856,19 @@ def _apply_post_gamma_float(np_module, image_rgb_float, gamma_value):
         validated_input.astype(np_module.float64),
         1.0 / float(gamma_value),
     )
-    return np_module.clip(adjusted, 0.0, 1.0).astype(np_module.float32)
+    return adjusted.astype(np_module.float32)
 
 
 def _apply_brightness_float(np_module, image_rgb_float, brightness_factor):
     """@brief Apply static brightness factor on RGB float tensor.
 
     @details Executes the legacy brightness equation on normalized RGB float
-    data (`output = factor * input`), preserves per-stage clipping semantics,
-    and removes the prior uint16 round-trip.
+    data (`output = factor * input`) without intermediate stage-local `[0,1]`
+    clipping, preserving float headroom for downstream pipeline stages.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} RGB float image tensor.
     @param brightness_factor {float} Brightness scale factor.
-    @return {object} RGB float tensor after brightness stage.
+    @return {object} RGB float tensor after brightness stage without stage-local clipping.
     @satisfies REQ-012, REQ-013, REQ-132, REQ-134
     """
 
@@ -6874,7 +6879,7 @@ def _apply_brightness_float(np_module, image_rgb_float, brightness_factor):
     if brightness_factor == 1.0:
         return validated_input
     adjusted = validated_input.astype(np_module.float64) * float(brightness_factor)
-    return np_module.clip(adjusted, 0.0, 1.0).astype(np_module.float32)
+    return adjusted.astype(np_module.float32)
 
 
 def _apply_contrast_float(np_module, image_rgb_float, contrast_factor):
@@ -6906,12 +6911,13 @@ def _apply_saturation_float(np_module, image_rgb_float, saturation_factor):
     """@brief Apply static saturation factor on RGB float tensor.
 
     @details Executes the legacy saturation equation on normalized RGB float
-    data using BT.709 grayscale (`output = gray + factor * (input - gray)`),
-    then applies stage-local clipping without quantized intermediates.
+    data using BT.709 grayscale (`output = gray + factor * (input - gray)`)
+    without intermediate stage-local `[0,1]` clipping, preserving float
+    headroom for downstream pipeline stages.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} RGB float image tensor.
     @param saturation_factor {float} Saturation interpolation factor.
-    @return {object} RGB float tensor after saturation stage.
+    @return {object} RGB float tensor after saturation stage without stage-local clipping.
     @satisfies REQ-012, REQ-013, REQ-132, REQ-134
     """
 
@@ -6929,7 +6935,7 @@ def _apply_saturation_float(np_module, image_rgb_float, saturation_factor):
         (0.2126 * red_channel) + (0.7152 * green_channel) + (0.0722 * blue_channel)
     )[:, :, None]
     adjusted = grayscale + float(saturation_factor) * (image_float - grayscale)
-    return np_module.clip(adjusted, 0.0, 1.0).astype(np_module.float32)
+    return adjusted.astype(np_module.float32)
 
 
 def _apply_static_postprocess_float(
@@ -6943,7 +6949,8 @@ def _apply_static_postprocess_float(
 
     @details Accepts one normalized RGB float tensor, preserves the legacy
     gamma/brightness/contrast/saturation equations and stage order, executes
-    all intermediate calculations in float domain, optionally emits persistent
+    all intermediate calculations in float domain without stage-local `[0,1]`
+    clipping on gamma/brightness/saturation stages, optionally emits persistent
     debug TIFF checkpoints after each static substage, and eliminates the prior
     float->uint16->float adaptation cycle from this step.
     @param np_module {ModuleType} Imported numpy module.
@@ -8856,11 +8863,12 @@ def _apply_auto_levels_float(np_module, image_rgb_float, auto_levels_options):
     by exposure, black, brightness, contrast, and highlight-compression
     metrics, conditionally runs float-native highlight reconstruction, and
     optionally clips overflowing RGB triplets with RawTherapee film-like gamut
-    logic without any production uint16 staging buffers.
+    logic without any production uint16 staging buffers; no final stage-local
+    `[0,1]` clipping is applied beyond the optional gamut clip.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} RGB float tensor.
     @param auto_levels_options {AutoLevelsOptions} Parsed auto-levels options.
-    @return {object} RGB float tensor after auto-levels stage.
+    @return {object} RGB float tensor after auto-levels stage without final stage-local clipping.
     @satisfies REQ-100, REQ-101, REQ-102, REQ-119, REQ-120, REQ-165
     """
 
@@ -8948,11 +8956,7 @@ def _apply_auto_levels_float(np_module, image_rgb_float, auto_levels_options):
             image_rgb=image_float,
             maxval=1.0,
         )
-    return np_module.clip(
-        image_float,
-        0.0,
-        1.0,
-    ).astype(np_module.float32)
+    return image_float.astype(np_module.float32)
 
 
 def _clip_auto_levels_out_of_gamut_float(np_module, image_rgb, maxval=1.0):
@@ -9716,11 +9720,12 @@ def _apply_auto_brightness_rgb_float(
     normalized distribution thresholds, choose or override key value `a`,
     apply Reinhard global tonemap with robust percentile white-point, preserve
     chromaticity by luminance scaling, optionally desaturate only overflowing
-    linear RGB pixels, then re-encode to sRGB without any CLAHE substep.
+    linear RGB pixels, then re-encode to sRGB without any CLAHE substep or
+    final stage-local `[0,1]` output clipping.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} RGB float tensor.
     @param auto_brightness_options {AutoBrightnessOptions} Parsed auto-brightness parameters.
-    @return {object} RGB float tensor after BT.709 auto-brightness.
+    @return {object} RGB float tensor after BT.709 auto-brightness without stage-local clipping.
     @satisfies REQ-050, REQ-103, REQ-104, REQ-105, REQ-121, REQ-122
     """
 
@@ -9760,7 +9765,7 @@ def _apply_auto_brightness_rgb_float(
             eps=auto_brightness_options.eps,
         )
     bright_srgb = _from_linear_srgb(np_module=np_module, image_linear=bright_linear)
-    return np_module.clip(bright_srgb, 0.0, 1.0).astype(np_module.float32)
+    return bright_srgb.astype(np_module.float32)
 
 
 
@@ -10340,6 +10345,7 @@ def _encode_jpg(
             ),
         )
 
+    image_rgb_float = np_module.clip(image_rgb_float, 0.0, 1.0)
     final_image_rgb_uint8 = _to_uint8_image_array(
         np_module=np_module,
         image_data=image_rgb_float,

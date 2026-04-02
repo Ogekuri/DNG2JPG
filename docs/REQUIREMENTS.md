@@ -225,7 +225,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-140**: MUST NOT convert HDR+ RGB frames or HDR+ scalar proxy arrays to `uint16` at any point in the HDR+ backend.
 - **REQ-132**: MUST execute static postprocess gamma, brightness, contrast, and saturation directly on RGB float tensors without uint16 or other quantized intermediates.
 - **REQ-133**: MUST perform exactly one float-to-uint8 quantization immediately before final JPEG save.
-- **REQ-134**: MUST preserve legacy post-gamma, brightness, contrast, and saturation equations and parameter semantics in the float-domain port; output differences MUST derive only from removed quantization.
+- **REQ-134**: MUST preserve legacy post-gamma, brightness, contrast, and saturation core equations in the float-domain port without intermediate stage-local `[0,1]` clipping; output differences from legacy MUST derive only from removed quantization and removed stage-local clipping.
 - **REQ-146**: MUST accept `--debug` as a flag that enables persistent TIFF checkpoint emission for executed pipeline stages without changing the final JPG destination.
 - **REQ-147**: MUST write each debug TIFF from normalized RGB float `[0,1]` data using filename `<input-dng-stem><stage-suffix>.tiff` in the resolved output JPG directory.
 - **REQ-148**: MUST use monotonically increasing numeric stage suffixes with phase labels covering bracket extraction (`ev_min`, `ev_zero`, `ev_max`), HDR merge, static postprocess, auto-brightness, auto-levels, and auto-adjust checkpoints when those stages execute.
