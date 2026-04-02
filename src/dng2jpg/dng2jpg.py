@@ -146,7 +146,10 @@ _EXIF_TAG_DATETIME = 306
 _EXIF_TAG_DATETIME_ORIGINAL = 36867
 _EXIF_TAG_DATETIME_DIGITIZED = 36868
 _EXIF_TAG_EXPOSURE_TIME = 33434
+_EXIF_TAG_COLOR_SPACE = 40961
 _EXIF_IFD_POINTER = 34665
+_EXIF_INTEROP_IFD_POINTER = 40965
+_EXIF_INTEROP_TAG_INTEROPERABILITY_INDEX = 1
 _EXIF_VALID_ORIENTATIONS = (1, 2, 3, 4, 5, 6, 7, 8)
 _THUMBNAIL_MAX_SIZE = (256, 256)
 _AUTO_ADJUST_KNOB_OPTIONS = (
@@ -443,6 +446,70 @@ class AutoLevelsOptions:
 
 
 @dataclass(frozen=True)
+class MergeGammaOption:
+    """@brief Hold requested merge-gamma CLI selector state.
+
+    @details Encodes the user-facing `--gamma` request independently from the
+    backend-resolved transfer so parsing stays deterministic and runtime can
+    emit exact request diagnostics. `mode="auto"` selects EXIF/source-driven
+    resolution. `mode="custom"` requires both custom parameters.
+    @param mode {str} Canonical selector in `{"auto","custom"}`.
+    @param linear_coeff {float|None} Custom linear-segment coefficient for Rec.709-style transfer.
+    @param exponent {float|None} Custom exponent for Rec.709-style transfer.
+    @return {None} Immutable dataclass container.
+    @satisfies REQ-020
+    """
+
+    mode: str = "auto"
+    linear_coeff: float | None = None
+    exponent: float | None = None
+
+
+@dataclass(frozen=True)
+class ResolvedMergeGamma:
+    """@brief Hold one resolved merge-output transfer function payload.
+
+    @details Captures the backend-local transfer applied after OpenCV/HDR+
+    merge normalization. `transfer` selects one implementation family:
+    `linear`, `srgb`, `power`, or `rec709`. `param_a` and `param_b` carry
+    transfer-specific numeric parameters for deterministic diagnostics and
+    backend execution.
+    @param request {MergeGammaOption} Original parsed user selector.
+    @param transfer {str} Resolved transfer family identifier.
+    @param label {str} Deterministic human-readable transfer label.
+    @param param_a {float|None} First resolved transfer parameter when required.
+    @param param_b {float|None} Second resolved transfer parameter when required.
+    @param evidence {str} Resolution evidence token.
+    @return {None} Immutable dataclass container.
+    @satisfies REQ-169, REQ-170, REQ-171
+    """
+
+    request: MergeGammaOption
+    transfer: str
+    label: str
+    param_a: float | None
+    param_b: float | None
+    evidence: str
+
+
+@dataclass(frozen=True)
+class ExifGammaTags:
+    """@brief Hold EXIF tags relevant to auto merge-gamma resolution.
+
+    @details Encapsulates normalized EXIF color-space and interoperability
+    tokens extracted from the source RAW/DNG container. The payload is consumed
+    only by merge-gamma resolution and never mutates bracket extraction.
+    @param color_space {str|None} Normalized EXIF `ColorSpace` token.
+    @param interoperability_index {str|None} Normalized EXIF interoperability token.
+    @return {None} Immutable dataclass container.
+    @satisfies REQ-169
+    """
+
+    color_space: str | None
+    interoperability_index: str | None
+
+
+@dataclass(frozen=True)
 class PostprocessOptions:
     """@brief Hold deterministic postprocessing option values.
 
@@ -460,8 +527,9 @@ class PostprocessOptions:
     @param auto_adjust_enabled {bool} `True` when the auto-adjust stage is enabled.
     @param auto_adjust_options {AutoAdjustOptions} Knobs for the sole auto-adjust implementation.
     @param debug_enabled {bool} `True` when persistent debug TIFF checkpoints are enabled.
+    @param merge_gamma_option {MergeGammaOption} Parsed merge-gamma request applied only by OpenCV and HDR+ backends.
     @return {None} Immutable dataclass container.
-    @satisfies REQ-050, REQ-065, REQ-066, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-088, REQ-089, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-146
+    @satisfies REQ-020, REQ-050, REQ-065, REQ-066, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-088, REQ-089, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-146
     """
 
     post_gamma: float
@@ -478,6 +546,7 @@ class PostprocessOptions:
     auto_adjust_enabled: bool = DEFAULT_AUTO_ADJUST_ENABLED
     auto_adjust_options: AutoAdjustOptions = field(default_factory=AutoAdjustOptions)
     debug_enabled: bool = False
+    merge_gamma_option: MergeGammaOption = field(default_factory=MergeGammaOption)
 
 
 @dataclass(frozen=True)
@@ -916,6 +985,15 @@ def print_help(version):
     _print_help_option(
         "--hdr-merge <Luminace-HDR|OpenCV|HDR-Plus>",
         f"Select HDR merge backend. Default: `{HDR_MERGE_MODE_OPENCV}`.",
+    )
+    _print_help_option(
+        "--gamma=<auto|a,b>",
+        "HDR merge-output transfer selector for `OpenCV` and `HDR-Plus` final backend-local output stage.",
+        (
+            "Default: `auto`.",
+            "Use `--gamma=auto` to resolve source transfer from RAW/DNG EXIF evidence.",
+            "Use `--gamma=<linear_coeff,exponent>` for custom Rec.709-style transfer.",
+        ),
     )
     _print_help_option(
         "--opencv-merge-algorithm=<name>",
@@ -3115,6 +3193,316 @@ def _resolve_default_postprocess(
     )
 
 
+def _parse_gamma_option(option_value):
+    """@brief Parse one `--gamma` selector into normalized request state.
+
+    @details Accepts literal `auto` or one comma-separated pair
+    `<linear_coeff,exponent>`. Both numeric values must be finite and strictly
+    positive. Returns `None` after deterministic diagnostics on invalid payload.
+    @param option_value {str} Raw `--gamma` value.
+    @return {MergeGammaOption|None} Parsed request dataclass on success; `None` on validation failure.
+    @satisfies REQ-020
+    """
+
+    normalized_text = str(option_value).strip()
+    if normalized_text == "auto":
+        return MergeGammaOption(mode="auto")
+    components = [component.strip() for component in normalized_text.split(",")]
+    if len(components) != 2:
+        print_error("Invalid --gamma value: expected `auto` or `<linear_coeff,exponent>`")
+        return None
+    try:
+        linear_coeff = float(components[0])
+        exponent = float(components[1])
+    except ValueError:
+        print_error("Invalid --gamma value: expected numeric `<linear_coeff,exponent>`")
+        return None
+    if (
+        not math.isfinite(linear_coeff)
+        or not math.isfinite(exponent)
+        or linear_coeff <= 0.0
+        or exponent <= 0.0
+    ):
+        print_error("Invalid --gamma value: coefficients must be finite and > 0")
+        return None
+    return MergeGammaOption(
+        mode="custom",
+        linear_coeff=linear_coeff,
+        exponent=exponent,
+    )
+
+
+def _decode_exif_text_value(exif_value):
+    """@brief Normalize one EXIF scalar payload to deterministic stripped text.
+
+    @details Accepts bytes, rationals, enums, or generic scalar-like values and
+    returns one normalized text token for merge-gamma auto resolution.
+    Complexity: O(len(value_text)). Side effects: none.
+    @param exif_value {object} Raw EXIF payload.
+    @return {str|None} Normalized text token or `None` when payload is absent/empty.
+    @satisfies REQ-169
+    """
+
+    if exif_value is None:
+        return None
+    if isinstance(exif_value, bytes):
+        decoded_value = exif_value.decode("utf-8", errors="ignore").strip("\x00 ").strip()
+        return decoded_value or None
+    value_text = str(exif_value).strip()
+    return value_text or None
+
+
+def _extract_exif_gamma_tags(pil_image_module, input_dng):
+    """@brief Extract EXIF color-space metadata relevant to auto merge gamma.
+
+    @details Opens the source DNG through Pillow, reads root EXIF values plus
+    nested EXIF/interop IFD payloads when available, and normalizes
+    `ColorSpace` and interoperability index tokens for deterministic auto
+    transfer resolution.
+    @param pil_image_module {ModuleType} Imported Pillow Image module.
+    @param input_dng {Path} Source DNG path.
+    @return {ExifGammaTags} Normalized EXIF merge-gamma evidence payload.
+    @satisfies REQ-169
+    """
+
+    if not hasattr(pil_image_module, "open"):
+        return ExifGammaTags(color_space=None, interoperability_index=None)
+    try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r".*tag 33723 had too many entries.*",
+                category=UserWarning,
+            )
+            with pil_image_module.open(str(input_dng)) as source_image:
+                if not hasattr(source_image, "getexif"):
+                    return ExifGammaTags(color_space=None, interoperability_index=None)
+                exif_data = source_image.getexif()
+                if exif_data is None:
+                    return ExifGammaTags(color_space=None, interoperability_index=None)
+                exif_ifd_data = None
+                interop_ifd_data = None
+                if hasattr(exif_data, "get_ifd"):
+                    try:
+                        exif_ifd_data = exif_data.get_ifd(_EXIF_IFD_POINTER)
+                    except (KeyError, TypeError, ValueError, AttributeError):
+                        exif_ifd_data = None
+                    try:
+                        interop_ifd_data = exif_data.get_ifd(_EXIF_INTEROP_IFD_POINTER)
+                    except (KeyError, TypeError, ValueError, AttributeError):
+                        interop_ifd_data = None
+
+                def _read_exif_value(exif_tag, nested_ifd):
+                    """@brief Resolve one EXIF tag from root mapping with optional nested-IFD fallback.
+
+                    @details Reads the requested tag from the top-level EXIF
+                    mapping first, then from the supplied nested-IFD mapping when
+                    available. Complexity: O(1). Side effects: none.
+                    @param exif_tag {int} Numeric EXIF tag identifier.
+                    @param nested_ifd {object|None} Nested IFD mapping with `get`.
+                    @return {object|None} Raw EXIF payload or `None`.
+                    @satisfies REQ-169
+                    """
+
+                    root_value = exif_data.get(exif_tag)
+                    if root_value is not None:
+                        return root_value
+                    if nested_ifd is None or not hasattr(nested_ifd, "get"):
+                        return None
+                    return nested_ifd.get(exif_tag)
+
+                return ExifGammaTags(
+                    color_space=_decode_exif_text_value(
+                        _read_exif_value(_EXIF_TAG_COLOR_SPACE, exif_ifd_data)
+                    ),
+                    interoperability_index=_decode_exif_text_value(
+                        _read_exif_value(
+                            _EXIF_INTEROP_TAG_INTEROPERABILITY_INDEX,
+                            interop_ifd_data,
+                        )
+                    ),
+                )
+    except (OSError, ValueError, TypeError, AttributeError):
+        return ExifGammaTags(color_space=None, interoperability_index=None)
+
+
+def _resolve_auto_merge_gamma(exif_gamma_tags, source_gamma_info):
+    """@brief Resolve auto merge-output transfer from EXIF-first metadata evidence.
+
+    @details Applies deterministic priority: EXIF `ColorSpace==1` selects sRGB,
+    EXIF `ColorSpace==2` or interoperability token containing `R03` selects
+    Adobe RGB power gamma `2.19921875`, otherwise fallback uses source-gamma
+    diagnostics for approximate sRGB/power classification, and unresolved cases
+    remain linear.
+    @param exif_gamma_tags {ExifGammaTags} Normalized EXIF color-space evidence.
+    @param source_gamma_info {SourceGammaInfo} Derived source-gamma diagnostic payload.
+    @return {ResolvedMergeGamma} Resolved auto transfer payload.
+    @satisfies REQ-169
+    """
+
+    auto_request = MergeGammaOption(mode="auto")
+    color_space = exif_gamma_tags.color_space
+    interop_index = exif_gamma_tags.interoperability_index
+    if color_space == "1":
+        return ResolvedMergeGamma(
+            request=auto_request,
+            transfer="srgb",
+            label="sRGB",
+            param_a=None,
+            param_b=None,
+            evidence="exif-colorspace=1",
+        )
+    if color_space == "2" or (
+        interop_index is not None and "R03" in interop_index.upper()
+    ):
+        return ResolvedMergeGamma(
+            request=auto_request,
+            transfer="power",
+            label="Adobe RGB",
+            param_a=2.19921875,
+            param_b=None,
+            evidence="exif-adobe-rgb",
+        )
+    if source_gamma_info.gamma_value is not None:
+        if abs(source_gamma_info.gamma_value - 2.2) <= 0.2:
+            return ResolvedMergeGamma(
+                request=auto_request,
+                transfer="srgb",
+                label="sRGB",
+                param_a=None,
+                param_b=None,
+                evidence=f"source-gamma={source_gamma_info.evidence}",
+            )
+        return ResolvedMergeGamma(
+            request=auto_request,
+            transfer="power",
+            label=source_gamma_info.label,
+            param_a=source_gamma_info.gamma_value,
+            param_b=None,
+            evidence=f"source-gamma={source_gamma_info.evidence}",
+        )
+    return ResolvedMergeGamma(
+        request=auto_request,
+        transfer="linear",
+        label="Linear",
+        param_a=None,
+        param_b=None,
+        evidence="unresolved",
+    )
+
+
+def _describe_resolved_merge_gamma(resolved_merge_gamma):
+    """@brief Format one deterministic merge-gamma runtime diagnostic line.
+
+    @details Renders one stable diagnostic payload including request mode,
+    resolved transfer family, label, serialized numeric parameters, and
+    evidence token.
+    @param resolved_merge_gamma {ResolvedMergeGamma} Resolved merge-gamma payload.
+    @return {str} Deterministic runtime diagnostic line.
+    @satisfies REQ-171
+    """
+
+    params = []
+    if resolved_merge_gamma.param_a is not None:
+        params.append(f"{resolved_merge_gamma.param_a:g}")
+    if resolved_merge_gamma.param_b is not None:
+        params.append(f"{resolved_merge_gamma.param_b:g}")
+    params_text = ",".join(params) if params else "-"
+    return (
+        "Merge gamma: "
+        f"request={resolved_merge_gamma.request.mode}; "
+        f"transfer={resolved_merge_gamma.transfer}; "
+        f"label={resolved_merge_gamma.label}; "
+        f"params={params_text}; "
+        f"evidence={resolved_merge_gamma.evidence}"
+    )
+
+
+def _ensure_three_channel_float_array_no_clip(np_module, image_data):
+    """@brief Normalize one image payload to three-channel float tensor without upper clipping.
+
+    @details Converts arbitrary numeric image payloads into RGB `float64`,
+    preserving finite positive values above `1.0`, clearing non-finite and
+    negative values only, expanding grayscale/single-channel inputs to RGB, and
+    dropping alpha channels. Used exclusively by backend-final merge-gamma
+    application to avoid unnecessary clipping around transfer evaluation.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_data {object} Numeric image payload.
+    @return {object} RGB `float64` tensor with shape `(H,W,3)` and lower bound `0`.
+    @exception ValueError Raised when the input shape cannot be normalized to RGB.
+    @satisfies REQ-170
+    """
+
+    numeric_data = np_module.asarray(image_data, dtype=np_module.float64)
+    finite_mask = np_module.isfinite(numeric_data)
+    numeric_data = np_module.where(finite_mask, numeric_data, 0.0)
+    numeric_data = np_module.maximum(numeric_data, 0.0)
+    if len(numeric_data.shape) == 2:
+        numeric_data = numeric_data[:, :, None]
+    if len(numeric_data.shape) == 3 and numeric_data.shape[2] == 1:
+        numeric_data = np_module.repeat(numeric_data, 3, axis=2)
+    if len(numeric_data.shape) == 3 and numeric_data.shape[2] == 4:
+        numeric_data = numeric_data[:, :, :3]
+    if len(numeric_data.shape) != 3 or numeric_data.shape[2] < 3:
+        raise ValueError("Float stage input image has unsupported shape")
+    if numeric_data.shape[2] > 3:
+        numeric_data = numeric_data[:, :, :3]
+    return numeric_data
+
+
+def _apply_merge_gamma_float(np_module, image_rgb_float, resolved_merge_gamma):
+    """@brief Apply one resolved merge-output transfer without extra clipping.
+
+    @details Executes backend-final transfer encoding on positive float-domain
+    RGB values after backend normalization. The helper intentionally avoids
+    upper clipping before and after transfer evaluation so highlight headroom is
+    preserved until the shared downstream pipeline chooses its own bounds.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_float {object} Backend-normalized RGB float tensor.
+    @param resolved_merge_gamma {ResolvedMergeGamma} Resolved merge-gamma payload.
+    @return {object} RGB float32 tensor after merge-gamma transfer.
+    @satisfies REQ-170
+    """
+
+    if resolved_merge_gamma.transfer == "linear":
+        return _ensure_three_channel_float_array_no_clip(
+            np_module=np_module,
+            image_data=image_rgb_float,
+        ).astype(np_module.float32)
+    image_rgb = _ensure_three_channel_float_array_no_clip(
+        np_module=np_module,
+        image_data=image_rgb_float,
+    )
+    if resolved_merge_gamma.transfer == "srgb":
+        low_mask = image_rgb <= 0.0031308
+        encoded = np_module.empty_like(image_rgb, dtype=np_module.float64)
+        encoded[low_mask] = image_rgb[low_mask] * 12.92
+        encoded[~low_mask] = (
+            1.055 * np_module.power(image_rgb[~low_mask], 1.0 / 2.4)
+        ) - 0.055
+        return encoded.astype(np_module.float32)
+    if resolved_merge_gamma.transfer == "power":
+        if resolved_merge_gamma.param_a is None:
+            raise ValueError("Resolved power merge gamma is missing exponent")
+        return np_module.power(
+            image_rgb,
+            1.0 / float(resolved_merge_gamma.param_a),
+        ).astype(np_module.float32)
+    if resolved_merge_gamma.transfer == "rec709":
+        if resolved_merge_gamma.param_a is None or resolved_merge_gamma.param_b is None:
+            raise ValueError("Resolved Rec.709 merge gamma is missing parameters")
+        linear_coeff = float(resolved_merge_gamma.param_a)
+        exponent = float(resolved_merge_gamma.param_b)
+        low_mask = image_rgb < 0.018
+        encoded = np_module.empty_like(image_rgb, dtype=np_module.float64)
+        encoded[low_mask] = image_rgb[low_mask] * linear_coeff
+        encoded[~low_mask] = (
+            1.099 * np_module.power(image_rgb[~low_mask], exponent)
+        ) - 0.099
+        return encoded.astype(np_module.float32)
+    raise ValueError(f"Unsupported merge gamma transfer: {resolved_merge_gamma.transfer}")
+
+
 def _parse_run_options(args):
     """@brief Parse CLI args into input, output, and EV parameters.
 
@@ -3161,6 +3549,7 @@ def _parse_run_options(args):
     debug_enabled = False
     hdr_merge_mode = HDR_MERGE_MODE_OPENCV
     opencv_raw_values = {}
+    merge_gamma_option = MergeGammaOption(mode="auto")
     hdrplus_raw_values = {}
     luminance_hdr_model = DEFAULT_LUMINANCE_HDR_MODEL
     luminance_hdr_weight = DEFAULT_LUMINANCE_HDR_WEIGHT
@@ -3699,12 +4088,22 @@ def _parse_run_options(args):
             idx += 1
             continue
 
-        if token == "--gamma" or token.startswith("--gamma="):
-            print_error("Removed option: --gamma")
-            idx += 1
-            if token == "--gamma":
+        if token == "--gamma":
+            if idx + 1 >= len(args):
+                print_error("Missing value for --gamma")
                 return None
-            return None
+            merge_gamma_option = _parse_gamma_option(args[idx + 1])
+            if merge_gamma_option is None:
+                return None
+            idx += 2
+            continue
+
+        if token.startswith("--gamma="):
+            merge_gamma_option = _parse_gamma_option(token.split("=", 1)[1])
+            if merge_gamma_option is None:
+                return None
+            idx += 1
+            continue
 
         if token == "--post-gamma":
             if idx + 1 >= len(args):
@@ -3943,6 +4342,7 @@ def _parse_run_options(args):
             auto_adjust_enabled=auto_adjust_enabled,
             auto_adjust_options=auto_adjust_options,
             debug_enabled=debug_enabled,
+            merge_gamma_option=merge_gamma_option,
         ),
         enable_luminance,
         enable_opencv,
@@ -5002,6 +5402,7 @@ def _run_opencv_hdr_merge(
     source_exposure_time_seconds,
     opencv_merge_options,
     auto_adjust_dependencies,
+    resolved_merge_gamma=None,
 ):
     """@brief Merge bracket float images into one RGB float image via OpenCV.
 
@@ -5018,10 +5419,21 @@ def _run_opencv_hdr_merge(
     @param source_exposure_time_seconds {float|None} Positive EXIF `ExposureTime` in seconds for the extracted linear base image.
     @param opencv_merge_options {OpenCvMergeOptions} OpenCV merge backend controls.
     @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
+    @param resolved_merge_gamma {ResolvedMergeGamma} Backend-final merge-output transfer payload.
     @return {object} Normalized RGB float merged image.
     @exception RuntimeError Raised when OpenCV/numpy dependencies are missing or bracket payloads are invalid.
-    @satisfies REQ-107, REQ-108, REQ-109, REQ-110, REQ-142, REQ-143, REQ-144, REQ-152, REQ-153, REQ-154, REQ-160, REQ-161, REQ-162
+    @satisfies REQ-107, REQ-108, REQ-109, REQ-110, REQ-142, REQ-143, REQ-144, REQ-152, REQ-153, REQ-154, REQ-160, REQ-161, REQ-162, REQ-170
     """
+
+    if resolved_merge_gamma is None:
+        resolved_merge_gamma = ResolvedMergeGamma(
+            request=MergeGammaOption(mode="auto"),
+            transfer="linear",
+            label="Linear",
+            param_a=None,
+            param_b=None,
+            evidence="default-linear",
+        )
 
     if auto_adjust_dependencies is not None:
         cv2_module, np_module = auto_adjust_dependencies
@@ -5041,17 +5453,22 @@ def _run_opencv_hdr_merge(
         )
 
     if opencv_merge_options.merge_algorithm == OPENCV_MERGE_ALGORITHM_MERTENS:
-        return _run_opencv_merge_mertens(
+        merged_rgb_float = _run_opencv_merge_mertens(
             cv2_module=cv2_module,
             np_module=np_module,
             exposures_float=exposures_float,
+        )
+        return _apply_merge_gamma_float(
+            np_module=np_module,
+            image_rgb_float=merged_rgb_float,
+            resolved_merge_gamma=resolved_merge_gamma,
         )
     exposure_times = _build_opencv_radiance_exposure_times(
         source_exposure_time_seconds=source_exposure_time_seconds,
         ev_zero=ev_zero,
         ev_delta=ev_value,
     )
-    return _run_opencv_merge_radiance(
+    merged_rgb_float = _run_opencv_merge_radiance(
         cv2_module=cv2_module,
         np_module=np_module,
         exposures_linear_float=exposures_float,
@@ -5059,6 +5476,11 @@ def _run_opencv_hdr_merge(
         merge_algorithm=opencv_merge_options.merge_algorithm,
         tonemap_enabled=opencv_merge_options.tonemap_enabled,
         tonemap_gamma=opencv_merge_options.tonemap_gamma,
+    )
+    return _apply_merge_gamma_float(
+        np_module=np_module,
+        image_rgb_float=merged_rgb_float,
+        resolved_merge_gamma=resolved_merge_gamma,
     )
 
 
@@ -5820,6 +6242,7 @@ def _run_hdr_plus_merge(
     bracket_images_float,
     np_module,
     hdrplus_options,
+    resolved_merge_gamma=None,
 ):
     """@brief Merge bracket float images into one RGB float image via HDR+.
 
@@ -5833,10 +6256,21 @@ def _run_hdr_plus_merge(
     @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors.
     @param np_module {ModuleType} Imported numpy module.
     @param hdrplus_options {HdrPlusOptions} HDR+ proxy/alignment/temporal controls.
+    @param resolved_merge_gamma {ResolvedMergeGamma} Backend-final merge-output transfer payload.
     @return {object} Normalized RGB float32 merged image.
     @exception RuntimeError Raised when bracket payloads are invalid.
-    @satisfies REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-129, REQ-138, REQ-139, REQ-140
+    @satisfies REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-129, REQ-138, REQ-139, REQ-140, REQ-170
     """
+
+    if resolved_merge_gamma is None:
+        resolved_merge_gamma = ResolvedMergeGamma(
+            request=MergeGammaOption(mode="auto"),
+            transfer="linear",
+            label="Linear",
+            param_a=None,
+            param_b=None,
+            evidence="default-linear",
+        )
 
     ordered_images = [
         bracket_images_float[1],
@@ -5889,11 +6323,11 @@ def _run_hdr_plus_merge(
         width=int(frames_rgb_float32.shape[2]),
         height=int(frames_rgb_float32.shape[1]),
     )
-    return np_module.clip(
-        np_module.array(merged_rgb_float32, dtype=np_module.float32, copy=False),
-        0.0,
-        1.0,
-    ).astype(np_module.float32)
+    return _apply_merge_gamma_float(
+        np_module=np_module,
+        image_rgb_float=np_module.asarray(merged_rgb_float32, dtype=np_module.float32),
+        resolved_merge_gamma=resolved_merge_gamma,
+    )
 
 
 def _convert_compression_to_quality(jpg_compression):
@@ -10047,6 +10481,37 @@ def run(args):
                 base_rgb_float = None
                 effective_ev_value = None
                 print_info(_describe_source_gamma_info(source_gamma_info))
+                merge_gamma_option = postprocess_options.merge_gamma_option
+                if merge_gamma_option.mode == "auto":
+                    print_info("Merge gamma request: auto")
+                    exif_gamma_tags = _extract_exif_gamma_tags(
+                        pil_image_module=pil_image_module,
+                        input_dng=input_dng,
+                    )
+                    resolved_merge_gamma = _resolve_auto_merge_gamma(
+                        exif_gamma_tags=exif_gamma_tags,
+                        source_gamma_info=source_gamma_info,
+                    )
+                else:
+                    if (
+                        merge_gamma_option.linear_coeff is None
+                        or merge_gamma_option.exponent is None
+                    ):
+                        raise ValueError("Custom merge gamma request is incomplete")
+                    print_info(
+                        "Merge gamma request: custom "
+                        f"linear_coeff={float(merge_gamma_option.linear_coeff):g}, "
+                        f"exponent={float(merge_gamma_option.exponent):g}"
+                    )
+                    resolved_merge_gamma = ResolvedMergeGamma(
+                        request=merge_gamma_option,
+                        transfer="rec709",
+                        label="Rec.709 custom",
+                        param_a=float(merge_gamma_option.linear_coeff),
+                        param_b=float(merge_gamma_option.exponent),
+                        evidence="cli-custom",
+                    )
+                print_info(_describe_resolved_merge_gamma(resolved_merge_gamma))
                 if auto_ev_enabled:
                     base_rgb_float = _extract_base_rgb_linear_float(
                         raw_handle=raw_handle,
@@ -10206,12 +10671,14 @@ def run(args):
                     source_exposure_time_seconds=source_exposure_time_seconds,
                     opencv_merge_options=opencv_merge_options,
                     auto_adjust_dependencies=auto_adjust_dependencies,
+                    resolved_merge_gamma=resolved_merge_gamma,
                 )
             elif enable_hdr_plus:
                 merged_image_float = _run_hdr_plus_merge(
                     bracket_images_float=bracket_images_float,
                     np_module=numpy_module,
                     hdrplus_options=hdrplus_options,
+                    resolved_merge_gamma=resolved_merge_gamma,
                 )
             else:
                 raise RuntimeError("No HDR merge backend enabled")

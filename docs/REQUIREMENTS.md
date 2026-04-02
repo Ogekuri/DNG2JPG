@@ -127,7 +127,10 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-017**: MUST render conversion usage/help with canonical executable name `dng2jpg`, stable aligned indentation, and MUST NOT prepend alternative launcher labels.
 - **REQ-018**: MUST reject `--ev-zero` unless `--ev` is specified and MUST reject `--auto-zero`, `--auto-zero-pct`, `--auto-ev-shadow-target`, `--auto-ev-highlight-target`, and `--auto-ev-pct` as removed options.
 - **REQ-019**: MUST accept `--auto-ev-shadow-clipping` and `--auto-ev-highlight-clipping` as percentage thresholds in inclusive range `0..100`, defaulting both to `20`.
-- **REQ-020**: MUST reject `--gamma` as a removed option.
+- **REQ-020**: MUST parse `--gamma=auto` as the default HDR merge-output transfer selector and MUST accept `--gamma=<linear_coeff,exponent>` as one explicit custom transfer selector.
+- **REQ-169**: MUST resolve `--gamma=auto` from original RAW/DNG EXIF color-space evidence before fallback to source-gamma diagnostics, mapping sRGB to IEC 61966-2-1 transfer, Adobe RGB to power gamma `2.19921875`, and unresolved evidence to linear transfer.
+- **REQ-170**: MUST apply resolved merge gamma only as the last backend-local step of `OpenCV` and `HDR-Plus` HDR merge pipelines, after backend normalization and before shared static postprocess, without introducing additional clipping above backend normalization.
+- **REQ-171**: MUST print deterministic merge-gamma runtime diagnostics containing the user request, resolved transfer label, parameter payload, and evidence source.
 - **REQ-157**: MUST derive source gamma diagnostics from RAW metadata without modifying HDR bracket extraction, which remains linear and camera-WB-aware.
 - **REQ-163**: MUST classify source gamma diagnostics by preferring explicit profile or color-space metadata, then `rawpy.tone_curve`, then `rgb_xyz_matrix`, `color_matrix`, and `color_desc`, and MUST report `unknown` when evidence is insufficient.
 - **REQ-164**: MUST print source gamma diagnostics as one deterministic runtime line containing both a source-gamma label and either a numeric gamma value or `undetermined`.
@@ -272,7 +275,11 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-038**: MUST verify debug checkpoint writers emit progressive TIFF filenames for extraction, merge, static postprocess, auto-brightness, auto-levels, and auto-adjust outputs in the output directory.
 - **TST-039**: MUST verify Debevec and Robertson OpenCV inputs are consumed directly from the linear HDR bracket contract without gamma-inversion preprocessing.
 - **TST-043**: MUST verify `_extract_bracket_images_float` executes exactly one RAW postprocess call for a linear camera-WB-aware base image and derives `ev_minus`, `ev_zero`, `ev_plus` only through NumPy EV scaling and `[0,1]` clipping.
-- **TST-044**: MUST verify CLI help omits `--gamma`, parser rejects `--gamma` as unknown/removed input, and HDR bracket extraction remains linear.
+- **TST-044**: MUST verify CLI help documents `--gamma`, parser defaults to `--gamma=auto`, parser accepts `--gamma=<a,b>`, parser rejects invalid gamma payloads, and HDR bracket extraction remains linear.
+- **TST-050**: MUST verify `--gamma=auto` resolves transfer selection from EXIF color-space evidence with deterministic fallback ordering.
+- **TST-051**: MUST verify OpenCV backend applies resolved merge gamma as the final backend-local float step without extra clipping around the gamma transfer.
+- **TST-052**: MUST verify HDR+ backend applies resolved merge gamma as the final backend-local float step without extra clipping around the gamma transfer.
+- **TST-053**: MUST verify runtime diagnostics print deterministic merge-gamma request and resolved-transfer lines.
 - **TST-040**: MUST verify float-only OpenCV Mertens output applies OpenCV-equivalent `255x` exposure-fusion scaling before final `[0,1]` normalization.
 
 ## 5. Evidence Matrix
@@ -319,7 +326,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-017 | `src/dng2jpg/dng2jpg.py`; excerpt: `PROGRAM = "dng2jpg"` and help usage renders canonical command label without duplicated command token. |
 | REQ-018 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: rejects removed `--auto-zero*` options and rejects `--ev-zero` outside static `--ev` mode. |
 | REQ-019 | `src/dng2jpg/dng2jpg.py::_parse_percentage_option`; excerpt: enforces inclusive `0..100` bounds for `--auto-ev-pct`. |
-| REQ-020 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: rejects removed `--gamma` option. |
+| REQ-020 | `src/dng2jpg/dng2jpg.py::_parse_gamma_option`, `_parse_run_options`, `print_help`; excerpt: restores `--gamma`, defaults omitted gamma to `auto`, and accepts custom `<linear_coeff,exponent>` payloads. |
 | REQ-021 | `src/dng2jpg/dng2jpg.py::_parse_jpg_compression_option`; excerpt: enforces inclusive `0..100`. |
 | REQ-022 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: rejects luminance options unless `--hdr-merge Luminace-HDR` is selected. |
 | REQ-023 | `src/dng2jpg/dng2jpg.py::_parse_hdr_merge_option`, `_parse_run_options`; excerpt: validates `--hdr-merge` against the remaining allowed modes. |
@@ -398,6 +405,9 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-157 | `src/dng2jpg/dng2jpg.py::_describe_source_gamma_info`, `_extract_source_gamma_info`, `run`; excerpt: derives source gamma diagnostics from RAW metadata while leaving linear HDR extraction unchanged. |
 | REQ-163 | `src/dng2jpg/dng2jpg.py::_extract_source_gamma_info`, `_classify_tone_curve_gamma`; excerpt: applies metadata-priority ordering and returns `unknown` when metadata evidence is insufficient. |
 | REQ-164 | `src/dng2jpg/dng2jpg.py::_describe_source_gamma_info`, `run`; excerpt: prints deterministic source gamma label and numeric-or-undetermined value. |
+| REQ-169 | `src/dng2jpg/dng2jpg.py::_extract_exif_gamma_tags`, `_resolve_auto_merge_gamma`, `run`; excerpt: derives auto merge transfer from EXIF color-space evidence with source-gamma fallback. |
+| REQ-170 | `src/dng2jpg/dng2jpg.py::_apply_merge_gamma_float`, `_run_opencv_hdr_merge`, `_run_hdr_plus_merge`; excerpt: applies merge gamma only as the last backend-local float step without post-gamma clipping. |
+| REQ-171 | `src/dng2jpg/dng2jpg.py::_describe_resolved_merge_gamma`, `run`; excerpt: prints deterministic merge-gamma request and resolved-transfer diagnostics. |
 | REQ-158 | `src/dng2jpg/dng2jpg.py::_extract_base_rgb_linear_float`; excerpt: normalizes the extracted HDR base image to RGB float `[0,1]` before bracket arithmetic. |
 | REQ-159 | `src/dng2jpg/dng2jpg.py::_build_exposure_multipliers`, `_build_bracket_images_from_linear_base_float`; excerpt: derives brackets exclusively by EV multipliers and `[0,1]` clipping of the normalized base tensor. |
 | REQ-160 | `src/dng2jpg/dng2jpg.py::_build_bracket_images_from_linear_base_float`, `_extract_bracket_images_float`, `_run_opencv_hdr_merge`, `_run_luminance_hdr_cli`, `_run_hdr_plus_merge`; excerpt: preserves ordered float triplet `(ev_minus, ev_zero, ev_plus)` as the shared downstream contract. |
@@ -454,5 +464,9 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | TST-038 | `tests/test_uint16_postprocess_pipeline.py::test_encode_jpg_writes_debug_checkpoints_with_progressive_suffixes`; verifies persistent TIFF checkpoint filenames and output-directory placement. |
 | TST-039 | `tests/test_uint16_postprocess_pipeline.py::test_run_opencv_hdr_merge_dispatches_debevec_uint8_radiance_path_with_tonemap`, `test_run_opencv_hdr_merge_dispatches_robertson_uint8_radiance_path`; verifies Debevec and Robertson consume the shared linear bracket contract without gamma inversion. |
 | TST-043 | `tests/test_uint16_postprocess_pipeline.py::test_extract_bracket_images_float_uses_single_linear_base_pass`; verifies one RAW postprocess call plus NumPy EV scaling/clipping for bracket derivation. |
-| TST-044 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_rejects_removed_gamma_option`, `test_print_help_documents_all_conversion_options_with_defaults`; verifies `--gamma` is removed from help and rejected by the parser. |
+| TST-044 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_defaults_gamma_to_auto`, `test_parse_run_options_accepts_custom_gamma`, `test_parse_run_options_rejects_invalid_gamma_payload`, `test_print_help_documents_all_conversion_options_with_defaults`; verifies `--gamma` help, default/custom parsing, invalid-payload rejection, and preserved linear extraction. |
 | TST-040 | `tests/test_uint16_postprocess_pipeline.py::test_run_opencv_merge_mertens_applies_float_path_brightness_rescaling`, `test_run_opencv_hdr_merge_keeps_mertens_inputs_as_float32`; verifies float-only Mertens output applies `255x` exposure-fusion scaling before final normalization. |
+| TST-050 | `tests/test_uint16_postprocess_pipeline.py::test_resolve_auto_merge_gamma_prefers_exif_colorspace`; verifies EXIF-first auto merge-gamma resolution ordering. |
+| TST-051 | `tests/test_uint16_postprocess_pipeline.py::test_run_opencv_hdr_merge_applies_resolved_merge_gamma_last`; verifies final OpenCV backend-local merge gamma application. |
+| TST-052 | `tests/test_uint16_postprocess_pipeline.py::test_run_hdr_plus_merge_applies_resolved_merge_gamma_last`; verifies final HDR+ backend-local merge gamma application. |
+| TST-053 | `tests/test_uint16_postprocess_pipeline.py::test_run_prints_merge_gamma_diagnostics`; verifies deterministic merge-gamma request and resolved diagnostics. |

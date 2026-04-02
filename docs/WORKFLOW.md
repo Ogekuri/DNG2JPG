@@ -173,6 +173,11 @@
           - `_decode_raw_metadata_text(...)`: normalize matrix-adjacent metadata text [`src/dng2jpg/dng2jpg.py`]
       - `_describe_source_gamma_info(...)`: format one deterministic source-gamma runtime diagnostic line [`src/dng2jpg/dng2jpg.py`]
         - `print_info(...)`: emit source-gamma diagnostics [`src/shell_scripts/utils.py`]
+      - `_extract_exif_gamma_tags(...)`: extract EXIF color-space evidence for automatic merge-gamma resolution [`src/dng2jpg/dng2jpg.py`]
+        - `_decode_exif_text_value(...)`: normalize EXIF scalar payloads to deterministic text tokens [`src/dng2jpg/dng2jpg.py`]
+      - `_resolve_auto_merge_gamma(...)`: resolve backend-final merge transfer from EXIF-first metadata evidence [`src/dng2jpg/dng2jpg.py`]
+      - `_describe_resolved_merge_gamma(...)`: format one deterministic merge-gamma runtime diagnostic line [`src/dng2jpg/dng2jpg.py`]
+        - `print_info(...)`: emit merge-gamma diagnostics [`src/shell_scripts/utils.py`]
       - `_extract_base_rgb_linear_float(...)`: extract one normalized linear gamma=`1` RGB base tensor for exposure planning and bracket export [`src/dng2jpg/dng2jpg.py`]
       - `_calculate_auto_zero_evaluations(...)`: evaluate `ev_best`, `ev_ettr`, and `ev_detail` on the normalized linear RGB float image [`src/dng2jpg/dng2jpg.py`]
           - `_calculate_bt709_luminance(...)`: convert normalized RGB float input to BT.709 linear luminance [`src/dng2jpg/dng2jpg.py`]
@@ -220,13 +225,15 @@
         - `_run_opencv_merge_mertens(...)`: execute OpenCV exposure fusion path on normalized float brackets [`src/dng2jpg/dng2jpg.py`]
           - `cv2.createMergeMertens().process(...)`: run Mertens fusion on normalized RGB float bracket tensors (external boundary)
           - `_normalize_opencv_hdr_to_unit_range(...)`: normalize OpenCV fusion output to repository RGB float contract [`src/dng2jpg/dng2jpg.py`]
-      - `_run_opencv_merge_radiance(...)`: execute Debevec or Robertson radiance path by quantizing the shared linear bracket contract only inside the backend step, then normalize the merged result back to repository RGB float output [`src/dng2jpg/dng2jpg.py`]
+       - `_run_opencv_merge_radiance(...)`: execute Debevec or Robertson radiance path by quantizing the shared linear bracket contract only inside the backend step, then normalize the merged result back to repository RGB float output [`src/dng2jpg/dng2jpg.py`]
           - `_to_uint8_image_array(...)`: derive backend-local `uint8` bracket payloads required by the calibrated OpenCV radiance path [`src/dng2jpg/dng2jpg.py`]
           - `_estimate_opencv_camera_response(...)`: estimate inverse camera response with the OpenCV calibrator matching the selected radiance algorithm from backend-local `uint8` brackets [`src/dng2jpg/dng2jpg.py`]
           - `cv2.createMergeDebevec().process(...)`: merge Debevec HDR radiance from backend-local `uint8` brackets with `times` and calibrated `response` (external boundary)
           - `cv2.createMergeRobertson().process(...)`: merge Robertson HDR radiance from backend-local `uint8` brackets with `times` and calibrated `response` (external boundary)
           - `cv2.createTonemap(...).process(...)`: apply simple gamma tone mapping for radiance paths when enabled (external boundary)
           - `_normalize_opencv_hdr_to_unit_range(...)`: normalize radiance or tone-mapped output to repository RGB float contract [`src/dng2jpg/dng2jpg.py`]
+        - `_apply_merge_gamma_float(...)`: apply resolved merge-output transfer as the final backend-local float step without upper clipping [`src/dng2jpg/dng2jpg.py`]
+          - `_ensure_three_channel_float_array_no_clip(...)`: normalize positive float RGB payloads without upper clipping [`src/dng2jpg/dng2jpg.py`]
         - `_normalize_debevec_hdr_to_unit_range(...)`: compatibility wrapper preserving legacy helper name while delegating to unified OpenCV normalization [`src/dng2jpg/dng2jpg.py`]
       - `_write_debug_rgb_float_tiff(...)`: persist merged HDR checkpoint as TIFF16 in the output directory when debug mode is enabled [`src/dng2jpg/dng2jpg.py`]
         - `_write_rgb_float_tiff16(...)`: convert one RGB float tensor to TIFF16 artifact [`src/dng2jpg/dng2jpg.py`]
@@ -252,6 +259,8 @@
           - `_hdrplus_extract_overlapping_tiles(...)`: extract reference RGB tiles [`src/dng2jpg/dng2jpg.py`]
           - `_hdrplus_extract_aligned_tiles(...)`: gather aligned alternate RGB tiles [`src/dng2jpg/dng2jpg.py`]
         - `_hdrplus_merge_spatial_rgb(...)`: blend temporally merged tiles with raised-cosine overlap weights and return continuous RGB float32 output [`src/dng2jpg/dng2jpg.py`]
+        - `_apply_merge_gamma_float(...)`: apply resolved merge-output transfer as the final backend-local float step without upper clipping [`src/dng2jpg/dng2jpg.py`]
+          - `_ensure_three_channel_float_array_no_clip(...)`: normalize positive float RGB payloads without upper clipping [`src/dng2jpg/dng2jpg.py`]
       - `_encode_jpg(...)`: encode merged RGB float into final JPG with float stage interfaces, one final quantization, and EXIF refresh from the same final RGB uint8 save buffer [`src/dng2jpg/dng2jpg.py`]
         - `_normalize_float_rgb_image(...)`: normalize merged and auto-adjust outputs to RGB float `[0,1]` [`src/dng2jpg/dng2jpg.py`]
         - `_apply_static_postprocess_float(...)`: execute static gamma/brightness/contrast/saturation chain with float interfaces and float-only stage internals [`src/dng2jpg/dng2jpg.py`]

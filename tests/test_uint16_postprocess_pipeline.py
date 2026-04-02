@@ -1253,7 +1253,7 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
     ]
     for token in required_tokens:
         assert token in output
-    assert "--gamma=<a,b>" not in output
+    assert "--gamma=<auto|a,b>" in output
     assert "--auto-zero=<enable|disable>" not in output
     assert "--auto-zero-pct=<0..100>" not in output
 
@@ -2044,14 +2044,44 @@ def test_extract_bracket_images_float_uses_single_linear_base_pass() -> None:
         )
 
 
-def test_parse_run_options_rejects_removed_gamma_option() -> None:
-    """Parser must reject removed `--gamma` option syntax."""
+def test_parse_run_options_defaults_gamma_to_auto() -> None:
+    """Parser must default merge gamma to automatic EXIF/source resolution."""
 
     parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--gamma=1.7,3.4"]
+        ["input.dng", "output.jpg", "--ev=1"]
     )
 
-    assert parsed is None
+    assert parsed is not None
+    assert parsed[4].merge_gamma_option == dng2jpg_module.MergeGammaOption(mode="auto")
+
+
+def test_parse_run_options_accepts_custom_gamma() -> None:
+    """Parser must accept custom merge-gamma coefficient pairs."""
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--ev=1", "--gamma=4.5,0.45"]
+    )
+
+    assert parsed is not None
+    assert parsed[4].merge_gamma_option == dng2jpg_module.MergeGammaOption(
+        mode="custom",
+        linear_coeff=4.5,
+        exponent=0.45,
+    )
+
+
+def test_parse_run_options_rejects_invalid_gamma_payload() -> None:
+    """Parser must reject malformed or non-positive merge-gamma payloads."""
+
+    invalid_shape = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--ev=1", "--gamma=4.5"]
+    )
+    invalid_non_positive = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--ev=1", "--gamma=0,0.45"]
+    )
+
+    assert invalid_shape is None
+    assert invalid_non_positive is None
 
 
 def test_extract_source_gamma_info_prefers_explicit_profile_metadata() -> None:
@@ -2095,6 +2125,31 @@ def test_extract_source_gamma_info_reports_unknown_without_metadata() -> None:
     )
 
 
+def test_resolve_auto_merge_gamma_prefers_exif_colorspace() -> None:
+    """Auto merge gamma must prioritize EXIF color-space evidence."""
+
+    resolved = dng2jpg_module._resolve_auto_merge_gamma(  # pylint: disable=protected-access
+        exif_gamma_tags=dng2jpg_module.ExifGammaTags(
+            color_space="2",
+            interoperability_index=None,
+        ),
+        source_gamma_info=dng2jpg_module.SourceGammaInfo(
+            label="sRGB",
+            gamma_value=2.2,
+            evidence="explicit-profile",
+        ),
+    )
+
+    assert resolved == dng2jpg_module.ResolvedMergeGamma(
+        request=dng2jpg_module.MergeGammaOption(mode="auto"),
+        transfer="power",
+        label="Adobe RGB",
+        param_a=2.19921875,
+        param_b=None,
+        evidence="exif-adobe-rgb",
+    )
+
+
 def test_run_opencv_merge_mertens_applies_float_path_brightness_rescaling() -> None:
     """Mertens float path must rescale OpenCV output before normalization."""
 
@@ -2122,6 +2177,43 @@ def test_run_opencv_merge_mertens_applies_float_path_brightness_rescaling() -> N
     np.testing.assert_allclose(
         scaled,
         np.array([[[0.25, 0.5, 1.0]]], dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+
+
+def test_run_opencv_hdr_merge_applies_resolved_merge_gamma_last() -> None:
+    """OpenCV merge must apply resolved merge gamma after backend normalization."""
+
+    fake_cv2 = _FakeOpenCvModule()
+    bracket_images_float = [
+        np.full((1, 1, 3), 0.1, dtype=np.float32),
+        np.full((1, 1, 3), 0.3, dtype=np.float32),
+        np.full((1, 1, 3), 0.6, dtype=np.float32),
+    ]
+
+    output = dng2jpg_module._run_opencv_hdr_merge(  # pylint: disable=protected-access
+        bracket_images_float=bracket_images_float,
+        ev_value=1.0,
+        ev_zero=0.0,
+        source_exposure_time_seconds=0.125,
+        opencv_merge_options=dng2jpg_module.OpenCvMergeOptions(
+            merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_MERTENS
+        ),
+        auto_adjust_dependencies=(fake_cv2, np),
+        resolved_merge_gamma=dng2jpg_module.ResolvedMergeGamma(
+            request=dng2jpg_module.MergeGammaOption(mode="auto"),
+            transfer="power",
+            label="Adobe RGB",
+            param_a=2.19921875,
+            param_b=None,
+            evidence="exif-adobe-rgb",
+        ),
+    )
+
+    np.testing.assert_allclose(
+        output,
+        np.full((1, 1, 3), 1.0, dtype=np.float32),
         rtol=1e-6,
         atol=1e-6,
     )
@@ -2886,6 +2978,66 @@ def test_run_hdr_plus_merge_preserves_float_internal_and_float_io(monkeypatch) -
     )
 
 
+def test_run_hdr_plus_merge_applies_resolved_merge_gamma_last(monkeypatch) -> None:
+    """HDR+ merge must apply resolved merge gamma after spatial merge output."""
+
+    bracket_images_float = [
+        np.full((32, 32, 3), 0.1, dtype=np.float32),
+        np.full((32, 32, 3), 0.3, dtype=np.float32),
+        np.full((32, 32, 3), 0.6, dtype=np.float32),
+    ]
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_hdrplus_build_scalar_proxy_float32",
+        lambda **_kwargs: np.zeros((3, 32, 32), dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_hdrplus_align_layers",
+        lambda **_kwargs: np.zeros((3, 5, 5, 2), dtype=np.int32),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_hdrplus_compute_temporal_weights",
+        lambda **_kwargs: (
+            np.zeros((2, 5, 5), dtype=np.float32),
+            np.ones((5, 5), dtype=np.float32),
+        ),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_hdrplus_merge_temporal_rgb",
+        lambda **_kwargs: np.zeros((5, 5, 32, 32, 3), dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_hdrplus_merge_spatial_rgb",
+        lambda **_kwargs: np.full((32, 32, 3), 0.25, dtype=np.float32),
+    )
+
+    output_image = dng2jpg_module._run_hdr_plus_merge(  # pylint: disable=protected-access
+        bracket_images_float=bracket_images_float,
+        np_module=np,
+        hdrplus_options=dng2jpg_module.HdrPlusOptions(),
+        resolved_merge_gamma=dng2jpg_module.ResolvedMergeGamma(
+            request=dng2jpg_module.MergeGammaOption(
+                mode="custom",
+                linear_coeff=4.5,
+                exponent=0.45,
+            ),
+            transfer="rec709",
+            label="Rec.709 custom",
+            param_a=4.5,
+            param_b=0.45,
+            evidence="cli-custom",
+        ),
+    )
+
+    expected = np.full((32, 32, 3), 1.099 * (0.25**0.45) - 0.099, dtype=np.float32)
+    np.testing.assert_allclose(output_image, expected, rtol=1e-6, atol=1e-6)
+
+
 def test_run_debug_writes_extraction_and_merge_checkpoints(monkeypatch, tmp_path) -> None:
     """`run` must persist extraction and merge debug checkpoints when enabled."""
 
@@ -3269,6 +3421,102 @@ def test_run_prints_source_gamma_diagnostics(monkeypatch, tmp_path, capsys) -> N
     output = capsys.readouterr().out
     assert (
         "Source gamma info: label=ProPhoto RGB; gamma=1.8; evidence=explicit-profile"
+        in output
+    )
+
+
+def test_run_prints_merge_gamma_diagnostics(monkeypatch, tmp_path, capsys) -> None:
+    """Runtime must print deterministic merge-gamma request and resolution diagnostics."""
+
+    input_dng = tmp_path / "scene.dng"
+    input_dng.write_bytes(b"fake-dng")
+    output_jpg = tmp_path / "scene.jpg"
+
+    class _FakeRawHandle:
+        output_color = "ProPhoto RGB"
+        tone_curve = [0, 128, 255]
+        rgb_xyz_matrix = [[1.0, 0.0, 0.0]]
+        color_matrix = [[1.0, 0.0, 0.0]]
+        color_desc = b"RGBG"
+        raw_image_visible = np.zeros((2, 2), dtype=np.uint16)
+        white_level = int(16383)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            del exc_type, exc, tb
+
+    class _FakeRawPyModule:
+        LibRawError = RuntimeError
+
+        @staticmethod
+        def imread(_path: str) -> _FakeRawHandle:
+            return _FakeRawHandle()
+
+    fake_imageio_module = _FakeImageIoModule(
+        merged_rgb_u16=np.full((2, 2, 3), 32768, dtype=np.uint16)
+    )
+    fake_pil_module = _FakePilModule()
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_load_image_dependencies",
+        lambda: (_FakeRawPyModule(), fake_imageio_module, fake_pil_module),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_extract_dng_exif_payload_and_timestamp",
+        lambda **_kwargs: (None, None, 1, 0.125),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_extract_exif_gamma_tags",
+        lambda **_kwargs: dng2jpg_module.ExifGammaTags(
+            color_space="1",
+            interoperability_index=None,
+        ),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_resolve_auto_adjust_dependencies",
+        lambda: (_FakeOpenCvModule(), np),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_extract_base_rgb_linear_float",
+        lambda **_kwargs: np.full((2, 2, 3), 0.25, dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_extract_bracket_images_float",
+        lambda **_kwargs: (
+            np.full((2, 2, 3), 0.125, dtype=np.float32),
+            np.full((2, 2, 3), 0.25, dtype=np.float32),
+            np.full((2, 2, 3), 0.5, dtype=np.float32),
+        ),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_run_opencv_hdr_merge",
+        lambda **_kwargs: np.full((2, 2, 3), 0.5, dtype=np.float32),
+    )
+    monkeypatch.setattr(dng2jpg_module, "_encode_jpg", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_sync_output_file_timestamps_from_exif",
+        lambda **_kwargs: None,
+    )
+
+    exit_code = dng2jpg_module.run(
+        [str(input_dng), str(output_jpg), "--ev=1", "--hdr-merge=OpenCV"]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "Merge gamma request: auto" in output
+    assert (
+        "Merge gamma: request=auto; transfer=srgb; label=sRGB; params=-; evidence=exif-colorspace=1"
         in output
     )
 def test_run_opencv_hdr_merge_requires_exif_exposure_time_for_radiance_modes() -> None:
