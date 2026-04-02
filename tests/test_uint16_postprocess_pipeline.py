@@ -4,14 +4,12 @@
 from __future__ import annotations
 
 import importlib.util
-import math
 from dataclasses import dataclass
 from pathlib import Path
 import sys
 from typing import Protocol
 
 import numpy as np
-import pytest
 
 _SRC_PATH = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC_PATH) not in sys.path:
@@ -1203,6 +1201,7 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
         "--ev=<value>",
         "--auto-ev=<enable|disable>",
         "--ev-zero=<value>",
+        "--auto-ev-pct=<0..100>",
         "--hdr-merge <Luminace-HDR|OpenCV|HDR-Plus>",
         "--opencv-merge-algorithm=<name>",
         "--opencv-tonemap=<bool>",
@@ -1358,13 +1357,6 @@ def test_parse_run_options_rejects_removed_auto_zero_options(capsys) -> None:
     captured = capsys.readouterr()
     assert "Removed option: --auto-zero-pct" in captured.err
 
-    parsed_auto_ev_pct = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--auto-ev-pct=50"]
-    )
-    assert parsed_auto_ev_pct is None
-    captured = capsys.readouterr()
-    assert "Removed option: --auto-ev-pct" in captured.err
-
 
 def test_parse_run_options_requires_explicit_auto_brightness_value() -> None:
     """`--auto-brightness` must require explicit enable/disable value."""
@@ -1514,228 +1506,218 @@ def test_extract_dng_exif_payload_and_timestamp_reads_nested_exif_ifd_exposure_t
     assert timestamp is not None
 
 
-def test_compute_histogram_ev_corrections_returns_three_floats() -> None:
-    """Histogram EV corrections must return three finite float values from a synthetic image."""
+def test_optimize_joint_ev_zero_and_delta_reduces_span_vs_legacy_minimum_center() -> None:
+    """Joint auto EV must reduce span against the legacy minimum-center baseline."""
 
-    import cv2 as cv2_module
-
-    base_rgb_float = np.array(
-        [
-            [[0.10, 0.10, 0.10], [0.20, 0.20, 0.20]],
-            [[0.40, 0.40, 0.40], [0.50, 0.50, 0.50]],
-        ],
-        dtype=np.float32,
+    bits_per_color = 16
+    base_max_ev = dng2jpg_module._calculate_max_ev_from_bits(  # pylint: disable=protected-access
+        bits_per_color
+    )
+    preview_stats = (0.04, 0.20, 0.60)
+    evaluations = dng2jpg_module.AutoZeroEvaluation(  # pylint: disable=protected-access
+        miglior_ev=-2.0,
+        ev_ettr=0.0,
+        ev_dettaglio=0.0,
     )
 
-    ev_entropy, ev_ettr, ev_detail = dng2jpg_module._compute_histogram_ev_corrections(  # pylint: disable=protected-access
-        np_module=np,
-        cv2_module=cv2_module,
-        base_rgb_float=base_rgb_float,
-    )
-
-    assert isinstance(ev_entropy, float)
-    assert isinstance(ev_ettr, float)
-    assert isinstance(ev_detail, float)
-    assert math.isfinite(ev_entropy)
-    assert math.isfinite(ev_ettr)
-    assert math.isfinite(ev_detail)
-    assert ev_entropy == round(ev_entropy, 1)
-    assert ev_ettr == round(ev_ettr, 1)
-    assert ev_detail == round(ev_detail, 1)
-
-
-def test_resolve_auto_ev_histogram_solution_selects_conservative_quantized_bracket(
-    capsys,
-) -> None:
-    """Histogram solution must select conservative ev_zero and largest passing bracket."""
-
-    import cv2 as cv2_module
-
-    base_rgb_float = np.array(
-        [
-            [[0.10, 0.10, 0.10], [0.20, 0.20, 0.20]],
-            [[0.40, 0.40, 0.40], [0.50, 0.50, 0.50]],
-        ],
-        dtype=np.float32,
-    )
-    base_max_ev = 3.0
-
-    solution = dng2jpg_module._resolve_auto_ev_histogram_solution(  # pylint: disable=protected-access
-        np_module=np,
-        cv2_module=cv2_module,
-        base_rgb_float=base_rgb_float,
+    solution = dng2jpg_module._optimize_joint_ev_zero_and_delta(  # pylint: disable=protected-access
+        bits_per_color=bits_per_color,
         base_max_ev=base_max_ev,
+        preview_luminance_stats=preview_stats,
+        auto_ev_pct=100.0,
+        evaluations=evaluations,
     )
 
-    safe_zero_max = max(0.0, base_max_ev - 1.0)
-    assert abs(solution.ev_zero) <= safe_zero_max + 1e-9
-    assert round(solution.ev_zero / 0.25) * 0.25 == pytest.approx(solution.ev_zero, abs=1e-9)
-    max_bit_depth_bracket = round(
-        math.floor(((base_max_ev - abs(solution.ev_zero)) / 0.25) + 1e-9) * 0.25, 2
+    safe_zero_max = dng2jpg_module._calculate_safe_ev_zero_max(  # pylint: disable=protected-access
+        base_max_ev
     )
-    assert solution.max_bracket >= 0.25
-    assert solution.max_bracket <= max_bit_depth_bracket + 1e-9
-    assert solution.ev_minus == pytest.approx(solution.ev_zero - solution.max_bracket, abs=1e-9)
-    assert solution.ev_plus == pytest.approx(solution.ev_zero + solution.max_bracket, abs=1e-9)
-    assert abs(solution.ev_conservative) == min(
-        abs(solution.ev_ettr), abs(solution.ev_entropy), abs(solution.ev_detail)
+    supported_zero_values = dng2jpg_module._derive_supported_signed_ev_zero_values(  # pylint: disable=protected-access
+        base_max_ev
     )
-
-    output = capsys.readouterr().out
-    assert "Auto-EV histogram corrections:" in output
-    assert "Auto-EV conservative selection:" in output
-    assert "Auto-EV bracket fork:" in output
-
-
-def test_auto_ev_histogram_solver_edge_cases() -> None:
-    """Histogram solver must handle black image (ev_zero=0.0), midtone, and SAFE_ZERO_MAX boundary."""
-
-    import cv2 as cv2_module
-
-    black_image = np.zeros((4, 4, 3), dtype=np.float32)
-    ev_entropy, ev_ettr, ev_detail = dng2jpg_module._compute_histogram_ev_corrections(  # pylint: disable=protected-access
-        np_module=np,
-        cv2_module=cv2_module,
-        base_rgb_float=black_image,
+    anchors = dng2jpg_module._build_joint_auto_ev_regularization_anchors(  # pylint: disable=protected-access
+        evaluations=evaluations,
+        safe_ev_zero_max=safe_zero_max,
     )
-    assert ev_ettr == 0.0
-
-    base_max_ev = 3.0
-    solution_black = dng2jpg_module._resolve_auto_ev_histogram_solution(  # pylint: disable=protected-access
-        np_module=np,
-        cv2_module=cv2_module,
-        base_rgb_float=black_image,
-        base_max_ev=base_max_ev,
+    legacy_center = dng2jpg_module._quantize_ev_to_supported(  # pylint: disable=protected-access
+        max(
+            -safe_zero_max,
+            min(
+                safe_zero_max,
+                min(
+                    evaluations.miglior_ev,
+                    evaluations.ev_ettr,
+                    evaluations.ev_dettaglio,
+                ),
+            ),
+        ),
+        supported_zero_values,
     )
-    safe_zero_max = max(0.0, base_max_ev - 1.0)
-    assert abs(solution_black.ev_zero) <= safe_zero_max + 1e-9
-    assert solution_black.max_bracket == pytest.approx(0.25, abs=1e-9)
-
-    midtone_image = np.full((4, 4, 3), 0.5, dtype=np.float32)
-    ev_entropy_m, ev_ettr_m, ev_detail_m = dng2jpg_module._compute_histogram_ev_corrections(  # pylint: disable=protected-access
-        np_module=np,
-        cv2_module=cv2_module,
-        base_rgb_float=midtone_image,
-    )
-    assert math.isfinite(ev_entropy_m)
-    assert math.isfinite(ev_ettr_m)
-    assert math.isfinite(ev_detail_m)
-
-    solution_midtone = dng2jpg_module._resolve_auto_ev_histogram_solution(  # pylint: disable=protected-access
-        np_module=np,
-        cv2_module=cv2_module,
-        base_rgb_float=midtone_image,
-        base_max_ev=base_max_ev,
-    )
-    assert abs(solution_midtone.ev_zero) <= safe_zero_max + 1e-9
-
-
-def test_resolve_auto_ev_histogram_solution_stops_at_previous_passing_amplitude(monkeypatch) -> None:
-    """Auto-EV bracket scan must stop at first failure and keep previous amplitude."""
-
-    import cv2 as cv2_module
-
-    base_rgb_float = np.full((4, 4, 3), 0.35, dtype=np.float32)
-
-    monkeypatch.setattr(
-        dng2jpg_module,
-        "_compute_histogram_ev_corrections",
-        lambda **_kwargs: (0.0, 0.0, 0.0),
-    )
-    amplitudes_seen: list[float] = []
-
-    def _fake_quality_scan(**kwargs):
-        bracket_image = kwargs["bracket_image_float"]
-        amplitude = round(abs(math.log2(float(np.max(bracket_image)) / 0.35)), 2)
-        amplitude = round(round(amplitude / 0.25) * 0.25, 2)
-        amplitudes_seen.append(amplitude)
-        return amplitude <= 0.5, {"detail_retention_ratio": 1.0}
-
-    monkeypatch.setattr(
-        dng2jpg_module,
-        "_analyze_auto_ev_bracket_quality",
-        _fake_quality_scan,
+    legacy_solution = dng2jpg_module._evaluate_joint_auto_ev_candidate(  # pylint: disable=protected-access
+        bits_per_color=bits_per_color,
+        ev_zero_candidate=legacy_center,
+        anchors=anchors,
+        p_low=preview_stats[0],
+        p_high=preview_stats[2],
+        auto_ev_pct=100.0,
     )
 
-    solution = dng2jpg_module._resolve_auto_ev_histogram_solution(  # pylint: disable=protected-access
-        np_module=np,
-        cv2_module=cv2_module,
-        base_rgb_float=base_rgb_float,
-        base_max_ev=2.0,
+    assert solution.ev_delta < legacy_solution.ev_delta
+    assert abs(solution.ev_zero) < abs(legacy_center)
+    triplet = (
+        round(solution.ev_zero - solution.ev_delta, 2),
+        solution.ev_zero,
+        round(solution.ev_zero + solution.ev_delta, 2),
     )
+    assert round(triplet[1] - triplet[0], 2) == solution.ev_delta
+    assert round(triplet[2] - triplet[1], 2) == solution.ev_delta
 
-    assert solution.max_bracket == pytest.approx(0.5, abs=1e-9)
-    assert max(amplitudes_seen) >= 0.75
 
-
-def test_resolve_auto_ev_histogram_solution_keeps_minimum_bracket_when_first_step_fails(
+def test_optimize_joint_ev_zero_and_delta_uses_deterministic_tie_breaks(
     monkeypatch,
 ) -> None:
-    """Auto-EV bracket scan must keep 0.25 when the first tested amplitude fails."""
+    """Joint auto EV must prefer the lower numeric center on a full tie."""
 
-    import cv2 as cv2_module
+    evaluations = dng2jpg_module.AutoZeroEvaluation(  # pylint: disable=protected-access
+        miglior_ev=0.0,
+        ev_ettr=0.0,
+        ev_dettaglio=0.0,
+    )
 
-    base_rgb_float = np.full((4, 4, 3), 0.35, dtype=np.float32)
     monkeypatch.setattr(
         dng2jpg_module,
-        "_compute_histogram_ev_corrections",
-        lambda **_kwargs: (0.0, 0.0, 0.0),
+        "_derive_supported_signed_ev_zero_values",
+        lambda _base_max_ev: (-0.25, 0.25),
     )
+
+    def _fake_evaluate_candidate(  # pylint: disable=protected-access
+        *,
+        bits_per_color,
+        ev_zero_candidate,
+        anchors,
+        p_low,
+        p_high,
+        auto_ev_pct,
+        clipping_risk_stats,
+    ):
+        del bits_per_color, anchors, p_low, p_high, auto_ev_pct, clipping_risk_stats
+        return dng2jpg_module.JointAutoEvSolution(
+            ev_zero=ev_zero_candidate,
+            ev_delta=0.25,
+            required_delta=0.25,
+            shadow_need=0.0,
+            highlight_need=0.0,
+            uncovered_shadow=0.0,
+            uncovered_highlight=0.0,
+            zero_reg=0.25,
+            score=1.0,
+            anchors=(0.0, 0.0, 0.0),
+        )
+
     monkeypatch.setattr(
         dng2jpg_module,
-        "_analyze_auto_ev_bracket_quality",
-        lambda **_kwargs: (False, {"detail_retention_ratio": 0.0}),
+        "_evaluate_joint_auto_ev_candidate",
+        _fake_evaluate_candidate,
     )
 
-    solution = dng2jpg_module._resolve_auto_ev_histogram_solution(  # pylint: disable=protected-access
-        np_module=np,
-        cv2_module=cv2_module,
-        base_rgb_float=base_rgb_float,
-        base_max_ev=2.0,
+    solution = dng2jpg_module._optimize_joint_ev_zero_and_delta(  # pylint: disable=protected-access
+        bits_per_color=16,
+        base_max_ev=4.0,
+        preview_luminance_stats=(0.05, 0.5, 0.9),
+        auto_ev_pct=100.0,
+        evaluations=evaluations,
     )
 
-    assert solution.max_bracket == pytest.approx(0.25, abs=1e-9)
-    assert solution.ev_minus == pytest.approx(solution.ev_zero - 0.25, abs=1e-9)
-    assert solution.ev_plus == pytest.approx(solution.ev_zero + 0.25, abs=1e-9)
+    assert solution.ev_zero == -0.25
 
 
-def test_auto_ev_bracket_quality_analysis_detects_clipping_and_preserves_balanced_frame() -> None:
-    """Bracket quality analysis must reject clipping and accept balanced brackets."""
+def test_optimize_joint_ev_zero_and_delta_applies_auto_ev_pct_scaling() -> None:
+    """`--auto-ev-pct` must reduce the effective automatic bracket delta."""
 
-    fake_cv2 = _FakeOpenCvModule()
-    balanced = np.array(
+    evaluations = dng2jpg_module.AutoZeroEvaluation(  # pylint: disable=protected-access
+        miglior_ev=0.0,
+        ev_ettr=0.0,
+        ev_dettaglio=0.0,
+    )
+    preview_stats = (0.01, 0.2, 0.89)
+
+    full_solution = dng2jpg_module._optimize_joint_ev_zero_and_delta(  # pylint: disable=protected-access
+        bits_per_color=16,
+        base_max_ev=4.0,
+        preview_luminance_stats=preview_stats,
+        auto_ev_pct=100.0,
+        evaluations=evaluations,
+    )
+    scaled_solution = dng2jpg_module._optimize_joint_ev_zero_and_delta(  # pylint: disable=protected-access
+        bits_per_color=16,
+        base_max_ev=4.0,
+        preview_luminance_stats=preview_stats,
+        auto_ev_pct=50.0,
+        evaluations=evaluations,
+    )
+
+    assert scaled_solution.ev_delta < full_solution.ev_delta
+    assert scaled_solution.required_delta >= scaled_solution.ev_delta
+    assert (
+        scaled_solution.uncovered_shadow + scaled_solution.uncovered_highlight
+        >= full_solution.uncovered_shadow + full_solution.uncovered_highlight
+    )
+
+
+def test_build_auto_ev_clipping_risk_stats_reports_safe_positive_ev_caps() -> None:
+    """Clipping-risk stats must expose deterministic positive-EV headroom caps."""
+
+    base_rgb_float = np.array(
         [
-            [[0.12, 0.12, 0.12], [0.22, 0.22, 0.22]],
-            [[0.42, 0.42, 0.42], [0.62, 0.62, 0.62]],
+            [[0.10, 0.10, 0.10], [0.20, 0.20, 0.20]],
+            [[0.40, 0.40, 0.40], [0.50, 0.50, 0.50]],
         ],
         dtype=np.float32,
     )
-    clipped = np.array(
-        [
-            [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
-            [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]],
-        ],
-        dtype=np.float32,
-    )
-    reference_detail_weights = np.full((2, 2), 0.25, dtype=np.float32)
 
-    balanced_valid, balanced_metrics = dng2jpg_module._analyze_auto_ev_bracket_quality(  # pylint: disable=protected-access
-        np_module=np,
-        cv2_module=fake_cv2,
-        bracket_image_float=balanced,
-        reference_detail_weights=reference_detail_weights,
-    )
-    clipped_valid, clipped_metrics = dng2jpg_module._analyze_auto_ev_bracket_quality(  # pylint: disable=protected-access
-        np_module=np,
-        cv2_module=fake_cv2,
-        bracket_image_float=clipped,
-        reference_detail_weights=reference_detail_weights,
+    stats = dng2jpg_module._build_auto_ev_clipping_risk_stats(  # pylint: disable=protected-access
+        np,
+        base_rgb_float,
     )
 
-    assert balanced_valid is True
-    assert balanced_metrics["highlight_saturated_ratio"] < clipped_metrics["highlight_saturated_ratio"]
-    assert clipped_valid is False
-    assert clipped_metrics["highlight_edge_ratio"] >= dng2jpg_module._AUTO_EV_HIGHLIGHT_EDGE_THRESHOLD
+    assert stats.base_clip_any == 0.0
+    assert stats.p99_9_max_rgb >= 0.49
+    assert stats.p99_99_max_rgb >= stats.p99_9_max_rgb
+    assert 0.9 <= stats.safe_center_ev <= 1.1
+    assert 0.9 <= stats.safe_plus_ev <= 1.1
+
+
+def test_optimize_joint_ev_zero_and_delta_contracts_delta_when_clipping_cap_is_tighter() -> None:
+    """Joint auto EV must contract the bracket when histogram headroom rejects wider plus frames."""
+
+    evaluations = dng2jpg_module.AutoZeroEvaluation(  # pylint: disable=protected-access
+        miglior_ev=1.5,
+        ev_ettr=1.5,
+        ev_dettaglio=1.75,
+    )
+    preview_stats = (0.01, 0.2, 0.4)
+    clipping_risk_stats = dng2jpg_module.AutoEvClippingRiskStats(  # pylint: disable=protected-access
+        sorted_max_rgb=np.array([0.10, 0.20, 0.30, 0.45], dtype=np.float32),
+        p99_9_max_rgb=0.45,
+        p99_99_max_rgb=0.48,
+        base_clip_any=0.0,
+        safe_center_ev=1.0,
+        safe_plus_ev=1.1,
+    )
+
+    solution = dng2jpg_module._optimize_joint_ev_zero_and_delta(  # pylint: disable=protected-access
+        bits_per_color=16,
+        base_max_ev=4.0,
+        preview_luminance_stats=preview_stats,
+        auto_ev_pct=50.0,
+        evaluations=evaluations,
+        clipping_risk_stats=clipping_risk_stats,
+    )
+
+    assert solution.ev_zero <= 1.0
+    assert solution.ev_delta == 0.25
+    assert solution.clipping_safe_delta <= 0.35
+    assert solution.predicted_plus_clip <= dng2jpg_module.AUTO_EV_PLUS_CLIP_TARGET_FRACTION
+    assert solution.predicted_center_clip <= 0.00001
 
 
 def test_run_opencv_hdr_merge_keeps_mertens_inputs_as_float32() -> None:
@@ -2025,9 +2007,6 @@ def test_extract_bracket_images_float_uses_single_linear_base_pass() -> None:
             use_camera_wb,
             no_auto_bright,
             gamma,
-            user_wb,
-            output_color,
-            no_auto_scale,
             user_flip,
         ) -> np.ndarray:
             self.calls.append(
@@ -2037,39 +2016,27 @@ def test_extract_bracket_images_float_uses_single_linear_base_pass() -> None:
                     "use_camera_wb": use_camera_wb,
                     "no_auto_bright": no_auto_bright,
                     "gamma": gamma,
-                    "user_wb": user_wb,
-                    "output_color": output_color,
-                    "no_auto_scale": no_auto_scale,
                     "user_flip": user_flip,
                 }
             )
             return np.array(base_rgb_u16, copy=True)
 
     fake_raw = _FakeRawHandle()
-    fake_rawpy = type(
-        "_FakeRawPyModule",
-        (),
-        {"ColorSpace": type("_ColorSpace", (), {"raw": "raw"})},
-    )()
     multipliers = (0.5, 1.0, 2.0)
 
     bracket_images = dng2jpg_module._extract_bracket_images_float(  # pylint: disable=protected-access
         raw_handle=fake_raw,
         np_module=np,
         multipliers=multipliers,
-        rawpy_module=fake_rawpy,
     )
 
     assert len(fake_raw.calls) == 1
     assert fake_raw.calls[0] == {
         "bright": 1.0,
         "output_bps": 16,
-        "use_camera_wb": False,
+        "use_camera_wb": True,
         "no_auto_bright": True,
         "gamma": (1.0, 1.0),
-        "user_wb": [1.0, 1.0, 1.0, 1.0],
-        "output_color": "raw",
-        "no_auto_scale": True,
         "user_flip": 0,
     }
     base_rgb_float = base_rgb_u16.astype(np.float32) / 65535.0
@@ -2957,28 +2924,15 @@ def test_run_debug_writes_extraction_and_merge_checkpoints(monkeypatch, tmp_path
             use_camera_wb,
             no_auto_bright,
             gamma,
-            user_wb,
-            output_color,
-            no_auto_scale,
             user_flip,
         ) -> np.ndarray:
-            del (
-                output_bps,
-                use_camera_wb,
-                no_auto_bright,
-                gamma,
-                user_wb,
-                output_color,
-                no_auto_scale,
-                user_flip,
-            )
+            del output_bps, use_camera_wb, no_auto_bright, gamma, user_flip
             return np.clip(raw_pixels.astype(np.float32) * float(bright), 0.0, 65535.0).astype(
                 np.uint16
             )
 
     class _FakeRawPyModule:
         LibRawError = RuntimeError
-        ColorSpace = type("_ColorSpace", (), {"raw": "raw"})
 
         @staticmethod
         def imread(_path: str) -> _FakeRawHandle:
@@ -3044,8 +2998,8 @@ def test_run_debug_writes_extraction_and_merge_checkpoints(monkeypatch, tmp_path
     ]
 
 
-def test_run_auto_ev_prints_selected_triplet_diagnostics(monkeypatch, tmp_path, capsys) -> None:
-    """Automatic runtime must print the selected triplet and the solver parameters."""
+def test_run_auto_ev_prints_joint_candidate_diagnostics(monkeypatch, tmp_path, capsys) -> None:
+    """Automatic runtime must print heuristic anchors and the selected joint solution."""
 
     input_dng = tmp_path / "scene.dng"
     input_dng.write_bytes(b"fake-dng")
@@ -3077,28 +3031,15 @@ def test_run_auto_ev_prints_selected_triplet_diagnostics(monkeypatch, tmp_path, 
             use_camera_wb,
             no_auto_bright,
             gamma,
-            user_wb,
-            output_color,
-            no_auto_scale,
             user_flip,
         ) -> np.ndarray:
-            del (
-                output_bps,
-                use_camera_wb,
-                no_auto_bright,
-                gamma,
-                user_wb,
-                output_color,
-                no_auto_scale,
-                user_flip,
-            )
+            del output_bps, use_camera_wb, no_auto_bright, gamma, user_flip
             return np.clip(raw_pixels.astype(np.float32) * float(bright), 0.0, 65535.0).astype(
                 np.uint16
             )
 
     class _FakeRawPyModule:
         LibRawError = RuntimeError
-        ColorSpace = type("_ColorSpace", (), {"raw": "raw"})
 
         @staticmethod
         def imread(_path: str) -> _FakeRawHandle:
@@ -3143,119 +3084,12 @@ def test_run_auto_ev_prints_selected_triplet_diagnostics(monkeypatch, tmp_path, 
     assert exit_code == 0
     output = capsys.readouterr().out
     assert "Using exposure mode: auto" in output
-    assert "Detected DNG bits per color: 16" in output
-    assert "Bit-derived EV ceilings: BASE_MAX=4" in output
-    assert "Auto-EV histogram corrections:" in output
-    assert "Auto-EV conservative selection:" in output
-    assert "Auto-EV bracket fork:" in output
-    assert "Export EV triplet:" in output
-
-
-def test_run_auto_ev_uses_zero_processing_raw_extraction_for_triplet_selection(
-    monkeypatch,
-    tmp_path,
-    capsys,
-) -> None:
-    """Automatic runtime must use zero-processing RAW extraction for histogram triplet selection."""
-
-    input_dng = tmp_path / "scene-low-white.dng"
-    input_dng.write_bytes(b"fake-dng")
-    output_jpg = tmp_path / "scene-low-white.jpg"
-    raw_pixels = np.array(
-        [
-            [[300, 600, 900], [1200, 1500, 1800]],
-            [[2100, 2400, 2700], [3000, 3300, 3600]],
-        ],
-        dtype=np.uint16,
-    )
-
-    class _FakeRawHandle:
-        def __init__(self) -> None:
-            self.raw_image_visible = np.zeros((2, 2), dtype=np.uint16)
-            self.white_level = int(4095)
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> None:
-            del exc_type, exc, tb
-
-        def postprocess(
-            self,
-            *,
-            bright,
-            output_bps,
-            use_camera_wb,
-            no_auto_bright,
-            gamma,
-            user_wb,
-            output_color,
-            no_auto_scale,
-            user_flip,
-        ) -> np.ndarray:
-            del (
-                output_bps,
-                use_camera_wb,
-                no_auto_bright,
-                gamma,
-                user_wb,
-                output_color,
-                no_auto_scale,
-                user_flip,
-            )
-            return np.clip(raw_pixels.astype(np.float32) * float(bright), 0.0, 65535.0).astype(
-                np.uint16
-            )
-
-    class _FakeRawPyModule:
-        LibRawError = RuntimeError
-        ColorSpace = type("_ColorSpace", (), {"raw": "raw"})
-
-        @staticmethod
-        def imread(_path: str) -> _FakeRawHandle:
-            return _FakeRawHandle()
-
-    fake_imageio_module = _FakeImageIoModule(
-        merged_rgb_u16=np.full((2, 2, 3), 32768, dtype=np.uint16)
-    )
-    fake_pil_module = _FakePilModule()
-
-    monkeypatch.setattr(
-        dng2jpg_module,
-        "_load_image_dependencies",
-        lambda: (_FakeRawPyModule(), fake_imageio_module, fake_pil_module),
-    )
-    monkeypatch.setattr(
-        dng2jpg_module,
-        "_extract_dng_exif_payload_and_timestamp",
-        lambda **_kwargs: (None, None, 1, 0.125),
-    )
-    monkeypatch.setattr(
-        dng2jpg_module,
-        "_resolve_auto_adjust_dependencies",
-        lambda: (_FakeOpenCvModule(), np),
-    )
-    monkeypatch.setattr(dng2jpg_module, "_encode_jpg", lambda **_kwargs: None)
-    monkeypatch.setattr(
-        dng2jpg_module,
-        "_sync_output_file_timestamps_from_exif",
-        lambda **_kwargs: None,
-    )
-
-    exit_code = dng2jpg_module.run(
-        [
-            str(input_dng),
-            str(output_jpg),
-            "--auto-ev=enable",
-            "--hdr-merge=OpenCV",
-        ]
-    )
-
-    assert exit_code == 0
-    output = capsys.readouterr().out
-    assert "Auto-EV histogram corrections:" in output
-    assert "Auto-EV conservative selection:" in output
-    assert "Auto-EV bracket fork:" in output
+    assert "Auto-EV heuristic miglior_ev:" in output
+    assert "Auto-EV heuristic ev_ettr:" in output
+    assert "Auto-EV heuristic ev_dettaglio:" in output
+    assert "Auto-EV regularization anchors:" in output
+    assert "Auto-EV clipping-risk metrics:" in output
+    assert "Auto-EV selected joint solution:" in output
     assert "Export EV triplet:" in output
 
 
@@ -3296,28 +3130,15 @@ def test_run_static_ev_uses_manual_center_and_reports_static_mode(
             use_camera_wb,
             no_auto_bright,
             gamma,
-            user_wb,
-            output_color,
-            no_auto_scale,
             user_flip,
         ) -> np.ndarray:
-            del (
-                output_bps,
-                use_camera_wb,
-                no_auto_bright,
-                gamma,
-                user_wb,
-                output_color,
-                no_auto_scale,
-                user_flip,
-            )
+            del output_bps, use_camera_wb, no_auto_bright, gamma, user_flip
             return np.clip(raw_pixels.astype(np.float32) * float(bright), 0.0, 65535.0).astype(
                 np.uint16
             )
 
     class _FakeRawPyModule:
         LibRawError = RuntimeError
-        ColorSpace = type("_ColorSpace", (), {"raw": "raw"})
 
         @staticmethod
         def imread(_path: str) -> _FakeRawHandle:
@@ -3399,27 +3220,13 @@ def test_run_prints_source_gamma_diagnostics(monkeypatch, tmp_path, capsys) -> N
             use_camera_wb,
             no_auto_bright,
             gamma,
-            user_wb,
-            output_color,
-            no_auto_scale,
             user_flip,
         ) -> np.ndarray:
-            del (
-                bright,
-                output_bps,
-                use_camera_wb,
-                no_auto_bright,
-                gamma,
-                user_wb,
-                output_color,
-                no_auto_scale,
-                user_flip,
-            )
+            del bright, output_bps, use_camera_wb, no_auto_bright, gamma, user_flip
             return np.full((2, 2, 3), 32768, dtype=np.uint16)
 
     class _FakeRawPyModule:
         LibRawError = RuntimeError
-        ColorSpace = type("_ColorSpace", (), {"raw": "raw"})
 
         @staticmethod
         def imread(_path: str) -> _FakeRawHandle:
