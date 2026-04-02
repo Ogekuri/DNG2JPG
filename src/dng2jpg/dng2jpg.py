@@ -3255,15 +3255,69 @@ def _decode_exif_text_value(exif_value):
     return value_text or None
 
 
+def _exiftool_color_space_fallback(input_dng):
+    """@brief Extract color-space evidence via exiftool subprocess fallback.
+
+    @details Invokes `exiftool -j -ColorSpace` as a subprocess to recover
+    color-space metadata from MakerNotes or vendor-specific IFDs that
+    `exifread` cannot parse (e.g., Canon MakerNotes embedded in DNG).
+    Maps exiftool text labels to EXIF-compatible numeric tokens:
+    `Adobe RGB` -> `"2"`, `sRGB` -> `"1"`. Returns `None` when exiftool
+    is unavailable, times out, or yields no color-space evidence.
+    Complexity: O(1) subprocess invocation. Side effects: read-only.
+    @param input_dng {Path} Source RAW/DNG file path.
+    @return {str|None} EXIF-compatible numeric `ColorSpace` token or `None`.
+    @satisfies REQ-169
+    """
+
+    try:
+        import json
+        import subprocess  # noqa: S404
+
+        proc = subprocess.run(  # noqa: S603, S607
+            ["exiftool", "-j", "-ColorSpace", str(input_dng)],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if proc.returncode != 0:
+            return None
+        data = json.loads(proc.stdout)
+        if not data:
+            return None
+        entry = data[0]
+        for tag_key in entry:
+            if tag_key.lower() in ("sourcefile",):
+                continue
+            tag_value = str(entry[tag_key]).strip().lower()
+            if tag_value == "adobe rgb":
+                return "2"
+            if tag_value in ("srgb", "srgb iec61966-2.1"):
+                return "1"
+        return None
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+        AttributeError,
+        FileNotFoundError,
+    ):
+        return None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _extract_exif_gamma_tags(input_dng):
     """@brief Extract EXIF color-space metadata relevant to auto merge gamma.
 
     @details Opens the source RAW/DNG file as a binary stream via
     `exifread.process_file` and normalizes `EXIF ColorSpace`,
     `Interop InteroperabilityIndex`, `Image Model`, and `Image Make` tags for
-    deterministic auto transfer resolution. Does not use Pillow for this
-    extraction. Complexity: O(file_size). Side effects: none (read-only file
-    access).
+    deterministic auto transfer resolution. When `exifread` yields no
+    `ColorSpace` evidence, falls back to `exiftool` subprocess extraction
+    to recover vendor-specific MakerNotes color-space data (e.g., Canon DNG).
+    Does not use Pillow for this extraction. Complexity: O(file_size).
+    Side effects: none (read-only file access).
     @param input_dng {Path} Source RAW/DNG file path.
     @return {ExifGammaTags} Normalized EXIF merge-gamma evidence payload.
     @satisfies REQ-169, REQ-172, REQ-173
@@ -3305,6 +3359,10 @@ def _extract_exif_gamma_tags(input_dng):
         )
         if image_make_value == "":
             image_make_value = None
+        if color_space_value is None:
+            exiftool_color_space = _exiftool_color_space_fallback(input_dng)
+            if exiftool_color_space is not None:
+                color_space_value = exiftool_color_space
         return ExifGammaTags(
             color_space=color_space_value,
             interoperability_index=interop_index_value,
