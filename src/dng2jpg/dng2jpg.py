@@ -5209,11 +5209,12 @@ def _run_luminance_hdr_cli(
 
     @details Builds deterministic luminance-hdr-cli argv using EV sequence
     centered around zero-reference (`-ev_value,0,+ev_value`) even when extraction
-    uses non-zero `ev_zero`, serializes float inputs to local 16-bit TIFFs,
-    forwards deterministic HDR/TMO arguments, emits one runtime log line with
-    the full executed command syntax and parameters, isolates sidecar artifacts
-    in a backend-specific temporary directory, then reloads the produced TIFF as
-    normalized RGB float `[0,1]`.
+    uses non-zero `ev_zero`, serializes float inputs to local float32 TIFFs,
+    forwards deterministic HDR/TMO arguments including `--ldrTiff 32b` to force
+    float32 output, emits one runtime log line with the full executed command
+    syntax and parameters, isolates sidecar artifacts in a backend-specific
+    temporary directory, then reloads the produced float32 TIFF and normalizes
+    it back to DNG2JPG RGB float `[0,1]` working format.
     @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors.
     @param temp_dir {Path} Temporary workspace root.
     @param imageio_module {ModuleType} Imported imageio module with `imread` and `imwrite`.
@@ -5223,7 +5224,7 @@ def _run_luminance_hdr_cli(
     @param luminance_options {LuminanceOptions} Luminance backend command controls.
     @return {object} Normalized RGB float merged image.
     @exception subprocess.CalledProcessError Raised when `luminance-hdr-cli` returns non-zero exit status.
-    @satisfies REQ-011, REQ-033, REQ-034, REQ-035
+    @satisfies REQ-011, REQ-033, REQ-034, REQ-035, REQ-174, REQ-175
     """
 
     backend_dir = temp_dir / "luminance"
@@ -5255,7 +5256,7 @@ def _run_luminance_hdr_cli(
         "--tmo",
         luminance_options.tmo,
         "--ldrTiff",
-        "16b",
+        "32b",
         *luminance_options.tmo_extra_args,
         "-o",
         str(output_hdr_tiff),
@@ -6589,7 +6590,7 @@ def _write_rgb_float_tiff16(imageio_module, np_module, output_path, image_rgb_fl
     @param output_path {Path} Output TIFF path.
     @param image_rgb_float {object} RGB float tensor in `[0,1]`.
     @return {None} Side effects only.
-    @satisfies REQ-011, REQ-106
+    @satisfies REQ-106
     """
 
     normalized = _normalize_float_rgb_image(
@@ -6599,6 +6600,31 @@ def _write_rgb_float_tiff16(imageio_module, np_module, output_path, image_rgb_fl
     imageio_module.imwrite(
         str(output_path),
         _to_uint16_image_array(np_module=np_module, image_data=normalized),
+    )
+
+
+def _write_rgb_float_tiff32(imageio_module, np_module, output_path, image_rgb_float):
+    """@brief Serialize one RGB float tensor as float32 TIFF payload.
+
+    @details Normalizes the source image to RGB float32 `[0,1]` and writes
+    it directly as a float32 TIFF through `imageio`, preserving full
+    floating-point precision without quantization. Used by the luminance
+    backend to provide float32 bracket inputs to `luminance-hdr-cli`.
+    @param imageio_module {ModuleType} Imported imageio module with `imwrite`.
+    @param np_module {ModuleType} Imported numpy module.
+    @param output_path {Path} Output TIFF path.
+    @param image_rgb_float {object} RGB float tensor in `[0,1]`.
+    @return {None} Side effects only.
+    @satisfies REQ-011, REQ-174
+    """
+
+    normalized = _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=image_rgb_float,
+    )
+    imageio_module.imwrite(
+        str(output_path),
+        normalized.astype(np_module.float32, copy=False),
     )
 
 
@@ -6685,22 +6711,22 @@ def _materialize_bracket_tiffs_from_float(
     """@brief Write canonical bracket TIFF files from RGB float images.
 
     @details Emits `ev_minus.tif`, `ev_zero.tif`, and `ev_plus.tif` into the
-    provided temporary directory using 16-bit TIFF encoding derived from
+    provided temporary directory using float32 TIFF encoding derived from
     normalized RGB float images. The helper is used only by file-oriented merge
-    backends.
+    backends requiring float32 TIFF inputs.
     @param imageio_module {ModuleType} Imported imageio module with `imwrite`.
     @param np_module {ModuleType} Imported numpy module.
     @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors.
     @param temp_dir {Path} Temporary directory for TIFF artifacts.
     @return {list[Path]} Ordered canonical TIFF paths.
-    @satisfies REQ-011, REQ-034
+    @satisfies REQ-011, REQ-034, REQ-174
     """
 
     labels = ("ev_minus", "ev_zero", "ev_plus")
     bracket_paths = []
     for label, image_rgb_float in zip(labels, bracket_images_float):
         output_path = temp_dir / f"{label}.tif"
-        _write_rgb_float_tiff16(
+        _write_rgb_float_tiff32(
             imageio_module=imageio_module,
             np_module=np_module,
             output_path=output_path,
