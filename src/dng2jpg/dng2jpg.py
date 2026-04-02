@@ -42,7 +42,9 @@ DEFAULT_BRIGHTNESS = 1.0
 DEFAULT_CONTRAST = 1.0
 DEFAULT_SATURATION = 1.0
 DEFAULT_JPG_COMPRESSION = 15
-DEFAULT_AUTO_EV_PCT = 50.0
+DEFAULT_AUTO_EV_SHADOW_CLIPPING = 5.0
+DEFAULT_AUTO_EV_HIGHLIGHT_CLIPPING = 5.0
+DEFAULT_AUTO_EV_STEP = 0.1
 DEFAULT_AA_BLUR_SIGMA = 0.9
 DEFAULT_AA_BLUR_THRESHOLD_PCT = 5.0
 DEFAULT_AA_LEVEL_LOW_PCT = 0.1
@@ -132,28 +134,8 @@ HDRPLUS_TEMPORAL_FACTOR = DEFAULT_HDRPLUS_TEMPORAL_FACTOR
 HDRPLUS_TEMPORAL_MIN_DIST = DEFAULT_HDRPLUS_TEMPORAL_MIN_DIST
 HDRPLUS_TEMPORAL_MAX_DIST = DEFAULT_HDRPLUS_TEMPORAL_MAX_DIST
 _HDRPLUS_PROXY_MODES = ("rggb", "bt709", "mean")
-EV_STEP = 0.25
 MIN_SUPPORTED_BITS_PER_COLOR = 9
-DEFAULT_DNG_BITS_PER_COLOR = 14
-SUPPORTED_EV_VALUES = tuple(
-    round(index * EV_STEP, 2)
-    for index in range(
-        1, int((((DEFAULT_DNG_BITS_PER_COLOR - 8) / 2.0) / EV_STEP)) + 1
-    )
-)
-AUTO_EV_LOW_PERCENTILE = 0.1
-AUTO_EV_HIGH_PERCENTILE = 99.9
-AUTO_EV_MEDIAN_PERCENTILE = 50.0
-AUTO_EV_TARGET_SHADOW = 0.05
-AUTO_EV_TARGET_HIGHLIGHT = 0.90
-AUTO_EV_MEDIAN_TARGET = 0.5
-AUTO_EV_PLUS_CLIP_TARGET_FRACTION = 0.001
-AUTO_EV_CENTER_CLIP_TARGET_FRACTION = 0.0
-AUTO_EV_CLIP_EPS = 1e-9
-AUTO_ZERO_SCENE_KEY_LOW_THRESHOLD = 0.35
-AUTO_ZERO_SCENE_KEY_HIGH_THRESHOLD = 0.65
-AUTO_ZERO_TARGET_LOW_KEY = 0.35
-AUTO_ZERO_TARGET_HIGH_KEY = 0.65
+_EV_SELECTION_EPS = 1e-9
 _RUNTIME_OS_LABELS = {
     "windows": "Windows",
     "darwin": "MacOS",
@@ -627,89 +609,82 @@ class HdrPlusTemporalRuntimeOptions:
 
 @dataclass(frozen=True)
 class JointAutoEvSolution:
-    """@brief Hold one joint automatic exposure solution.
+    """@brief Hold one resolved automatic exposure plan.
 
-    @details Stores the selected symmetric automatic exposure solution over
-    `(ev_zero, ev_delta)` together with the guardrail deficits, center
-    regularization, and anchor set used by the deterministic optimizer.
+    @details Stores the selected `ev_zero`, the selected symmetric bracket
+    half-span `ev_delta`, the heuristic name that supplied `ev_zero`, and the
+    full ordered iteration trace used to stop bracket expansion. Side effects:
+    none.
     @param ev_zero {float} Selected central EV value.
     @param ev_delta {float} Selected symmetric bracket half-span.
-    @param required_delta {float} Guardrail-complete delta before percentage scaling.
-    @param shadow_need {float} Delta required to satisfy the shadow guardrail at `ev_zero`.
-    @param highlight_need {float} Delta required to satisfy the highlight guardrail at `ev_zero`.
-    @param uncovered_shadow {float} Residual shadow deficit after applying `ev_delta`.
-    @param uncovered_highlight {float} Residual highlight deficit after applying `ev_delta`.
-    @param zero_reg {float} Mean absolute distance from `ev_zero` to the regularization anchors.
-    @param score {float} Final objective score minimized by the joint solver.
-    @param anchors {tuple[float, float, float]} Quantized center regularization anchors.
-    @param clipping_safe_delta {float} Histogram-derived maximum symmetric delta allowed by plus-bracket clipping guardrails at `ev_zero`.
-    @param predicted_center_clip {float} Predicted any-channel clipping fraction for the center bracket at `ev_zero`.
-    @param predicted_plus_clip {float} Predicted any-channel clipping fraction for the plus bracket at `ev_zero+ev_delta`.
-    @return {None} Immutable joint auto-exposure solution container.
-    @satisfies REQ-008, REQ-009, REQ-028, REQ-032, REQ-052
+    @param selected_source {str} Heuristic label chosen for `ev_zero`.
+    @param iteration_steps {tuple[AutoEvIterationStep, ...]} Ordered clipping-evaluation steps from iterative bracket expansion.
+    @return {None} Immutable automatic exposure plan container.
+    @satisfies REQ-008, REQ-009, REQ-032, REQ-052, REQ-167, REQ-168
     """
 
     ev_zero: float
     ev_delta: float
-    required_delta: float
-    shadow_need: float
-    highlight_need: float
-    uncovered_shadow: float
-    uncovered_highlight: float
-    zero_reg: float
-    score: float
-    anchors: tuple[float, float, float]
-    clipping_safe_delta: float = 0.0
-    predicted_center_clip: float = 0.0
-    predicted_plus_clip: float = 0.0
+    selected_source: str
+    iteration_steps: tuple["AutoEvIterationStep", ...]
+
+
+@dataclass(frozen=True)
+class AutoEvIterationStep:
+    """@brief Hold one iterative bracket-evaluation step.
+
+    @details Stores one tested `ev_delta` together with the measured shadow and
+    highlight clipping percentages derived from unclipped bracket images at
+    `ev_zero-ev_delta` and `ev_zero+ev_delta`. Side effects: none.
+    @param ev_delta {float} Tested symmetric bracket half-span.
+    @param shadow_clipping_pct {float} Percentage of minus-image pixels with any channel `<=0`.
+    @param highlight_clipping_pct {float} Percentage of plus-image pixels with any channel `>=1`.
+    @return {None} Immutable bracket-step container.
+    @satisfies REQ-167, REQ-168
+    """
+
+    ev_delta: float
+    shadow_clipping_pct: float
+    highlight_clipping_pct: float
+
+
+@dataclass(frozen=True)
+class AutoEvOptions:
+    """@brief Hold automatic exposure bracket-search controls.
+
+    @details Encapsulates the iterative bracket-search thresholds and step size
+    used by automatic exposure planning. Thresholds are expressed as percentages
+    in `0..100`; step is a positive EV increment. Side effects: none.
+    @param shadow_clipping_pct {float} Shadow clipping stop threshold in percent.
+    @param highlight_clipping_pct {float} Highlight clipping stop threshold in percent.
+    @param step {float} Positive EV increment used by iterative bracket expansion.
+    @return {None} Immutable automatic exposure option container.
+    @satisfies REQ-019, REQ-166, REQ-167
+    """
+
+    shadow_clipping_pct: float = DEFAULT_AUTO_EV_SHADOW_CLIPPING
+    highlight_clipping_pct: float = DEFAULT_AUTO_EV_HIGHLIGHT_CLIPPING
+    step: float = DEFAULT_AUTO_EV_STEP
 
 
 @dataclass(frozen=True)
 class AutoZeroEvaluation:
-    """@brief Hold the three automatic EV-zero candidate evaluations.
+    """@brief Hold the three exposure-measure EV evaluations.
 
-    @details Stores the entropy-optimized candidate (`miglior_ev`), the ETTR
-    candidate (`ev_ettr`), and the detail-preservation candidate
-    (`ev_dettaglio`) computed from one normalized linear RGB float image.
+    @details Stores the entropy-optimized candidate (`ev_best`), the ETTR
+    candidate (`ev_ettr`), and the detail-preservation candidate (`ev_detail`)
+    computed from one normalized linear RGB float image.
     Values are rounded to one decimal place before downstream selection.
-    @param miglior_ev {float} Entropy-optimized EV candidate.
+    @param ev_best {float} Entropy-optimized EV candidate.
     @param ev_ettr {float} ETTR EV candidate.
-    @param ev_dettaglio {float} Detail-preservation EV candidate.
+    @param ev_detail {float} Detail-preservation EV candidate.
     @return {None} Immutable center-heuristic evaluation container.
     @satisfies REQ-008, REQ-032, REQ-052
     """
 
-    miglior_ev: float
+    ev_best: float
     ev_ettr: float
-    ev_dettaglio: float
-
-
-@dataclass(frozen=True)
-class AutoEvClippingRiskStats:
-    """@brief Hold histogram-derived clipping-risk metrics for automatic exposure solving.
-
-    @details Stores sorted per-pixel any-channel maxima from the normalized
-    linear base RGB image so the joint automatic solver can estimate clipping
-    fractions for hypothetical bracket exposures without rebuilding bracket
-    images for every candidate. Also stores deterministic percentile summaries
-    and safe positive-EV ceilings used by clipping-aware diagnostics and delta
-    contraction. Complexity: storage `O(N)` where `N=H*W`. Side effects: none.
-    @param sorted_max_rgb {object} Sorted flattened any-channel maxima from the normalized linear base RGB tensor.
-    @param p99_9_max_rgb {float} `99.9`th percentile of per-pixel any-channel maxima.
-    @param p99_99_max_rgb {float} `99.99`th percentile of per-pixel any-channel maxima.
-    @param base_clip_any {float} Fraction of base-image pixels already clipped in at least one RGB channel.
-    @param safe_center_ev {float} Positive-EV ceiling that keeps center-bracket clipping at the strict center target.
-    @param safe_plus_ev {float} Positive-EV ceiling that keeps plus-bracket clipping at the configured plus target.
-    @return {None} Immutable clipping-risk statistics container.
-    @satisfies REQ-008, REQ-028, REQ-052
-    """
-
-    sorted_max_rgb: object
-    p99_9_max_rgb: float
-    p99_99_max_rgb: float
-    base_clip_any: float
-    safe_center_ev: float
-    safe_plus_ev: float
+    ev_detail: float
 
 
 def _print_box_table(headers, rows, header_rows=()):
@@ -900,15 +875,15 @@ def print_help(version):
     _print_help_section("Step 2 - Exposure planning and RAW bracket extraction")
     _print_help_option(
         "--ev=<value>",
-        "Static symmetric bracket EV delta in `0.25 .. MAX_BRACKET` with `0.25` step, where `MAX_BRACKET=((bits_per_color-8)/2)-abs(ev_zero)`.",
+        "Static symmetric bracket EV delta in `0 .. MAX_BRACKET`, where `MAX_BRACKET=((bits_per_color-8)/2)-abs(ev_zero)`.",
         (
             "Mutually exclusive with enabled `--auto-ev`.",
-            "When specified without `--ev-zero`, the static center defaults to `0`.",
+            "The exposure-measure EV triplet is still computed and printed.",
         ),
     )
     _print_help_option(
         "--auto-ev=<enable|disable>",
-        "Fully automatic symmetric exposure solver that jointly resolves `ev_zero` and `ev_delta` from the linear base image and preview luminance statistics.",
+        "Automatic symmetric exposure planner that selects `ev_zero` from the exposure-measure EV triplet and derives `ev_delta` through iterative clipping-threshold expansion.",
         (
             "Default: `enable` when `--ev` is omitted; `disable` when `--ev` is provided.",
             "Rejected when combined with `--ev` or `--ev-zero`.",
@@ -916,15 +891,23 @@ def print_help(version):
     )
     _print_help_option(
         "--ev-zero=<value>",
-        "Static central bracket EV in `-SAFE_ZERO_MAX .. +SAFE_ZERO_MAX` with `0.25` step, where `SAFE_ZERO_MAX=((bits_per_color-8)/2)-1`.",
+        "Static central bracket EV in `-SAFE_ZERO_MAX .. +SAFE_ZERO_MAX`, where `SAFE_ZERO_MAX=((bits_per_color-8)/2)-1`.",
         (
             "Accepted only together with `--ev`.",
-            "Default static center: `0` when omitted.",
+            "Any numeric in-range value is accepted.",
         ),
     )
     _print_help_option(
-        "--auto-ev-pct=<0..100>",
-        f"Scale the joint automatic solver required `ev_delta` toward zero before supported-value clamping. Default: `{DEFAULT_AUTO_EV_PCT:g}`.",
+        "--auto-ev-shadow-clipping=<0..100>",
+        f"Shadow clipping stop threshold in percent for iterative bracket expansion. Default: `{DEFAULT_AUTO_EV_SHADOW_CLIPPING:g}`.",
+    )
+    _print_help_option(
+        "--auto-ev-highlight-clipping=<0..100>",
+        f"Highlight clipping stop threshold in percent for iterative bracket expansion. Default: `{DEFAULT_AUTO_EV_HIGHLIGHT_CLIPPING:g}`.",
+    )
+    _print_help_option(
+        "--auto-ev-step=<value>",
+        f"Positive EV increment used by iterative bracket expansion. Default: `{DEFAULT_AUTO_EV_STEP:g}`.",
     )
 
     _print_help_section("Step 3 - HDR backend selection and backend-local configuration")
@@ -1217,87 +1200,30 @@ def _calculate_safe_ev_zero_max(base_max_ev):
     return max(0.0, base_max_ev - 1.0)
 
 
-def _derive_supported_ev_zero_values(base_max_ev):
-    """@brief Derive non-negative EV-zero quantization set preserving `±1EV` bracket.
-
-    @details Generates deterministic quarter-step tuple in `[0, SAFE_ZERO_MAX]`,
-    where `SAFE_ZERO_MAX=max(0, BASE_MAX-1)` and `BASE_MAX=((bits_per_color-8)/2)`.
-    @param base_max_ev {float} Bit-derived `BASE_MAX` value.
-    @return {tuple[float, ...]} Supported non-negative EV-zero magnitudes including `0.0`.
-    @satisfies DES-003, REQ-018, REQ-030
-    """
-
-    safe_ev_zero_max = _calculate_safe_ev_zero_max(base_max_ev)
-    if safe_ev_zero_max < (EV_STEP - 1e-9):
-        return (0.0,)
-    max_steps = int(math.floor((safe_ev_zero_max / EV_STEP) + 1e-9))
-    return tuple(round(index * EV_STEP, 2) for index in range(0, max_steps + 1))
-
-
-def _derive_supported_signed_ev_zero_values(base_max_ev):
-    """@brief Derive signed EV-zero quantization set preserving `±1EV` bracket.
-
-    @details Generates deterministic quarter-step values in
-    `[-SAFE_ZERO_MAX, +SAFE_ZERO_MAX]`, where
-    `SAFE_ZERO_MAX=max(0, BASE_MAX-1)` and `BASE_MAX=((bits_per_color-8)/2)`.
-    The output always includes `0.0`.
-    @param base_max_ev {float} Bit-derived `BASE_MAX` value.
-    @return {tuple[float, ...]} Supported signed EV-zero candidate tuple.
-    @satisfies DES-003, REQ-028, REQ-029, REQ-030
-    """
-
-    supported_non_negative = _derive_supported_ev_zero_values(base_max_ev)
-    signed_values = {
-        0.0,
-    }
-    for candidate in supported_non_negative:
-        signed_values.add(round(candidate, 2))
-        signed_values.add(round(-candidate, 2))
-    return tuple(sorted(signed_values))
-
-
 def _derive_supported_ev_values(
     bits_per_color,
     ev_zero=0.0,
-    clipping_safe_plus_ev=None,
 ):
-    """@brief Derive valid bracket EV selector set from bit depth, `ev_zero`, and optional clipping cap.
+    """@brief Derive valid bracket EV selector interval from bit depth and `ev_zero`.
 
-    @details Builds deterministic EV selector tuple with fixed `0.25` step in
-    closed range `[0.25, MAX_BRACKET]`, where `MAX_BRACKET` is the minimum of
-    the bit-depth headroom `((bits_per_color-8)/2)-abs(ev_zero)` and the
-    optional histogram-derived clipping-safe headroom
-    `clipping_safe_plus_ev-ev_zero`.
+    @details Computes the maximum valid bracket half-span
+    `MAX_BRACKET=((bits_per_color-8)/2)-abs(ev_zero)` without applying any
+    quantization or histogram-derived contraction.
     @param bits_per_color {int} Detected source DNG bits per color.
     @param ev_zero {float} Central EV selector.
-    @param clipping_safe_plus_ev {float|None} Optional histogram-derived positive-EV ceiling for the brightest bracket.
-    @return {tuple[float, ...]} Supported bracket EV selector tuple.
-    @exception ValueError Raised when bit-derived bracket EV ceiling cannot produce any selector values.
-    @satisfies REQ-026, REQ-027, REQ-028, REQ-030
+    @return {float} Maximum valid bracket half-span.
+    @exception ValueError Raised when bit-derived bracket EV ceiling is not positive.
+    @satisfies REQ-026, REQ-027, REQ-028
     """
 
     base_max_ev = _calculate_max_ev_from_bits(bits_per_color)
-    bit_depth_max_bracket = base_max_ev - abs(ev_zero)
-    max_bracket = bit_depth_max_bracket
-    if clipping_safe_plus_ev is not None:
-        histogram_max_bracket = float(clipping_safe_plus_ev) - float(ev_zero)
-        max_bracket = min(max_bracket, histogram_max_bracket)
-    if max_bracket < (EV_STEP - 1e-9):
+    max_bracket = base_max_ev - abs(float(ev_zero))
+    if max_bracket <= 0.0:
         raise ValueError(
             "Derived bracket EV ceiling is too small for selector generation: "
-            f"{max_bracket:g} "
-            "(effective MAX_BRACKET = min(((bits_per_color-8)/2)-abs(ev_zero), "
-            "clipping_safe_plus_ev-ev_zero))"
+            f"{max_bracket:g} (MAX_BRACKET = ((bits_per_color-8)/2)-abs(ev_zero))"
         )
-    max_steps = int(math.floor((max_bracket / EV_STEP) + 1e-9))
-    if max_steps < 1:
-        raise ValueError(
-            "Derived bracket EV ceiling cannot produce selector values: "
-            f"{max_bracket:g} "
-            "(effective MAX_BRACKET = min(((bits_per_color-8)/2)-abs(ev_zero), "
-            "clipping_safe_plus_ev-ev_zero))"
-        )
-    return tuple(round(index * EV_STEP, 2) for index in range(1, max_steps + 1))
+    return float(max_bracket)
 
 
 def _detect_dng_bits_per_color(raw_handle):
@@ -1347,80 +1273,67 @@ def _detect_dng_bits_per_color(raw_handle):
 
 
 def _is_ev_value_on_supported_step(ev_value):
-    """@brief Validate EV value belongs to fixed `0.25` step grid.
+    """@brief Validate EV value is a finite numeric scalar.
 
-    @details Checks whether EV value can be represented as integer multiples of
-    `0.25` using tolerance-based floating-point comparison.
+    @details Performs finite-number validation only. Step-based validation was
+    removed from manual exposure planning.
     @param ev_value {float} Parsed EV numeric value.
-    @return {bool} `True` when EV value is aligned to `0.25` step.
-    @satisfies REQ-057
+    @return {bool} `True` when EV value is finite.
+    @satisfies REQ-030
     """
 
-    scaled = ev_value / EV_STEP
-    return math.isclose(scaled, round(scaled), rel_tol=0.0, abs_tol=1e-9)
+    return math.isfinite(float(ev_value))
 
 
 def _parse_ev_option(ev_raw):
     """@brief Parse and validate one EV option value.
 
-    @details Converts token to `float`, enforces minimum `0.25`, and enforces
-    fixed `0.25` granularity. Bit-depth upper-bound validation is deferred until
-    RAW metadata is loaded from source DNG.
+    @details Converts token to `float`, enforces finiteness and non-negativity,
+    and defers bit-depth upper-bound validation until RAW metadata is loaded
+    from source DNG.
     @param ev_raw {str} EV token extracted from command arguments.
     @return {float|None} Parsed EV value when valid; `None` otherwise.
-    @satisfies REQ-056, REQ-057
+    @satisfies REQ-030
     """
 
     try:
         ev_value = float(ev_raw)
     except ValueError:
         print_error(f"Invalid --ev value: {ev_raw}")
-        print_error(
-            "Allowed values: 0.25 .. MAX_BRACKET in 0.25 steps "
-            "(MAX_BRACKET = ((bits_per_color-8)/2)-abs(ev_zero))"
-        )
+        print_error("Allowed values: 0 .. MAX_BRACKET")
         return None
 
-    if ev_value < EV_STEP or not _is_ev_value_on_supported_step(ev_value):
+    if ev_value < 0.0 or not _is_ev_value_on_supported_step(ev_value):
         print_error(f"Unsupported --ev value: {ev_raw}")
-        print_error(
-            "Allowed values: 0.25 .. MAX_BRACKET in 0.25 steps "
-            "(MAX_BRACKET = ((bits_per_color-8)/2)-abs(ev_zero))"
-        )
+        print_error("Allowed values: 0 .. MAX_BRACKET")
         return None
 
-    return round(ev_value, 2)
+    return float(ev_value)
 
 
 def _parse_ev_zero_option(ev_zero_raw):
     """@brief Parse and validate one `--ev-zero` option value.
 
-    @details Converts token to `float`, enforces fixed `0.25` granularity, and
-    defers bit-depth bound validation to RAW-metadata runtime stage.
+    @details Converts token to `float`, enforces finiteness, and defers
+    bit-depth bound validation to RAW-metadata runtime stage.
     @param ev_zero_raw {str} EV-zero token extracted from command arguments.
     @return {float|None} Parsed EV-zero value when valid; `None` otherwise.
-    @satisfies REQ-094
+    @satisfies REQ-018, REQ-030
     """
 
     try:
         ev_zero_value = float(ev_zero_raw)
     except ValueError:
         print_error(f"Invalid --ev-zero value: {ev_zero_raw}")
-        print_error(
-            "Allowed values: -SAFE_ZERO_MAX .. +SAFE_ZERO_MAX in 0.25 steps "
-            "(SAFE_ZERO_MAX = ((bits_per_color-8)/2)-1)"
-        )
+        print_error("Allowed values: -SAFE_ZERO_MAX .. +SAFE_ZERO_MAX")
         return None
 
     if not _is_ev_value_on_supported_step(ev_zero_value):
         print_error(f"Unsupported --ev-zero value: {ev_zero_raw}")
-        print_error(
-            "Allowed values: -SAFE_ZERO_MAX .. +SAFE_ZERO_MAX in 0.25 steps "
-            "(SAFE_ZERO_MAX = ((bits_per_color-8)/2)-1)"
-        )
+        print_error("Allowed values: -SAFE_ZERO_MAX .. +SAFE_ZERO_MAX")
         return None
 
-    return round(ev_zero_value, 2)
+    return float(ev_zero_value)
 
 
 def _parse_auto_ev_option(auto_ev_raw):
@@ -1599,99 +1512,6 @@ def _parse_opencv_options(opencv_raw_values):
     )
 
 
-def _clamp_ev_to_supported(ev_candidate, ev_values):
-    """@brief Clamp one EV candidate to supported numeric interval.
-
-    @details Applies lower/upper bound clamp to keep computed adaptive EV value
-    inside configured EV bounds before command generation.
-    @param ev_candidate {float} Candidate EV delta from adaptive optimization.
-    @param ev_values {tuple[float, ...]} Sorted supported EV selector values.
-    @return {float} Clamped EV delta in `[min(ev_values), max(ev_values)]`.
-    @satisfies REQ-028, REQ-030
-    """
-
-    return max(ev_values[0], min(ev_values[-1], ev_candidate))
-
-
-def _quantize_ev_to_supported(ev_value, ev_values):
-    """@brief Quantize one EV value to nearest supported selector value.
-
-    @details Chooses nearest value from `ev_values` to preserve
-    deterministic three-bracket behavior in downstream static multiplier and HDR
-    command construction paths.
-    @param ev_value {float} Clamped EV value.
-    @param ev_values {tuple[float, ...]} Sorted supported EV selector values.
-    @return {float} Nearest supported EV selector value.
-    @satisfies REQ-028, REQ-030
-    """
-
-    nearest_ev = ev_values[0]
-    smallest_distance = abs(ev_value - nearest_ev)
-    for candidate in ev_values[1:]:
-        distance = abs(ev_value - candidate)
-        if distance < smallest_distance:
-            nearest_ev = candidate
-            smallest_distance = distance
-    return nearest_ev
-
-
-def _floor_ev_to_supported_cap(ev_cap, ev_values):
-    """@brief Quantize one EV cap downward to the largest supported selector not exceeding it.
-
-    @details Preserves deterministic quarter-step selector behavior while
-    enforcing upper-bound safety constraints such as histogram-derived clipping
-    caps. When `ev_cap` falls below the minimum supported selector, the minimum
-    selector is returned so the caller can keep symmetric-bracket semantics and
-    let the optimizer move `ev_zero` instead.
-    @param ev_cap {float} Inclusive EV upper cap.
-    @param ev_values {tuple[float, ...]} Sorted supported EV selector values.
-    @return {float} Largest selector `<= ev_cap` when available; otherwise the minimum selector.
-    @satisfies REQ-028, REQ-030
-    """
-
-    for candidate in reversed(ev_values):
-        if candidate <= (float(ev_cap) + 1e-9):
-            return candidate
-    return ev_values[0]
-
-
-def _quantize_ev_toward_zero_step(ev_value, step=EV_STEP):
-    """@brief Quantize one EV value toward zero using fixed step size.
-
-    @details Converts EV value to step units, truncates fractional remainder
-    toward zero, and reconstructs signed EV value using deterministic `0.25`
-    precision rounding.
-    @param ev_value {float} EV value to quantize.
-    @param step {float} Quantization step size.
-    @return {float} Quantized EV value with truncation toward zero.
-    @satisfies REQ-019, REQ-030
-    """
-
-    if math.isclose(ev_value, 0.0, rel_tol=0.0, abs_tol=1e-9):
-        return 0.0
-    step_units = abs(ev_value) / step
-    quantized_units = int(math.floor(step_units + 1e-9))
-    quantized_abs = round(quantized_units * step, 2)
-    if ev_value >= 0.0:
-        return quantized_abs
-    return -quantized_abs
-
-
-def _apply_auto_percentage_scaling(ev_value, percentage):
-    """@brief Apply percentage scaling to EV value with downward 0.25 quantization.
-
-    @details Multiplies EV value by percentage in `[0,100]` and quantizes
-    scaled result toward zero with fixed `0.25` step.
-    @param ev_value {float} EV value before scaling.
-    @param percentage {float} Percentage scaling factor in `[0,100]`.
-    @return {float} Scaled EV value quantized toward zero.
-    @satisfies REQ-019, REQ-030
-    """
-
-    scaled_value = ev_value * (percentage / 100.0)
-    return _quantize_ev_toward_zero_step(scaled_value)
-
-
 def _extract_normalized_preview_luminance_stats(raw_handle):
     """@brief Extract normalized preview luminance percentiles from RAW handle.
 
@@ -1737,9 +1557,9 @@ def _extract_normalized_preview_luminance_stats(raw_handle):
         upper_value = flat_luminance[upper_index]
         return lower_value + ((upper_value - lower_value) * weight)
 
-    p_low_raw = _percentile(AUTO_EV_LOW_PERCENTILE)
-    p_median_raw = _percentile(AUTO_EV_MEDIAN_PERCENTILE)
-    p_high_raw = _percentile(AUTO_EV_HIGH_PERCENTILE)
+    p_low_raw = _percentile(0.1)
+    p_median_raw = _percentile(50.0)
+    p_high_raw = _percentile(99.9)
 
     max_luminance = max(flat_luminance)
     if max_luminance <= 0.0:
@@ -2095,7 +1915,7 @@ def _smoothstep(np_module, values, edge0, edge1):
     return normalized * normalized * (3.0 - (2.0 * normalized))
 
 
-def _calculate_entropy_optimized_ev(cv2_module, np_module, luminance_float):
+def _calculate_entropy_optimized_ev(_cv2_module, np_module, luminance_float):
     """@brief Compute the entropy-optimized EV candidate on linear luminance.
 
     @details Sweeps EV values in range `[-3.0,+3.0]` with step `0.1`, scales the
@@ -2103,7 +1923,7 @@ def _calculate_entropy_optimized_ev(cv2_module, np_module, luminance_float):
     clipped image directly to 8-bit linear code values, evaluates histogram
     entropy with clipping penalties, and returns the highest-score EV rounded to
     one decimal place. Complexity: O(K*H*W)` where `K=61`. Side effects: none.
-    @param cv2_module {ModuleType} Imported OpenCV module.
+    @param cv2_module {ModuleType|None} Optional OpenCV module retained for call compatibility.
     @param np_module {ModuleType} Imported numpy module.
     @param luminance_float {object} Linear luminance tensor normalized to `[0,1]`.
     @return {float} Entropy-optimized EV candidate rounded to one decimal place.
@@ -2122,8 +1942,8 @@ def _calculate_entropy_optimized_ev(cv2_module, np_module, luminance_float):
             1.0,
         )
         luminance_8bit = (simulated * 255.0).astype(np_module.uint8)
-        histogram = cv2_module.calcHist([luminance_8bit], [0], None, [256], [0, 256])
-        histogram = histogram.flatten().astype(np_module.float64)
+        histogram = np_module.bincount(luminance_8bit.ravel(), minlength=256)
+        histogram = histogram.astype(np_module.float64)
         histogram_sum = float(histogram.sum())
         if histogram_sum <= 0.0:
             continue
@@ -2161,7 +1981,7 @@ def _calculate_ettr_ev(np_module, luminance_float):
     return round(math.log2(0.90 / luminance_p99), 1)
 
 
-def _calculate_detail_preservation_ev(cv2_module, np_module, luminance_float):
+def _calculate_detail_preservation_ev(_cv2_module, np_module, luminance_float):
     """@brief Compute the detail-preservation EV candidate on linear luminance.
 
     @details Builds local-detail weights from Sobel gradients on
@@ -2181,10 +2001,11 @@ def _calculate_detail_preservation_ev(cv2_module, np_module, luminance_float):
     luminance_float32 = np_module.array(luminance_float, dtype=np_module.float32, copy=False)
     epsilon = 1e-6
     log_luminance = np_module.log(luminance_float32 + epsilon)
-    gradient_x = cv2_module.Sobel(log_luminance, cv2_module.CV_32F, 1, 0, ksize=3)
-    gradient_y = cv2_module.Sobel(log_luminance, cv2_module.CV_32F, 0, 1, ksize=3)
-    detail_map = np_module.sqrt((gradient_x * gradient_x) + (gradient_y * gradient_y))
-    detail_map = cv2_module.GaussianBlur(detail_map, (3, 3), 0)
+    if min(log_luminance.shape) < 2:
+        detail_map = np_module.zeros_like(log_luminance, dtype=np_module.float32)
+    else:
+        gradient_y, gradient_x = np_module.gradient(log_luminance)
+        detail_map = np_module.sqrt((gradient_x * gradient_x) + (gradient_y * gradient_y))
     texture_threshold = float(np_module.percentile(detail_map, 40.0))
     detail_map = np_module.where(detail_map >= texture_threshold, detail_map, 0.0).astype(
         np_module.float32
@@ -2234,7 +2055,7 @@ def _calculate_auto_zero_evaluations(cv2_module, np_module, image_rgb_float):
     @details Migrates `calcola_correzioni_ev(immagine_float)` from the external
     prototype into the current pipeline, adapts it to the repository linear
     gamma=`1` RGB float contract, computes BT.709 luminance, evaluates
-    `miglior_ev`, `ev_ettr`, and `ev_dettaglio`, and returns all three rounded
+    `ev_best`, `ev_ettr`, and `ev_detail`, and returns all three rounded
     candidates without applying selector quantization. Complexity: dominated by
     the EV sweeps in entropy/detail evaluation. Side effects: none.
     @param cv2_module {ModuleType} Imported OpenCV module.
@@ -2249,413 +2070,226 @@ def _calculate_auto_zero_evaluations(cv2_module, np_module, image_rgb_float):
         image_rgb_float=image_rgb_float,
     )
     return AutoZeroEvaluation(
-        miglior_ev=_calculate_entropy_optimized_ev(
-            cv2_module=cv2_module,
-            np_module=np_module,
-            luminance_float=luminance_float,
+        ev_best=_calculate_entropy_optimized_ev(
+            cv2_module,
+            np_module,
+            luminance_float,
         ),
         ev_ettr=_calculate_ettr_ev(
             np_module=np_module,
             luminance_float=luminance_float,
         ),
-        ev_dettaglio=_calculate_detail_preservation_ev(
-            cv2_module=cv2_module,
-            np_module=np_module,
-            luminance_float=luminance_float,
+        ev_detail=_calculate_detail_preservation_ev(
+            cv2_module,
+            np_module,
+            luminance_float,
         ),
     )
 
 
-def _build_auto_ev_clipping_risk_stats(np_module, base_rgb_float):
-    """@brief Build histogram-derived clipping-risk metrics from the linear base RGB image.
+def _select_ev_zero_candidate(evaluations, safe_ev_zero_max):
+    """@brief Select `ev_zero` from the exposure-measure EV triplet.
 
-    @details Computes sorted per-pixel any-channel maxima from the normalized
-    linear base RGB tensor, derives `99.9` and `99.99` percentile summaries,
-    measures the already-clipped base fraction, and converts the percentile
-    maxima into positive-EV ceilings for clipping-aware automatic exposure
-    solving. Complexity: `O(N log N)` where `N=H*W`. Side effects: none.
+    @details Clamps the three EV measures into the signed safe range and selects
+    the minimum absolute-value candidate using deterministic tie-break order
+    `abs(value) -> declaration order -> numeric value`.
+    @param evaluations {AutoZeroEvaluation} Exposure-measure EV values.
+    @param safe_ev_zero_max {float} Bit-derived absolute safe EV-zero ceiling.
+    @return {tuple[float, str]} Selected `(ev_zero, source_label)` pair.
+    @satisfies REQ-032
+    """
+
+    candidates = (
+        ("ev_best", evaluations.ev_best),
+        ("ev_ettr", evaluations.ev_ettr),
+        ("ev_detail", evaluations.ev_detail),
+    )
+    best = None
+    for index, (label, raw_value) in enumerate(candidates):
+        candidate_value = max(-safe_ev_zero_max, min(safe_ev_zero_max, float(raw_value)))
+        sort_key = (round(abs(candidate_value), 9), index, round(candidate_value, 9))
+        if best is None or sort_key < best[0]:
+            best = (sort_key, candidate_value, label)
+    if best is None:
+        raise ValueError("Exposure-measure EV selection requires at least one candidate")
+    _, selected_value, selected_label = best
+    return (selected_value, selected_label)
+
+
+
+def _build_unclipped_bracket_images_from_linear_base_float(
+    np_module,
+    base_rgb_float,
+    ev_delta,
+    ev_zero,
+):
+    """@brief Build unclipped bracket tensors from the shared linear base image.
+
+    @details Applies exposure multipliers for `ev_zero-ev_delta`, `ev_zero`, and
+    `ev_zero+ev_delta` without clipping to `[0,1]`.
     @param np_module {ModuleType} Imported numpy module.
-    @param base_rgb_float {object} Normalized linear base RGB tensor in `[0,1]`.
-    @return {AutoEvClippingRiskStats} Histogram-derived clipping-risk metrics.
-    @satisfies REQ-008, REQ-028, REQ-052, REQ-158
+    @param base_rgb_float {object} Normalized linear base RGB tensor.
+    @param ev_delta {float} Symmetric bracket half-span.
+    @param ev_zero {float} Bracket center EV.
+    @return {tuple[object, object, object]} Unclipped `(ev_minus, ev_zero, ev_plus)` tensors.
+    @satisfies REQ-167
     """
 
     normalized_base = _normalize_float_rgb_image(
         np_module=np_module,
         image_data=base_rgb_float,
     ).astype(np_module.float32, copy=False)
-    max_rgb = np_module.max(normalized_base, axis=2).reshape(-1)
-    sorted_max_rgb = np_module.sort(np_module.clip(max_rgb, 0.0, 1.0))
-    if sorted_max_rgb.size == 0:
-        raise ValueError("Automatic exposure clipping-risk analysis requires non-empty base image")
-    p99_9_max_rgb = float(np_module.percentile(sorted_max_rgb, 99.9))
-    p99_99_max_rgb = float(np_module.percentile(sorted_max_rgb, 99.99))
-    base_clip_any = float(np_module.mean(sorted_max_rgb >= (1.0 - AUTO_EV_CLIP_EPS)))
-    safe_center_ev = max(
-        0.0,
-        math.log2(
-            1.0
-            / max(
-                p99_99_max_rgb,
-                AUTO_EV_CLIP_EPS,
-            )
-        ),
+    minus_multiplier, center_multiplier, plus_multiplier = _build_exposure_multipliers(
+        ev_delta,
+        ev_zero=ev_zero,
     )
-    safe_plus_ev = max(
-        0.0,
-        math.log2(
-            1.0
-            / max(
-                p99_9_max_rgb,
-                AUTO_EV_CLIP_EPS,
-            )
-        ),
-    )
-    return AutoEvClippingRiskStats(
-        sorted_max_rgb=sorted_max_rgb,
-        p99_9_max_rgb=round(p99_9_max_rgb, 6),
-        p99_99_max_rgb=round(p99_99_max_rgb, 6),
-        base_clip_any=round(base_clip_any, 6),
-        safe_center_ev=round(safe_center_ev, 6),
-        safe_plus_ev=round(safe_plus_ev, 6),
+    return (
+        normalized_base * minus_multiplier,
+        normalized_base * center_multiplier,
+        normalized_base * plus_multiplier,
     )
 
 
-def _estimate_auto_ev_any_channel_clip_fraction(clipping_risk_stats, exposure_ev):
-    """@brief Estimate any-channel clipping fraction for one hypothetical exposure EV.
 
-    @details Reuses sorted per-pixel any-channel maxima from the linear base RGB
-    image. A pixel clips when `max_rgb * 2**exposure_ev >= 1`. The function
-    converts that condition into a scalar threshold and uses binary search over
-    the sorted maxima to estimate the fraction of clipped pixels in `O(log N)`.
-    Side effects: none.
-    @param clipping_risk_stats {AutoEvClippingRiskStats} Histogram-derived clipping-risk metrics.
-    @param exposure_ev {float} Exposure EV applied to the linear base RGB tensor.
-    @return {float} Predicted fraction of pixels clipped in at least one RGB channel.
-    @satisfies REQ-008, REQ-028, REQ-052
+def _measure_any_channel_highlight_clipping_pct(np_module, image_rgb_float):
+    """@brief Measure highlight clipping percentage for one RGB image.
+
+    @details Counts pixels where any RGB channel is greater than or equal to
+    `1` and returns the result in percent.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_float {object} RGB image tensor.
+    @return {float} Highlight clipping percentage in `0..100`.
+    @satisfies REQ-168
     """
 
-    sorted_max_rgb = clipping_risk_stats.sorted_max_rgb
-    if float(exposure_ev) <= 0.0:
-        threshold = 1.0 + AUTO_EV_CLIP_EPS
-    else:
-        threshold = 2.0 ** (-float(exposure_ev))
-    clipped_start = int(sorted_max_rgb.searchsorted(threshold, side="left"))
-    clipped_count = int(sorted_max_rgb.size) - clipped_start
-    return clipped_count / float(sorted_max_rgb.size)
+    return round(
+        float(np_module.mean(np_module.any(image_rgb_float >= 1.0, axis=2)) * 100.0),
+        6,
+    )
 
 
-def _build_joint_auto_ev_regularization_anchors(evaluations, safe_ev_zero_max):
-    """@brief Build quantized center anchors for the joint automatic solver.
 
-    @details Clamps the three raw center heuristics into the signed safe-center
-    interval and quantizes each anchor to the nearest supported quarter-step.
-    @param evaluations {AutoZeroEvaluation} Raw center heuristics from the linear base image.
-    @param safe_ev_zero_max {float} Bit-derived absolute safe EV-zero ceiling.
-    @return {tuple[float, float, float]} Quantized anchors in heuristic order.
-    @satisfies REQ-008, REQ-029, REQ-030, REQ-032
+def _measure_any_channel_shadow_clipping_pct(np_module, image_rgb_float):
+    """@brief Measure shadow clipping percentage for one RGB image.
+
+    @details Counts pixels where any RGB channel is less than or equal to `0`
+    and returns the result in percent.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_float {object} RGB image tensor.
+    @return {float} Shadow clipping percentage in `0..100`.
+    @satisfies REQ-168
     """
 
-    supported_zero_values = _derive_supported_signed_ev_zero_values(safe_ev_zero_max + 1.0)
-    anchors = []
-    for raw_anchor in (
-        evaluations.miglior_ev,
-        evaluations.ev_ettr,
-        evaluations.ev_dettaglio,
-    ):
-        clamped_anchor = max(-safe_ev_zero_max, min(safe_ev_zero_max, raw_anchor))
-        anchors.append(_quantize_ev_to_supported(clamped_anchor, supported_zero_values))
-    return tuple(anchors)
-
-
-def _evaluate_joint_auto_ev_candidate(
-    bits_per_color,
-    ev_zero_candidate,
-    anchors,
-    p_low,
-    p_high,
-    auto_ev_pct,
-    clipping_risk_stats=None,
-):
-    """@brief Evaluate one discrete joint automatic exposure candidate.
-
-    @details Computes the minimum symmetric delta required by the shadow and
-    highlight guardrails at the candidate center, optionally contracts the
-    resulting delta by histogram-derived clipping-safe headroom, measures
-    residual uncovered guardrail demand, predicts center/plus clipping
-    fractions, and evaluates soft center regularization from the three
-    quantized anchors.
-    @param bits_per_color {int} Detected source DNG bits per color.
-    @param ev_zero_candidate {float} Signed center candidate on the supported quarter-step grid.
-    @param anchors {tuple[float, float, float]} Quantized center regularization anchors.
-    @param p_low {float} Normalized low-percentile preview luminance.
-    @param p_high {float} Normalized high-percentile preview luminance.
-    @param auto_ev_pct {float} Percentage scaler applied to the required automatic delta.
-    @param clipping_risk_stats {AutoEvClippingRiskStats|None} Optional histogram-derived clipping-risk metrics from the linear base RGB image.
-    @return {JointAutoEvSolution} Fully scored candidate solution.
-    @satisfies REQ-008, REQ-009, REQ-019, REQ-028, REQ-030, REQ-031, REQ-032, REQ-052
-    """
-
-    clipping_safe_delta = None
-    invalid_clipping_candidate = False
-    if clipping_risk_stats is not None:
-        clipping_safe_delta = max(
-            0.0,
-            float(clipping_risk_stats.safe_plus_ev) - float(ev_zero_candidate),
-        )
-    bit_supported_deltas = _derive_supported_ev_values(
-        bits_per_color,
-        ev_zero=ev_zero_candidate,
-    )
-    supported_deltas = bit_supported_deltas
-    if clipping_risk_stats is not None:
-        try:
-            supported_deltas = _derive_supported_ev_values(
-                bits_per_color,
-                ev_zero=ev_zero_candidate,
-                clipping_safe_plus_ev=float(clipping_risk_stats.safe_plus_ev),
-            )
-        except ValueError:
-            invalid_clipping_candidate = True
-    shadow_need = max(0.0, math.log2(AUTO_EV_TARGET_SHADOW / p_low) - ev_zero_candidate)
-    highlight_need = max(
-        0.0,
-        ev_zero_candidate - math.log2(AUTO_EV_TARGET_HIGHLIGHT / p_high),
-    )
-    raw_required_delta = max(shadow_need, highlight_need, EV_STEP)
-    required_delta = _quantize_ev_to_supported(
-        _clamp_ev_to_supported(raw_required_delta, supported_deltas),
-        supported_deltas,
-    )
-    effective_delta = _clamp_ev_to_supported(
-        _apply_auto_percentage_scaling(required_delta, auto_ev_pct),
-        bit_supported_deltas,
-    )
-    if clipping_safe_delta is not None and not invalid_clipping_candidate:
-        effective_delta = min(
-            effective_delta,
-            _floor_ev_to_supported_cap(clipping_safe_delta, supported_deltas),
-        )
-    uncovered_shadow = max(0.0, shadow_need - effective_delta)
-    uncovered_highlight = max(0.0, highlight_need - effective_delta)
-    zero_reg = (
-        abs(ev_zero_candidate - anchors[0])
-        + abs(ev_zero_candidate - anchors[1])
-        + abs(ev_zero_candidate - anchors[2])
-    ) / 3.0
-    predicted_center_clip = 0.0
-    predicted_plus_clip = 0.0
-    clip_overflow = 0.0
-    if clipping_risk_stats is not None:
-        predicted_center_clip = _estimate_auto_ev_any_channel_clip_fraction(
-            clipping_risk_stats=clipping_risk_stats,
-            exposure_ev=ev_zero_candidate,
-        )
-        predicted_plus_clip = _estimate_auto_ev_any_channel_clip_fraction(
-            clipping_risk_stats=clipping_risk_stats,
-            exposure_ev=ev_zero_candidate + effective_delta,
-        )
-        clip_overflow = max(
-            0.0,
-            predicted_center_clip - AUTO_EV_CENTER_CLIP_TARGET_FRACTION,
-        ) + max(
-            0.0,
-            predicted_plus_clip - AUTO_EV_PLUS_CLIP_TARGET_FRACTION,
-        )
-        if invalid_clipping_candidate:
-            clip_overflow += 1.0
-    score = (
-        64.0 * (uncovered_shadow + uncovered_highlight)
-        + zero_reg
-    )
-    if clipping_risk_stats is None:
-        score += 2.0 * effective_delta
-    else:
-        shadow_limited_by_clipping = (
-            clipping_safe_delta is not None
-            and required_delta > (clipping_safe_delta + 1e-9)
-            and not invalid_clipping_candidate
-        )
-        if shadow_limited_by_clipping:
-            score -= 4.0 * effective_delta
-        else:
-            score += 2.0 * effective_delta
-        score += 65536.0 * clip_overflow
-    return JointAutoEvSolution(
-        ev_zero=round(ev_zero_candidate, 2),
-        ev_delta=round(effective_delta, 2),
-        required_delta=round(required_delta, 2),
-        shadow_need=round(shadow_need, 6),
-        highlight_need=round(highlight_need, 6),
-        uncovered_shadow=round(uncovered_shadow, 6),
-        uncovered_highlight=round(uncovered_highlight, 6),
-        zero_reg=round(zero_reg, 6),
-        score=round(score, 6),
-        anchors=anchors,
-        clipping_safe_delta=round(clipping_safe_delta or 0.0, 6),
-        predicted_center_clip=round(predicted_center_clip, 6),
-        predicted_plus_clip=round(predicted_plus_clip, 6),
+    return round(
+        float(np_module.mean(np_module.any(image_rgb_float <= 0.0, axis=2)) * 100.0),
+        6,
     )
 
-
-def _optimize_joint_ev_zero_and_delta(
-    bits_per_color,
-    base_max_ev,
-    preview_luminance_stats,
-    auto_ev_pct,
-    evaluations,
-    clipping_risk_stats=None,
-):
-    """@brief Optimize one symmetric automatic solution over `(ev_zero, ev_delta)`.
-
-    @details Enumerates every signed safe-center candidate on the supported
-    quarter-step grid, evaluates the candidate score, then applies the
-    deterministic tie-break chain:
-    `score -> delta-preference -> zero_reg -> mean-anchor-distance -> abs(ev_zero) -> ev_zero`.
-    @param bits_per_color {int} Detected source DNG bits per color.
-    @param base_max_ev {float} Bit-derived `BASE_MAX` ceiling.
-    @param preview_luminance_stats {tuple[float, float, float]} Normalized preview `(p_low, p_median, p_high)` statistics.
-    @param auto_ev_pct {float} Percentage scaler applied to the required automatic delta.
-    @param evaluations {AutoZeroEvaluation} Raw center heuristics from the linear base image.
-    @param clipping_risk_stats {AutoEvClippingRiskStats|None} Optional histogram-derived clipping-risk metrics from the linear base RGB image.
-    @return {JointAutoEvSolution} Selected joint automatic solution.
-    @satisfies REQ-008, REQ-009, REQ-019, REQ-028, REQ-029, REQ-030, REQ-031, REQ-032, REQ-052
-    """
-
-    safe_ev_zero_max = _calculate_safe_ev_zero_max(base_max_ev)
-    p_low, _p_median, p_high = preview_luminance_stats
-    anchors = _build_joint_auto_ev_regularization_anchors(
-        evaluations=evaluations,
-        safe_ev_zero_max=safe_ev_zero_max,
-    )
-    anchor_mean = sum(anchors) / float(len(anchors))
-    best_solution = None
-    best_sort_key = None
-    for ev_zero_candidate in _derive_supported_signed_ev_zero_values(base_max_ev):
-        candidate_solution = _evaluate_joint_auto_ev_candidate(
-            bits_per_color=bits_per_color,
-            ev_zero_candidate=ev_zero_candidate,
-            anchors=anchors,
-            p_low=p_low,
-            p_high=p_high,
-            auto_ev_pct=auto_ev_pct,
-            clipping_risk_stats=clipping_risk_stats,
-        )
-        shadow_limited_by_clipping = (
-            clipping_risk_stats is not None
-            and candidate_solution.required_delta
-            > (candidate_solution.clipping_safe_delta + 1e-9)
-        )
-        delta_preference = (
-            round(-candidate_solution.ev_delta, 2)
-            if shadow_limited_by_clipping
-            else round(candidate_solution.ev_delta, 2)
-        )
-        sort_key = (
-            round(candidate_solution.score, 6),
-            delta_preference,
-            round(candidate_solution.zero_reg, 6),
-            round(abs(candidate_solution.ev_zero - anchor_mean), 6),
-            round(abs(candidate_solution.ev_zero), 6),
-            round(candidate_solution.ev_zero, 2),
-        )
-        if best_sort_key is None or sort_key < best_sort_key:
-            best_solution = candidate_solution
-            best_sort_key = sort_key
-    if best_solution is None:
-        raise ValueError("Joint auto exposure solver produced no candidates")
-    return best_solution
 
 
 def _resolve_joint_auto_ev_solution(
     raw_handle,
     bits_per_color,
     base_max_ev,
-    auto_ev_pct,
+    auto_ev_options,
     auto_adjust_dependencies=None,
-    preview_luminance_stats=None,
     base_rgb_float=None,
-    clipping_risk_stats=None,
 ):
     """@brief Resolve the automatic symmetric exposure plan.
 
-    @details Loads the required numeric dependencies, extracts preview
-    statistics and one linear base image at most once, computes the three center
-    heuristics, optimizes the joint symmetric automatic solution, and prints the
-    deterministic runtime diagnostics required by the exposure subsystem.
+    @details Loads the required numeric dependencies, extracts one linear base
+    image at most once, computes the exposure-measure EV triplet, selects
+    `ev_zero` by minimum absolute value, then expands the bracket iteratively
+    until clipping thresholds are reached or the bit-depth ceiling is hit.
     @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
     @param bits_per_color {int} Detected source DNG bits per color.
     @param base_max_ev {float} Bit-derived `BASE_MAX` ceiling.
-    @param auto_ev_pct {float} Percentage scaler applied to the required automatic delta.
+    @param auto_ev_options {AutoEvOptions} Automatic clipping thresholds and EV increment.
     @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2_module, numpy_module)` tuple.
-    @param preview_luminance_stats {tuple[float, float, float]|None} Optional precomputed preview luminance statistics.
     @param base_rgb_float {object|None} Optional precomputed normalized linear base RGB image.
-    @param clipping_risk_stats {AutoEvClippingRiskStats|None} Optional histogram-derived clipping-risk metrics for the normalized linear base RGB image.
     @return {JointAutoEvSolution} Selected joint automatic exposure solution.
     @exception RuntimeError Raised when required `cv2` or `numpy` dependencies are unavailable.
-    @satisfies REQ-008, REQ-009, REQ-028, REQ-031, REQ-032, REQ-037, REQ-052
+    @satisfies REQ-008, REQ-009, REQ-028, REQ-031, REQ-032, REQ-037, REQ-052, REQ-167, REQ-168
     """
 
+    del raw_handle
     if auto_adjust_dependencies is None:
-        resolved_dependencies = _resolve_auto_adjust_dependencies()
-        if resolved_dependencies is None:
-            raise RuntimeError("Missing required dependencies: opencv-python and numpy")
-        cv2_module, np_module = resolved_dependencies
+        np_module = _resolve_numpy_dependency()
+        if np_module is None:
+            raise RuntimeError("Missing required dependency: numpy")
+        cv2_module = None
     else:
-        cv2_module, np_module = auto_adjust_dependencies
-    if preview_luminance_stats is None:
-        preview_luminance_stats = _extract_normalized_preview_luminance_stats(raw_handle)
+        resolved_dependencies = auto_adjust_dependencies
+        if resolved_dependencies is None:
+            raise RuntimeError("Missing required dependency tuple")
+        cv2_module, np_module = resolved_dependencies
     if base_rgb_float is None:
-        base_rgb_float = _extract_base_rgb_linear_float(
-            raw_handle=raw_handle,
-            np_module=np_module,
-        )
-    if clipping_risk_stats is None:
-        clipping_risk_stats = _build_auto_ev_clipping_risk_stats(
-            np_module=np_module,
-            base_rgb_float=base_rgb_float,
-        )
+        raise ValueError("Automatic exposure planning requires base_rgb_float")
     evaluations = _calculate_auto_zero_evaluations(
         cv2_module=cv2_module,
         np_module=np_module,
         image_rgb_float=base_rgb_float,
     )
-    solution = _optimize_joint_ev_zero_and_delta(
-        bits_per_color=bits_per_color,
-        base_max_ev=base_max_ev,
-        preview_luminance_stats=preview_luminance_stats,
-        auto_ev_pct=auto_ev_pct,
+    safe_ev_zero_max = _calculate_safe_ev_zero_max(base_max_ev)
+    selected_ev_zero, selected_source = _select_ev_zero_candidate(
         evaluations=evaluations,
-        clipping_risk_stats=clipping_risk_stats,
+        safe_ev_zero_max=safe_ev_zero_max,
     )
-    print_info(f"Auto-EV heuristic miglior_ev: {evaluations.miglior_ev:+.1f} EV")
-    print_info(f"Auto-EV heuristic ev_ettr: {evaluations.ev_ettr:+.1f} EV")
-    print_info(f"Auto-EV heuristic ev_dettaglio: {evaluations.ev_dettaglio:+.1f} EV")
+    max_bracket = _derive_supported_ev_values(
+        bits_per_color=bits_per_color,
+        ev_zero=selected_ev_zero,
+    )
+    ev_delta = float(auto_ev_options.step)
+    iteration_steps = []
+    while True:
+        if ev_delta > (max_bracket + _EV_SELECTION_EPS):
+            ev_delta = max_bracket
+        ev_minus, _ev_center, ev_plus = _build_unclipped_bracket_images_from_linear_base_float(
+            np_module=np_module,
+            base_rgb_float=base_rgb_float,
+            ev_delta=ev_delta,
+            ev_zero=selected_ev_zero,
+        )
+        shadow_pct = _measure_any_channel_shadow_clipping_pct(np_module, ev_minus)
+        highlight_pct = _measure_any_channel_highlight_clipping_pct(np_module, ev_plus)
+        iteration_steps.append(
+            AutoEvIterationStep(
+                ev_delta=round(ev_delta, 6),
+                shadow_clipping_pct=shadow_pct,
+                highlight_clipping_pct=highlight_pct,
+            )
+        )
+        if (
+            highlight_pct >= auto_ev_options.highlight_clipping_pct
+            or shadow_pct > auto_ev_options.shadow_clipping_pct
+            or ev_delta >= (max_bracket - _EV_SELECTION_EPS)
+        ):
+            break
+        ev_delta += auto_ev_options.step
+    print_info(f"Exposure Misure EV ev_best: {evaluations.ev_best:+.1f} EV")
+    print_info(f"Exposure Misure EV ev_ettr: {evaluations.ev_ettr:+.1f} EV")
+    print_info(f"Exposure Misure EV ev_detail: {evaluations.ev_detail:+.1f} EV")
     print_info(
-        "Auto-EV regularization anchors: "
-        + ", ".join(f"{anchor:+.2f}" for anchor in solution.anchors)
+        "Exposure planning selected ev_zero: "
+        f"{selected_ev_zero:+.6f} EV (source={selected_source})"
     )
+    for step in iteration_steps:
+        print_info(
+            "Bracket step: "
+            f"ev_delta={step.ev_delta:.6f}, "
+            f"shadow_clipping_pct={step.shadow_clipping_pct:.6f}, "
+            f"highlight_clipping_pct={step.highlight_clipping_pct:.6f}"
+        )
     print_info(
-        "Auto-EV clipping-risk metrics: "
-        f"p99.9MaxRGB={clipping_risk_stats.p99_9_max_rgb:.6f}, "
-        f"p99.99MaxRGB={clipping_risk_stats.p99_99_max_rgb:.6f}, "
-        f"baseClipAny={clipping_risk_stats.base_clip_any:.6f}, "
-        f"safeCenterEV={clipping_risk_stats.safe_center_ev:.2f}, "
-        f"safePlusEV={clipping_risk_stats.safe_plus_ev:.2f}"
+        "Exposure planning selected bracket half-span: "
+        f"{iteration_steps[-1].ev_delta:.6f} EV"
     )
-    print_info(
-        "Auto-EV selected joint solution: "
-        f"ev_zero={solution.ev_zero:+.2f}, "
-        f"ev_delta={solution.ev_delta:.2f}, "
-        f"required_delta={solution.required_delta:.2f}, "
-        f"clipping_safe_delta={solution.clipping_safe_delta:.2f}, "
-        f"score={solution.score:.6f}, "
-        f"uncovered_shadow={solution.uncovered_shadow:.6f}, "
-        f"uncovered_highlight={solution.uncovered_highlight:.6f}, "
-        f"predicted_center_clip={solution.predicted_center_clip:.6f}, "
-        f"predicted_plus_clip={solution.predicted_plus_clip:.6f}"
+    return JointAutoEvSolution(
+        ev_zero=round(selected_ev_zero, 6),
+        ev_delta=round(iteration_steps[-1].ev_delta, 6),
+        selected_source=selected_source,
+        iteration_steps=tuple(iteration_steps),
     )
-    return solution
 
 
 def _parse_luminance_text_option(option_name, option_raw):
@@ -3456,7 +3090,8 @@ def _parse_run_options(args):
     @details Supports positional file arguments, static exposure selectors
     (`--ev=<value>`/`--ev <value>` plus optional `--ev-zero=<value>`),
     automatic exposure selector (`--auto-ev[=<enable|disable>]`) with explicit
-    mutual exclusion against `--ev`, optional `--auto-ev-pct=<0..100>`,
+    mutual exclusion against `--ev`, optional automatic exposure clipping and
+    step controls,
     optional postprocess controls, optional auto-brightness stage and
     `--ab-*` knobs, optional auto-levels stage and `--al-*` knobs,
     optional shared auto-adjust knobs, optional backend selector
@@ -3467,7 +3102,7 @@ def _parse_run_options(args):
     optional `--debug` persistent checkpoint emission; rejects removed
     `--gamma`, rejects unknown options, and rejects invalid arity.
     @param args {list[str]} Raw command argument vector.
-    @return {tuple[Path, Path, float|None, bool, PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, float]|None} Parsed `(input, output, ev, auto_ev, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, auto_ev_pct)` tuple; `None` on parse failure.
+    @return {tuple[Path, Path, float|None, bool, PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, bool, AutoEvOptions]|None} Parsed `(input, output, ev, auto_ev, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, ev_zero_specified, auto_ev_options)` tuple; `None` on parse failure.
     @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-020, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146
     """
 
@@ -3476,7 +3111,7 @@ def _parse_run_options(args):
     auto_ev_enabled = None
     ev_zero = 0.0
     ev_zero_specified = False
-    auto_ev_pct = DEFAULT_AUTO_EV_PCT
+    auto_ev_options = AutoEvOptions()
     post_gamma = DEFAULT_POST_GAMMA
     brightness = DEFAULT_BRIGHTNESS
     contrast = DEFAULT_CONTRAST
@@ -3909,24 +3544,108 @@ def _parse_run_options(args):
             print_error("Removed option: --auto-zero-pct")
             return None
 
-        if token == "--auto-ev-pct":
+        if token in (
+            "--auto-ev-shadow-target",
+            "--auto-ev-highlight-target",
+            "--auto-ev-pct",
+        ) or token.startswith(
+            (
+                "--auto-ev-shadow-target=",
+                "--auto-ev-highlight-target=",
+                "--auto-ev-pct=",
+            )
+        ):
+            print_error(f"Removed option: {token.split('=', 1)[0]}")
+            return None
+
+        if token == "--auto-ev-shadow-clipping":
             if idx + 1 >= len(args):
-                print_error("Missing value for --auto-ev-pct")
+                print_error("Missing value for --auto-ev-shadow-clipping")
                 return None
-            parsed_auto_ev_pct = _parse_percentage_option("--auto-ev-pct", args[idx + 1])
-            if parsed_auto_ev_pct is None:
+            parsed_threshold = _parse_percentage_option(
+                "--auto-ev-shadow-clipping", args[idx + 1]
+            )
+            if parsed_threshold is None:
                 return None
-            auto_ev_pct = parsed_auto_ev_pct
+            auto_ev_options = AutoEvOptions(
+                shadow_clipping_pct=parsed_threshold,
+                highlight_clipping_pct=auto_ev_options.highlight_clipping_pct,
+                step=auto_ev_options.step,
+            )
             idx += 2
             continue
 
-        if token.startswith("--auto-ev-pct="):
-            parsed_auto_ev_pct = _parse_percentage_option(
-                "--auto-ev-pct", token.split("=", 1)[1]
+        if token.startswith("--auto-ev-shadow-clipping="):
+            parsed_threshold = _parse_percentage_option(
+                "--auto-ev-shadow-clipping", token.split("=", 1)[1]
             )
-            if parsed_auto_ev_pct is None:
+            if parsed_threshold is None:
                 return None
-            auto_ev_pct = parsed_auto_ev_pct
+            auto_ev_options = AutoEvOptions(
+                shadow_clipping_pct=parsed_threshold,
+                highlight_clipping_pct=auto_ev_options.highlight_clipping_pct,
+                step=auto_ev_options.step,
+            )
+            idx += 1
+            continue
+
+        if token == "--auto-ev-highlight-clipping":
+            if idx + 1 >= len(args):
+                print_error("Missing value for --auto-ev-highlight-clipping")
+                return None
+            parsed_threshold = _parse_percentage_option(
+                "--auto-ev-highlight-clipping", args[idx + 1]
+            )
+            if parsed_threshold is None:
+                return None
+            auto_ev_options = AutoEvOptions(
+                shadow_clipping_pct=auto_ev_options.shadow_clipping_pct,
+                highlight_clipping_pct=parsed_threshold,
+                step=auto_ev_options.step,
+            )
+            idx += 2
+            continue
+
+        if token.startswith("--auto-ev-highlight-clipping="):
+            parsed_threshold = _parse_percentage_option(
+                "--auto-ev-highlight-clipping", token.split("=", 1)[1]
+            )
+            if parsed_threshold is None:
+                return None
+            auto_ev_options = AutoEvOptions(
+                shadow_clipping_pct=auto_ev_options.shadow_clipping_pct,
+                highlight_clipping_pct=parsed_threshold,
+                step=auto_ev_options.step,
+            )
+            idx += 1
+            continue
+
+        if token == "--auto-ev-step":
+            if idx + 1 >= len(args):
+                print_error("Missing value for --auto-ev-step")
+                return None
+            parsed_step = _parse_positive_float_option("--auto-ev-step", args[idx + 1])
+            if parsed_step is None:
+                return None
+            auto_ev_options = AutoEvOptions(
+                shadow_clipping_pct=auto_ev_options.shadow_clipping_pct,
+                highlight_clipping_pct=auto_ev_options.highlight_clipping_pct,
+                step=parsed_step,
+            )
+            idx += 2
+            continue
+
+        if token.startswith("--auto-ev-step="):
+            parsed_step = _parse_positive_float_option(
+                "--auto-ev-step", token.split("=", 1)[1]
+            )
+            if parsed_step is None:
+                return None
+            auto_ev_options = AutoEvOptions(
+                shadow_clipping_pct=auto_ev_options.shadow_clipping_pct,
+                highlight_clipping_pct=auto_ev_options.highlight_clipping_pct,
+                step=parsed_step,
+            )
             idx += 1
             continue
 
@@ -4209,7 +3928,8 @@ def _parse_run_options(args):
         hdrplus_options,
         enable_hdr_plus,
         ev_zero,
-        auto_ev_pct,
+        ev_zero_specified,
+        auto_ev_options,
     )
 
 
@@ -10110,7 +9830,8 @@ def run(args):
         hdrplus_options,
         enable_hdr_plus,
         ev_zero,
-        auto_ev_pct,
+        ev_zero_specified,
+        auto_ev_options,
     ) = parsed
 
     if input_dng.suffix.lower() != ".dng":
@@ -10268,13 +9989,9 @@ def run(args):
                 bits_per_color = _detect_dng_bits_per_color(raw_handle)
                 base_max_ev = _calculate_max_ev_from_bits(bits_per_color)
                 base_rgb_float = None
-                preview_luminance_stats = None
                 effective_ev_value = None
                 print_info(_describe_source_gamma_info(source_gamma_info))
                 if auto_ev_enabled:
-                    preview_luminance_stats = _extract_normalized_preview_luminance_stats(
-                        raw_handle
-                    )
                     base_rgb_float = _extract_base_rgb_linear_float(
                         raw_handle=raw_handle,
                         np_module=numpy_module,
@@ -10283,27 +10000,44 @@ def run(args):
                         raw_handle=raw_handle,
                         bits_per_color=bits_per_color,
                         base_max_ev=base_max_ev,
-                        auto_ev_pct=auto_ev_pct,
+                        auto_ev_options=auto_ev_options,
                         auto_adjust_dependencies=auto_adjust_dependencies,
-                        preview_luminance_stats=preview_luminance_stats,
                         base_rgb_float=base_rgb_float,
                     )
                     resolved_ev_zero = joint_solution.ev_zero
                     effective_ev_value = joint_solution.ev_delta
                 else:
-                    resolved_ev_zero = ev_zero
+                    if base_rgb_float is None:
+                        base_rgb_float = _extract_base_rgb_linear_float(
+                            raw_handle=raw_handle,
+                            np_module=numpy_module,
+                        )
+                    evaluations = _calculate_auto_zero_evaluations(
+                        cv2_module=None,
+                        np_module=numpy_module,
+                        image_rgb_float=base_rgb_float,
+                    )
+                    print_info(f"Exposure Misure EV ev_best: {evaluations.ev_best:+.1f} EV")
+                    print_info(f"Exposure Misure EV ev_ettr: {evaluations.ev_ettr:+.1f} EV")
+                    print_info(f"Exposure Misure EV ev_detail: {evaluations.ev_detail:+.1f} EV")
                     safe_zero_max = _calculate_safe_ev_zero_max(base_max_ev)
+                    if ev_zero_specified:
+                        resolved_ev_zero = ev_zero
+                    else:
+                        resolved_ev_zero, _selected_source = _select_ev_zero_candidate(
+                            evaluations=evaluations,
+                            safe_ev_zero_max=safe_zero_max,
+                        )
                     if abs(resolved_ev_zero) > (safe_zero_max + 1e-9):
                         raise ValueError(
                             "Unsupported --ev-zero value: "
                             f"{resolved_ev_zero:g}; allowed range for input DNG is "
-                            f"{-safe_zero_max:g}..{safe_zero_max:g} in 0.25 steps "
+                            f"{-safe_zero_max:g}..{safe_zero_max:g} "
                             "(SAFE_ZERO_MAX = ((bits_per_color-8)/2)-1)"
                         )
-                supported_ev_values = _derive_supported_ev_values(
+                max_bracket = _derive_supported_ev_values(
                     bits_per_color, ev_zero=resolved_ev_zero
                 )
-                max_bracket = supported_ev_values[-1]
                 print_info(f"Detected DNG bits per color: {bits_per_color}")
                 safe_zero_max = _calculate_safe_ev_zero_max(base_max_ev)
                 print_info(
@@ -10316,15 +10050,15 @@ def run(args):
                 )
                 if auto_ev_enabled:
                     print_info("Using exposure mode: auto")
-                    print_info(f"Using joint EV center (ev_zero): {resolved_ev_zero:g}")
+                    print_info(f"Using selected EV center (ev_zero): {resolved_ev_zero:g}")
                 else:
                     print_info("Using exposure mode: static")
-                    print_info(f"Using static EV center (ev_zero): {resolved_ev_zero:g}")
+                    print_info(f"Using selected EV center (ev_zero): {resolved_ev_zero:g}")
                     if ev_value is None:
                         raise ValueError("Missing static EV value")
-                    if ev_value not in supported_ev_values:
+                    if ev_value > (max_bracket + 1e-9):
                         raise ValueError(
-                            f"Unsupported --ev value: {ev_value:g}; allowed range for input DNG is 0.25..{max_bracket:g} in 0.25 steps"
+                            f"Unsupported --ev value: {ev_value:g}; allowed range for input DNG is 0..{max_bracket:g}"
                             " (MAX_BRACKET = ((bits_per_color-8)/2)-abs(ev_zero))"
                         )
                     effective_ev_value = ev_value

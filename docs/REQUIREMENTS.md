@@ -109,8 +109,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-005**: MUST print manual management commands instead of auto-executing them on non-Linux systems.
 - **REQ-006**: MUST reject unknown options, missing option values, and invalid option values with explicit parse errors.
 - **REQ-007**: MUST reject `--aa-*` options when `--auto-adjust` resolves to `disable` and MUST reject `--ab-*` options when `--auto-brightness` resolves to `disable`.
-- **REQ-008**: MUST resolve `ev_zero` and `ev_delta` jointly from normalized linear HDR base-image luminance statistics and clipping-risk statistics when `--auto-ev` resolves to `enable`.
-- **REQ-009**: MUST treat `--auto-ev` as the only automatic exposure mode and MUST compute one symmetric triplet centered on `ev_zero`, contracting `ev_delta` when safety constraints reject wider brackets.
+- **REQ-008**: MUST compute `ev_best`, `ev_ettr`, and `ev_detail` from the normalized linear HDR base image whenever exposure planning executes, independent of whether `--ev` or `--auto-ev` selected the mode.
+- **REQ-009**: MUST compute one symmetric triplet centered on `ev_zero` and use one bracketing half-span `ev_delta` derived only from the iterative clipping-threshold process.
 - **REQ-010**: MUST extract one maximum-resolution demosaiced RGB base image using linear `rawpy.postprocess` with camera white balance before HDR bracket generation.
 - **REQ-158**: MUST normalize the extracted HDR base image to RGB float `[0,1]` before any bracket arithmetic.
 - **REQ-159**: MUST derive `ev_minus`, `ev_zero`, and `ev_plus` only by EV scaling and `[0,1]` clipping of the normalized HDR base image.
@@ -125,8 +125,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-150**: MUST use idle-delay `3600` seconds after successful latest-release checks and idle-delay `86400` seconds after any latest-release check error.
 - **REQ-151**: MUST recalculate idle-time and rewrite the version-check cache JSON after every latest-release API attempt, regardless of success or error outcome.
 - **REQ-017**: MUST render conversion usage/help with canonical executable name `dng2jpg`, stable aligned indentation, and MUST NOT prepend alternative launcher labels.
-- **REQ-018**: MUST reject `--ev-zero` unless `--ev` is specified and MUST reject `--auto-zero` and `--auto-zero-pct` as removed options.
-- **REQ-019**: MUST enforce `--auto-ev-pct` in inclusive range `0..100`.
+- **REQ-018**: MUST reject `--ev-zero` unless `--ev` is specified and MUST reject `--auto-zero`, `--auto-zero-pct`, `--auto-ev-shadow-target`, `--auto-ev-highlight-target`, and `--auto-ev-pct` as removed options.
+- **REQ-019**: MUST accept `--auto-ev-shadow-clipping` and `--auto-ev-highlight-clipping` as percentage thresholds in inclusive range `0..100`, defaulting both to `5`.
 - **REQ-020**: MUST reject `--gamma` as a removed option.
 - **REQ-157**: MUST derive source gamma diagnostics from RAW metadata without modifying HDR bracket extraction, which remains linear and camera-WB-aware.
 - **REQ-163**: MUST classify source gamma diagnostics by preferring explicit profile or color-space metadata, then `rawpy.tone_curve`, then `rgb_xyz_matrix`, `color_matrix`, and `color_desc`, and MUST report `unknown` when evidence is insufficient.
@@ -138,11 +138,14 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-025**: MUST reject unsupported `--auto-adjust` values, accept only `enable` or `disable`, and default omitted `--auto-adjust` to `enable`.
 - **REQ-026**: MUST resolve DNG bit depth from `raw_image_visible.dtype.itemsize * 8` with fallback to `white_level.bit_length()`.
 - **REQ-027**: MUST enforce minimum supported bit depth as `9` bits per color.
-- **REQ-028**: MUST compute bracket EV ceiling as the minimum of bit-depth headroom and histogram-derived clipping-safe headroom around `ev_zero`.
+- **REQ-028**: MUST compute bracket EV ceiling only from bit-depth headroom `MAX_BRACKET=((bits_per_color-8)/2)-abs(ev_zero)`.
 - **REQ-029**: MUST compute EV-zero safe ceiling with `SAFE_ZERO_MAX=((bits_per_color-8)/2)-1`.
-- **REQ-030**: MUST quantize EV and EV-zero computations on `0.25` EV step granularity.
-- **REQ-031**: MUST derive adaptive EV from normalized preview luminance percentiles `0.1`, `50.0`, and `99.9`.
-- **REQ-032**: MUST evaluate `miglior_ev`, `ev_ettr`, and `ev_dettaglio` on the normalized linear gamma=`1` RGB image and use them as soft anchors while prioritizing highlight and shadow headroom constraints.
+- **REQ-030**: MUST accept any numeric `--ev` and `--ev-zero` values within the bit-depth-derived valid range without enforcing `0.25` EV step granularity.
+- **REQ-031**: MUST derive exposure-planning inputs from the shared normalized linear HDR base image used for bracket export.
+- **REQ-032**: MUST evaluate `ev_best`, `ev_ettr`, and `ev_detail` on the normalized linear gamma=`1` RGB image and MUST select default `ev_zero` as the minimum absolute-value candidate among those three values when `--ev-zero` is not specified.
+- **REQ-166**: MUST expose `--auto-ev-step` as a positive configurable EV increment for iterative bracket expansion, defaulting to `0.1`.
+- **REQ-167**: MUST derive `ev_delta` by iterating from `auto_ev_step`, evaluating unclipped bracket images at `ev_zero-ev_delta` and `ev_zero+ev_delta`, and stopping at the first step where shadow clipping exceeds `--auto-ev-shadow-clipping` or highlight clipping reaches `--auto-ev-highlight-clipping`.
+- **REQ-168**: MUST measure highlight clipping as the percentage of pixels in the plus image with any channel `>=1` and shadow clipping as the percentage of pixels in the minus image with any channel `<=0`.
 - **REQ-033**: MUST parse and preserve `--tmo*` passthrough option payloads for luminance command forwarding.
 - **REQ-034**: MUST order luminance backend bracket inputs as `ev_minus`, `ev_zero`, `ev_plus`.
 - **REQ-035**: MUST execute `luminance-hdr-cli` from output TIFF parent directory to isolate sidecar artifacts in temporary workspace.
@@ -161,7 +164,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-049**: SHOULD provide both `dng2jpg` and `d2j` as equivalent user-invokable CLI aliases.
 - **REQ-050**: MUST implement `/tmp/auto-brightness.py` auto-brightness step order on normalized RGB float input/output: normalize sRGB, linearize, compute BT.709 luminance, tonemap luminance, rescale RGB, optionally desaturate, then re-encode sRGB.
 - **REQ-051**: MUST support exactly one auto-adjust pipeline with one validated knob model containing shared controls and CLAHE-luma controls.
-- **REQ-052**: MUST print deterministic runtime diagnostics for input path, gamma, postprocess factors, backend, exposure mode, automatic candidate anchors, clipping-risk metrics, selected `(ev_zero, ev_delta)`, EV triplet, and OpenCV radiance exposure calculations/results.
+- **REQ-052**: MUST print deterministic runtime diagnostics for input path, gamma, postprocess factors, backend, exposure mode, `Exposure Misure EV` values, selected `ev_zero`, iterative bracket-step clipping metrics, final `ev_delta`, EV triplet, and OpenCV radiance exposure calculations/results.
 - **REQ-103**: MUST classify normalized BT.709 luminance as `low-key` when `median<0.35 && p95<0.85`, `high-key` when `median>0.65 && p05>0.15`, else `normal-key`.
 - **REQ-104**: MUST map luminance with `L=(a/Lw_bar)*Y`, percentile-derived robust `Lwhite`, and burn-out compression `Ld=(L*(1+L/Lwhite^2))/(1+L)` before linear-domain chromaticity-preserving RGB scaling.
 - **REQ-105**: MUST desaturate only overflowing linear RGB pixels by blending toward `(Ld,Ld,Ld)` with the minimal factor that restores `max(R,G,B)<=1` while preserving luminance.
@@ -225,8 +228,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-001**: MUST verify `_parse_run_options` rejects `--ev` with `--auto-ev`, parses `--hdr-merge`, and rejects unknown `--hdr-merge` values with deterministic error output.
 - **TST-002**: MUST verify `run` returns `1` for unsupported runtime OS and for missing `luminance-hdr-cli` dependency with deterministic diagnostics naming each missing executable.
 - **TST-003**: MUST verify successful `run` execution returns `0`, writes output JPG, and emits success message `HDR JPG created: <output>`.
-- **TST-004**: MUST verify `_optimize_joint_ev_zero_and_delta` reduces bracket span versus the legacy minimum-center baseline while preserving the symmetric triplet contract and deterministic tie-break order.
-- **TST-005**: MUST verify static exposure resolution uses `ev_zero=0.0` for `--ev` without `--ev-zero`, preserves manual `--ev-zero` when provided with `--ev`, and rejects unsupported static EV for the detected bit depth.
+- **TST-004**: MUST verify default `ev_zero` selection chooses the minimum absolute-value candidate among `ev_best`, `ev_ettr`, and `ev_detail`, independent of whether static `--ev` or `--auto-ev` selected the mode.
+- **TST-005**: MUST verify static exposure resolution preserves any in-range manual `--ev` and `--ev-zero` values, rejects out-of-range values for the detected bit depth, and no longer requires `0.25` EV increments.
 - **TST-006**: MUST verify `_run_luminance_hdr_cli` builds deterministic argument order and includes any `--tmo*` passthrough pairs unchanged.
 - **TST-007**: MUST verify `_extract_dng_exif_payload_and_timestamp` applies datetime priority `36867` then `36868` then `306` and extracts EXIF `ExposureTime` as positive seconds.
 - **TST-008**: MUST verify `_refresh_output_jpg_exif_thumbnail_after_save` preserves source orientation fields, rebuilds EXIF thumbnail bytes from the exact final quantized RGB uint8 save buffer, and emits display-oriented thumbnail pixels with thumbnail orientation `1`.
@@ -237,6 +240,9 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-013**: MUST verify `_parse_run_options` accepts `--hdr-merge OpenCV`, defaults `--hdr-merge` to `OpenCV`, and rejects values outside `Luminace-HDR`, `OpenCV`, and `HDR-Plus`.
 - **TST-014**: MUST verify OpenCV radiance exposure derivation preserves bracket order, uses EXIF exposure seconds, maps the sequence to `(ev_zero-ev_delta, ev_zero, ev_zero+ev_delta)`, and remains deterministic for variable bracket spans.
 - **TST-015**: MUST verify OpenCV merge outputs for `Debevec`, `Robertson`, and `Mertens` remain normalized RGB float images bounded to `[0,1]` after float-only backend execution.
+- **TST-047**: MUST verify `_parse_run_options` rejects removed `--auto-ev-shadow-target`, `--auto-ev-highlight-target`, and `--auto-ev-pct`, and accepts `--auto-ev-shadow-clipping`, `--auto-ev-highlight-clipping`, and `--auto-ev-step` with deterministic defaults and validation.
+- **TST-048**: MUST verify iterative bracket expansion stops on the first step where plus-image highlight clipping reaches threshold or minus-image shadow clipping exceeds threshold and returns that step as `ev_delta`.
+- **TST-049**: MUST verify runtime diagnostics rename `Auto-EV heuristic` to `Exposure Misure EV`, print per-step clipping percentages for the iterative bracket search, and print the final `ev_zero` and `ev_delta` selection.
 - **TST-016**: MUST verify auto-levels parser defaults `clip_pct=0.02`, `clip_out_of_gamut=true`, `highlight_reconstruction=false`, `highlight_reconstruction_method=Inpaint Opposed`, and `gain_threshold=1.0`.
 - **TST-017**: MUST verify auto-levels histogram calibration reproduces RawTherapee-compatible `expcomp`, `black`, `brightness`, `contrast`, `hlcompr`, and `hlcomprthresh` for deterministic synthetic histograms.
 - **TST-018**: MUST verify auto-levels tonal transformation consumes the RawTherapee-compatible metric set in normalized float space, preserves float-only internal math, and matches RawTherapee mixed-overflow channel handling.
