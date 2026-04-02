@@ -126,7 +126,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-151**: MUST recalculate idle-time and rewrite the version-check cache JSON after every latest-release API attempt, regardless of success or error outcome.
 - **REQ-017**: MUST render conversion usage/help with canonical executable name `dng2jpg`, stable aligned indentation, and MUST NOT prepend alternative launcher labels.
 - **REQ-018**: MUST reject `--ev-zero` unless `--ev` is specified and MUST reject `--auto-zero`, `--auto-zero-pct`, `--auto-ev-shadow-target`, `--auto-ev-highlight-target`, and `--auto-ev-pct` as removed options.
-- **REQ-019**: MUST accept `--auto-ev-shadow-clipping` and `--auto-ev-highlight-clipping` as percentage thresholds in inclusive range `0..100`, defaulting both to `5`.
+- **REQ-019**: MUST accept `--auto-ev-shadow-clipping` and `--auto-ev-highlight-clipping` as percentage thresholds in inclusive range `0..100`, defaulting both to `20`.
 - **REQ-020**: MUST reject `--gamma` as a removed option.
 - **REQ-157**: MUST derive source gamma diagnostics from RAW metadata without modifying HDR bracket extraction, which remains linear and camera-WB-aware.
 - **REQ-163**: MUST classify source gamma diagnostics by preferring explicit profile or color-space metadata, then `rawpy.tone_curve`, then `rgb_xyz_matrix`, `color_matrix`, and `color_desc`, and MUST report `unknown` when evidence is insufficient.

@@ -1264,6 +1264,7 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
     assert "Effective only when `--hdr-merge HDR-Plus`." in output
     assert "Effective only when `--hdr-merge Luminace-HDR`." in output
     assert "Default: `OpenCV`." in output
+    assert output.count("Default:\n                                    `20`.") >= 2
     assert "Default: `Robertson`." in output
     assert "Default: `enable`." in output
     assert "Static postprocess defaults when omitted:" in output
@@ -1287,6 +1288,9 @@ def test_parse_run_options_auto_ev_defaults_and_disable_behavior(capsys) -> None
     assert parsed_default_auto is not None
     assert parsed_default_auto[2] is None
     assert parsed_default_auto[3] is True
+    auto_ev_options = parsed_default_auto[13]
+    assert auto_ev_options.shadow_clipping_pct == 20.0
+    assert auto_ev_options.highlight_clipping_pct == 20.0
 
     parsed_disabled_without_ev = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         ["input.dng", "output.jpg", "--auto-ev=disable"]
