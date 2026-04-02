@@ -493,13 +493,15 @@ class ResolvedMergeGamma:
 class ExifGammaTags:
     """@brief Hold EXIF tags relevant to auto merge-gamma resolution.
 
-    @details Encapsulates normalized EXIF color-space, interoperability, and
-    image-model tokens extracted from the source RAW/DNG container via
-    `exifread` binary stream processing. The payload is consumed only by
-    merge-gamma resolution and diagnostics and never mutates bracket extraction.
+    @details Encapsulates normalized EXIF color-space, interoperability,
+    image-model, and image-make tokens extracted from the source RAW/DNG
+    container via `exifread` binary stream processing. The payload is consumed
+    only by merge-gamma resolution and diagnostics and never mutates bracket
+    extraction.
     @param color_space {str|None} Normalized EXIF `ColorSpace` token.
     @param interoperability_index {str|None} Normalized EXIF interoperability token.
     @param image_model {str|None} Normalized EXIF `Image Model` token.
+    @param image_make {str|None} Normalized EXIF `Image Make` token.
     @return {None} Immutable dataclass container.
     @satisfies REQ-169, REQ-172, REQ-173
     """
@@ -507,6 +509,7 @@ class ExifGammaTags:
     color_space: str | None
     interoperability_index: str | None
     image_model: str | None = None
+    image_make: str | None = None
 
 
 @dataclass(frozen=True)
@@ -3257,19 +3260,21 @@ def _extract_exif_gamma_tags(input_dng):
 
     @details Opens the source RAW/DNG file as a binary stream via
     `exifread.process_file` and normalizes `EXIF ColorSpace`,
-    `Interop InteroperabilityIndex`, and `Image Model` tags for deterministic
-    auto transfer resolution. Does not use Pillow for this extraction.
-    Complexity: O(file_size). Side effects: none (read-only file access).
+    `Interop InteroperabilityIndex`, `Image Model`, and `Image Make` tags for
+    deterministic auto transfer resolution. Does not use Pillow for this
+    extraction. Complexity: O(file_size). Side effects: none (read-only file
+    access).
     @param input_dng {Path} Source RAW/DNG file path.
     @return {ExifGammaTags} Normalized EXIF merge-gamma evidence payload.
-    @satisfies REQ-169, REQ-173
+    @satisfies REQ-169, REQ-172, REQ-173
     """
 
     try:
         import exifread  # type: ignore
     except ImportError:
         return ExifGammaTags(
-            color_space=None, interoperability_index=None, image_model=None
+            color_space=None, interoperability_index=None,
+            image_model=None, image_make=None,
         )
     try:
         with open(str(input_dng), "rb") as raw_file:
@@ -3294,14 +3299,22 @@ def _extract_exif_gamma_tags(input_dng):
         )
         if image_model_value == "":
             image_model_value = None
+        image_make_raw = tags.get("Image Make")
+        image_make_value = (
+            str(image_make_raw).strip() if image_make_raw is not None else None
+        )
+        if image_make_value == "":
+            image_make_value = None
         return ExifGammaTags(
             color_space=color_space_value,
             interoperability_index=interop_index_value,
             image_model=image_model_value,
+            image_make=image_make_value,
         )
     except (OSError, ValueError, TypeError, AttributeError):
         return ExifGammaTags(
-            color_space=None, interoperability_index=None, image_model=None
+            color_space=None, interoperability_index=None,
+            image_model=None, image_make=None,
         )
 
 
@@ -3310,11 +3323,11 @@ def _resolve_auto_merge_gamma(exif_gamma_tags, source_gamma_info):
 
     @details Applies deterministic priority: EXIF `ColorSpace==1` selects sRGB,
     EXIF `ColorSpace==2` or interoperability token containing `R03` selects
-    Adobe RGB power gamma `2.19921875`, otherwise fallback uses source-gamma
-    diagnostics for approximate sRGB/power classification, and unresolved cases
-    remain linear.
+    Adobe RGB power gamma `2.19921875`, and unresolved cases default to sRGB
+    transfer as fallback.
     @param exif_gamma_tags {ExifGammaTags} Normalized EXIF color-space evidence.
-    @param source_gamma_info {SourceGammaInfo} Derived source-gamma diagnostic payload.
+    @param source_gamma_info {SourceGammaInfo} Derived source-gamma diagnostic
+        payload (retained for backward compatibility; not used for resolution).
     @return {ResolvedMergeGamma} Resolved auto transfer payload.
     @satisfies REQ-169
     """
@@ -3342,31 +3355,13 @@ def _resolve_auto_merge_gamma(exif_gamma_tags, source_gamma_info):
             param_b=None,
             evidence="exif-adobe-rgb",
         )
-    if source_gamma_info.gamma_value is not None:
-        if abs(source_gamma_info.gamma_value - 2.2) <= 0.2:
-            return ResolvedMergeGamma(
-                request=auto_request,
-                transfer="srgb",
-                label="sRGB",
-                param_a=None,
-                param_b=None,
-                evidence=f"source-gamma={source_gamma_info.evidence}",
-            )
-        return ResolvedMergeGamma(
-            request=auto_request,
-            transfer="power",
-            label=source_gamma_info.label,
-            param_a=source_gamma_info.gamma_value,
-            param_b=None,
-            evidence=f"source-gamma={source_gamma_info.evidence}",
-        )
     return ResolvedMergeGamma(
         request=auto_request,
-        transfer="linear",
-        label="Linear",
+        transfer="srgb",
+        label="sRGB",
         param_a=None,
         param_b=None,
-        evidence="unresolved",
+        evidence="unresolved-default-srgb",
     )
 
 
@@ -3434,8 +3429,9 @@ def _describe_exif_gamma_tags(exif_gamma_tags):
     """@brief Format one deterministic EXIF merge-gamma input diagnostic line.
 
     @details Renders one stable runtime payload exposing the normalized EXIF
-    `ColorSpace`, `InteroperabilityIndex`, and `ImageModel` values consumed by
-    automatic merge-gamma resolution. Missing values are rendered as `missing`.
+    `ColorSpace`, `InteroperabilityIndex`, `ImageModel`, and `ImageMake` values
+    consumed by automatic merge-gamma resolution. Missing values are rendered
+    as `missing`.
     @param exif_gamma_tags {ExifGammaTags} Normalized EXIF merge-gamma evidence payload.
     @return {str} Deterministic runtime diagnostic line.
     @satisfies REQ-172
@@ -3444,11 +3440,13 @@ def _describe_exif_gamma_tags(exif_gamma_tags):
     color_space_text = exif_gamma_tags.color_space or "missing"
     interop_text = exif_gamma_tags.interoperability_index or "missing"
     model_text = exif_gamma_tags.image_model or "missing"
+    make_text = exif_gamma_tags.image_make or "missing"
     return (
         "Merge gamma EXIF inputs: "
         f"ColorSpace={color_space_text}; "
         f"InteroperabilityIndex={interop_text}; "
-        f"ImageModel={model_text}"
+        f"ImageModel={model_text}; "
+        f"ImageMake={make_text}"
     )
 
 
@@ -10517,13 +10515,13 @@ def run(args):
                 base_rgb_float = None
                 effective_ev_value = None
                 print_info(_describe_source_gamma_info(source_gamma_info))
+                exif_gamma_tags = _extract_exif_gamma_tags(
+                    input_dng=input_dng,
+                )
+                print_info(_describe_exif_gamma_tags(exif_gamma_tags))
                 merge_gamma_option = postprocess_options.merge_gamma_option
                 if merge_gamma_option.mode == "auto":
                     print_info("Merge gamma request: auto")
-                    exif_gamma_tags = _extract_exif_gamma_tags(
-                        input_dng=input_dng,
-                    )
-                    print_info(_describe_exif_gamma_tags(exif_gamma_tags))
                     resolved_merge_gamma = _resolve_auto_merge_gamma(
                         exif_gamma_tags=exif_gamma_tags,
                         source_gamma_info=source_gamma_info,
