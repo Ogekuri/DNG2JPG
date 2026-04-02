@@ -178,7 +178,7 @@
       - `_describe_exif_gamma_tags(...)`: format one deterministic EXIF merge-gamma input diagnostic line [`src/dng2jpg/dng2jpg.py`]
         - `print_info(...)`: emit EXIF merge-gamma input diagnostics [`src/shell_scripts/utils.py`]
       - `_resolve_auto_merge_gamma(...)`: resolve backend-final merge transfer from EXIF-first metadata evidence [`src/dng2jpg/dng2jpg.py`]
-      - `_describe_resolved_merge_gamma(...)`: format one deterministic merge-gamma runtime diagnostic line [`src/dng2jpg/dng2jpg.py`]
+      - `_describe_resolved_merge_gamma(...)`: format one deterministic merge-gamma runtime diagnostic line exposing request mode, resolved transfer, explicit linear-segment parameters, explicit curve-segment parameters, and evidence token [`src/dng2jpg/dng2jpg.py`]
         - `print_info(...)`: emit merge-gamma diagnostics [`src/shell_scripts/utils.py`]
       - `_extract_base_rgb_linear_float(...)`: extract one normalized linear gamma=`1` RGB base tensor for exposure planning and bracket export [`src/dng2jpg/dng2jpg.py`]
       - `_calculate_auto_zero_evaluations(...)`: evaluate `ev_best`, `ev_ettr`, and `ev_detail` on the normalized linear RGB float image [`src/dng2jpg/dng2jpg.py`]

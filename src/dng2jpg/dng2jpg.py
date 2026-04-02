@@ -3395,25 +3395,58 @@ def _describe_resolved_merge_gamma(resolved_merge_gamma):
     """@brief Format one deterministic merge-gamma runtime diagnostic line.
 
     @details Renders one stable diagnostic payload including request mode,
-    resolved transfer family, label, serialized numeric parameters, and
-    evidence token.
+    resolved transfer family, label, explicit linear-segment parameters,
+    explicit curve-segment parameters, and evidence token.
     @param resolved_merge_gamma {ResolvedMergeGamma} Resolved merge-gamma payload.
     @return {str} Deterministic runtime diagnostic line.
     @satisfies REQ-171
     """
 
-    params = []
-    if resolved_merge_gamma.param_a is not None:
-        params.append(f"{resolved_merge_gamma.param_a:g}")
-    if resolved_merge_gamma.param_b is not None:
-        params.append(f"{resolved_merge_gamma.param_b:g}")
-    params_text = ",".join(params) if params else "-"
+    def _format_gamma_number(value):
+        """@brief Format one finite gamma parameter for deterministic diagnostics.
+
+        @details Serializes one numeric gamma parameter with stable decimal
+        precision, preserving exact repository-relevant constants such as
+        `2.19921875` while avoiding scientific notation and insignificant
+        trailing zeroes.
+        @param value {float} Numeric gamma parameter to serialize.
+        @return {str} Stable decimal representation for runtime diagnostics.
+        @satisfies REQ-171
+        """
+
+        return format(float(value), ".15g")
+
+    linear_text = "linear=none"
+    curve_text = "curve=none"
+    params_text = "-"
+    if resolved_merge_gamma.transfer == "srgb":
+        linear_text = "linear(scale=12.92,limit=0.0031308)"
+        curve_text = "curve(scale=1.055,power=1/2.4,offset=-0.055)"
+    elif resolved_merge_gamma.transfer == "power":
+        if resolved_merge_gamma.param_a is None:
+            raise ValueError("Resolved power merge gamma is missing exponent")
+        exponent_text = _format_gamma_number(resolved_merge_gamma.param_a)
+        curve_text = f"curve(power=1/{exponent_text})"
+        params_text = exponent_text
+    elif resolved_merge_gamma.transfer == "rec709":
+        if resolved_merge_gamma.param_a is None or resolved_merge_gamma.param_b is None:
+            raise ValueError("Resolved Rec.709 merge gamma is missing parameters")
+        linear_coeff_text = _format_gamma_number(resolved_merge_gamma.param_a)
+        exponent_text = _format_gamma_number(resolved_merge_gamma.param_b)
+        linear_text = f"linear(scale={linear_coeff_text},limit=0.018)"
+        curve_text = (
+            "curve("
+            f"scale=1.099,power={exponent_text},offset=-0.099)"
+        )
+        params_text = f"{linear_coeff_text},{exponent_text}"
     return (
         "Merge gamma: "
         f"request={resolved_merge_gamma.request.mode}; "
         f"transfer={resolved_merge_gamma.transfer}; "
         f"label={resolved_merge_gamma.label}; "
         f"params={params_text}; "
+        f"{linear_text}; "
+        f"{curve_text}; "
         f"evidence={resolved_merge_gamma.evidence}"
     )
 

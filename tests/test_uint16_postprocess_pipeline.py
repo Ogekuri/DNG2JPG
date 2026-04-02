@@ -2150,6 +2150,52 @@ def test_resolve_auto_merge_gamma_prefers_exif_colorspace() -> None:
     )
 
 
+def test_describe_resolved_merge_gamma_exposes_linear_and_curve_parameters() -> None:
+    """Merge-gamma diagnostics must expose the applied transfer parameters."""
+
+    srgb_description = dng2jpg_module._describe_resolved_merge_gamma(  # pylint: disable=protected-access
+        dng2jpg_module.ResolvedMergeGamma(
+            request=dng2jpg_module.MergeGammaOption(mode="auto"),
+            transfer="srgb",
+            label="sRGB",
+            param_a=None,
+            param_b=None,
+            evidence="exif-colorspace=1",
+        )
+    )
+    adobe_description = dng2jpg_module._describe_resolved_merge_gamma(  # pylint: disable=protected-access
+        dng2jpg_module.ResolvedMergeGamma(
+            request=dng2jpg_module.MergeGammaOption(mode="auto"),
+            transfer="power",
+            label="Adobe RGB",
+            param_a=2.19921875,
+            param_b=None,
+            evidence="exif-adobe-rgb",
+        )
+    )
+    custom_description = dng2jpg_module._describe_resolved_merge_gamma(  # pylint: disable=protected-access
+        dng2jpg_module.ResolvedMergeGamma(
+            request=dng2jpg_module.MergeGammaOption(
+                mode="custom",
+                linear_coeff=4.5,
+                exponent=0.45,
+            ),
+            transfer="rec709",
+            label="Rec.709 custom",
+            param_a=4.5,
+            param_b=0.45,
+            evidence="cli-custom",
+        )
+    )
+
+    assert "linear(scale=12.92,limit=0.0031308)" in srgb_description
+    assert "curve(scale=1.055,power=1/2.4,offset=-0.055)" in srgb_description
+    assert "linear=none" in adobe_description
+    assert "curve(power=1/2.19921875)" in adobe_description
+    assert "linear(scale=4.5,limit=0.018)" in custom_description
+    assert "curve(scale=1.099,power=0.45,offset=-0.099)" in custom_description
+
+
 def test_run_opencv_merge_mertens_applies_float_path_brightness_rescaling() -> None:
     """Mertens float path must rescale OpenCV output before normalization."""
 
@@ -3517,7 +3563,10 @@ def test_run_prints_merge_gamma_diagnostics(monkeypatch, tmp_path, capsys) -> No
     assert "Merge gamma request: auto" in output
     assert "Merge gamma EXIF inputs: ColorSpace=1; InteroperabilityIndex=missing" in output
     assert (
-        "Merge gamma: request=auto; transfer=srgb; label=sRGB; params=-; evidence=exif-colorspace=1"
+        "Merge gamma: request=auto; transfer=srgb; label=sRGB; params=-; "
+        "linear(scale=12.92,limit=0.0031308); "
+        "curve(scale=1.055,power=1/2.4,offset=-0.055); "
+        "evidence=exif-colorspace=1"
         in output
     )
 def test_run_opencv_hdr_merge_requires_exif_exposure_time_for_radiance_modes() -> None:
