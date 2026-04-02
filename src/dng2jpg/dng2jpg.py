@@ -146,10 +146,7 @@ _EXIF_TAG_DATETIME = 306
 _EXIF_TAG_DATETIME_ORIGINAL = 36867
 _EXIF_TAG_DATETIME_DIGITIZED = 36868
 _EXIF_TAG_EXPOSURE_TIME = 33434
-_EXIF_TAG_COLOR_SPACE = 40961
 _EXIF_IFD_POINTER = 34665
-_EXIF_INTEROP_IFD_POINTER = 40965
-_EXIF_INTEROP_TAG_INTEROPERABILITY_INDEX = 1
 _EXIF_VALID_ORIENTATIONS = (1, 2, 3, 4, 5, 6, 7, 8)
 _THUMBNAIL_MAX_SIZE = (256, 256)
 _AUTO_ADJUST_KNOB_OPTIONS = (
@@ -496,17 +493,20 @@ class ResolvedMergeGamma:
 class ExifGammaTags:
     """@brief Hold EXIF tags relevant to auto merge-gamma resolution.
 
-    @details Encapsulates normalized EXIF color-space and interoperability
-    tokens extracted from the source RAW/DNG container. The payload is consumed
-    only by merge-gamma resolution and never mutates bracket extraction.
+    @details Encapsulates normalized EXIF color-space, interoperability, and
+    image-model tokens extracted from the source RAW/DNG container via
+    `exifread` binary stream processing. The payload is consumed only by
+    merge-gamma resolution and diagnostics and never mutates bracket extraction.
     @param color_space {str|None} Normalized EXIF `ColorSpace` token.
     @param interoperability_index {str|None} Normalized EXIF interoperability token.
+    @param image_model {str|None} Normalized EXIF `Image Model` token.
     @return {None} Immutable dataclass container.
-    @satisfies REQ-169
+    @satisfies REQ-169, REQ-172, REQ-173
     """
 
     color_space: str | None
     interoperability_index: str | None
+    image_model: str | None = None
 
 
 @dataclass(frozen=True)
@@ -3252,78 +3252,57 @@ def _decode_exif_text_value(exif_value):
     return value_text or None
 
 
-def _extract_exif_gamma_tags(pil_image_module, input_dng):
+def _extract_exif_gamma_tags(input_dng):
     """@brief Extract EXIF color-space metadata relevant to auto merge gamma.
 
-    @details Opens the source DNG through Pillow, reads root EXIF values plus
-    nested EXIF/interop IFD payloads when available, and normalizes
-    `ColorSpace` and interoperability index tokens for deterministic auto
-    transfer resolution.
-    @param pil_image_module {ModuleType} Imported Pillow Image module.
-    @param input_dng {Path} Source DNG path.
+    @details Opens the source RAW/DNG file as a binary stream via
+    `exifread.process_file` and normalizes `EXIF ColorSpace`,
+    `Interop InteroperabilityIndex`, and `Image Model` tags for deterministic
+    auto transfer resolution. Does not use Pillow for this extraction.
+    Complexity: O(file_size). Side effects: none (read-only file access).
+    @param input_dng {Path} Source RAW/DNG file path.
     @return {ExifGammaTags} Normalized EXIF merge-gamma evidence payload.
-    @satisfies REQ-169
+    @satisfies REQ-169, REQ-173
     """
 
-    if not hasattr(pil_image_module, "open"):
-        return ExifGammaTags(color_space=None, interoperability_index=None)
     try:
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message=r".*tag 33723 had too many entries.*",
-                category=UserWarning,
-            )
-            with pil_image_module.open(str(input_dng)) as source_image:
-                if not hasattr(source_image, "getexif"):
-                    return ExifGammaTags(color_space=None, interoperability_index=None)
-                exif_data = source_image.getexif()
-                if exif_data is None:
-                    return ExifGammaTags(color_space=None, interoperability_index=None)
-                exif_ifd_data = None
-                interop_ifd_data = None
-                if hasattr(exif_data, "get_ifd"):
-                    try:
-                        exif_ifd_data = exif_data.get_ifd(_EXIF_IFD_POINTER)
-                    except (KeyError, TypeError, ValueError, AttributeError):
-                        exif_ifd_data = None
-                    try:
-                        interop_ifd_data = exif_data.get_ifd(_EXIF_INTEROP_IFD_POINTER)
-                    except (KeyError, TypeError, ValueError, AttributeError):
-                        interop_ifd_data = None
-
-                def _read_exif_value(exif_tag, nested_ifd):
-                    """@brief Resolve one EXIF tag from root mapping with optional nested-IFD fallback.
-
-                    @details Reads the requested tag from the top-level EXIF
-                    mapping first, then from the supplied nested-IFD mapping when
-                    available. Complexity: O(1). Side effects: none.
-                    @param exif_tag {int} Numeric EXIF tag identifier.
-                    @param nested_ifd {object|None} Nested IFD mapping with `get`.
-                    @return {object|None} Raw EXIF payload or `None`.
-                    @satisfies REQ-169
-                    """
-
-                    root_value = exif_data.get(exif_tag)
-                    if root_value is not None:
-                        return root_value
-                    if nested_ifd is None or not hasattr(nested_ifd, "get"):
-                        return None
-                    return nested_ifd.get(exif_tag)
-
-                return ExifGammaTags(
-                    color_space=_decode_exif_text_value(
-                        _read_exif_value(_EXIF_TAG_COLOR_SPACE, exif_ifd_data)
-                    ),
-                    interoperability_index=_decode_exif_text_value(
-                        _read_exif_value(
-                            _EXIF_INTEROP_TAG_INTEROPERABILITY_INDEX,
-                            interop_ifd_data,
-                        )
-                    ),
-                )
+        import exifread  # type: ignore
+    except ImportError:
+        return ExifGammaTags(
+            color_space=None, interoperability_index=None, image_model=None
+        )
+    try:
+        with open(str(input_dng), "rb") as raw_file:
+            tags = exifread.process_file(raw_file, details=False)
+        color_space_raw = tags.get("EXIF ColorSpace")
+        color_space_value = (
+            str(color_space_raw).strip() if color_space_raw is not None else None
+        )
+        if color_space_value == "":
+            color_space_value = None
+        interop_index_raw = tags.get("Interop InteroperabilityIndex")
+        interop_index_value = (
+            str(interop_index_raw).strip()
+            if interop_index_raw is not None
+            else None
+        )
+        if interop_index_value == "":
+            interop_index_value = None
+        image_model_raw = tags.get("Image Model")
+        image_model_value = (
+            str(image_model_raw).strip() if image_model_raw is not None else None
+        )
+        if image_model_value == "":
+            image_model_value = None
+        return ExifGammaTags(
+            color_space=color_space_value,
+            interoperability_index=interop_index_value,
+            image_model=image_model_value,
+        )
     except (OSError, ValueError, TypeError, AttributeError):
-        return ExifGammaTags(color_space=None, interoperability_index=None)
+        return ExifGammaTags(
+            color_space=None, interoperability_index=None, image_model=None
+        )
 
 
 def _resolve_auto_merge_gamma(exif_gamma_tags, source_gamma_info):
@@ -3455,8 +3434,8 @@ def _describe_exif_gamma_tags(exif_gamma_tags):
     """@brief Format one deterministic EXIF merge-gamma input diagnostic line.
 
     @details Renders one stable runtime payload exposing the normalized EXIF
-    `ColorSpace` and `InteroperabilityIndex` values consumed by automatic
-    merge-gamma resolution. Missing values are rendered as `missing`.
+    `ColorSpace`, `InteroperabilityIndex`, and `ImageModel` values consumed by
+    automatic merge-gamma resolution. Missing values are rendered as `missing`.
     @param exif_gamma_tags {ExifGammaTags} Normalized EXIF merge-gamma evidence payload.
     @return {str} Deterministic runtime diagnostic line.
     @satisfies REQ-172
@@ -3464,10 +3443,12 @@ def _describe_exif_gamma_tags(exif_gamma_tags):
 
     color_space_text = exif_gamma_tags.color_space or "missing"
     interop_text = exif_gamma_tags.interoperability_index or "missing"
+    model_text = exif_gamma_tags.image_model or "missing"
     return (
         "Merge gamma EXIF inputs: "
         f"ColorSpace={color_space_text}; "
-        f"InteroperabilityIndex={interop_text}"
+        f"InteroperabilityIndex={interop_text}; "
+        f"ImageModel={model_text}"
     )
 
 
@@ -10540,7 +10521,6 @@ def run(args):
                 if merge_gamma_option.mode == "auto":
                     print_info("Merge gamma request: auto")
                     exif_gamma_tags = _extract_exif_gamma_tags(
-                        pil_image_module=pil_image_module,
                         input_dng=input_dng,
                     )
                     print_info(_describe_exif_gamma_tags(exif_gamma_tags))

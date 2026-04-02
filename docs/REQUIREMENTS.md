@@ -61,7 +61,7 @@ DNG2JPG/
 ```
 
 ### 1.5 Components and Libraries (Evidenced)
-- `rawpy`, `imageio`, `pillow`, `numpy`, `opencv-python-headless`, `piexif` (declared in `pyproject.toml` and imported in `src/dng2jpg/dng2jpg.py`).
+- `rawpy`, `imageio`, `pillow`, `numpy`, `opencv-python-headless`, `piexif`, `exifread` (declared in `pyproject.toml` and imported in `src/dng2jpg/dng2jpg.py`).
 - `uv` CLI is used by launcher/runtime management flows (`scripts/d2j.sh`, `src/dng2jpg/core.py`) and release build workflow (`.github/workflows/release-uvx.yml`).
 - `luminance-hdr-cli` is the only runtime external executable resolved in `src/dng2jpg/dng2jpg.py`; OpenCV and HDR+ backends use in-process Python/Numpy execution only.
 
@@ -100,6 +100,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **DES-008**: MUST resolve OpenCV backend static postprocess defaults per `Debevec`, `Robertson`, and `Mertens`, assigning each algorithm `post_gamma=1.0`, `brightness=1.0`, `contrast=1.0`, and `saturation=1.0`.
 - **DES-007**: MUST process conversion as a one-shot process model without spawning explicit application-managed threads.
 - **DES-009**: MUST serialize `--debug` checkpoints from normalized RGB float stage buffers into persistent TIFF16 files outside the temporary workspace lifecycle.
+- **DES-010**: MUST declare `exifread` as a project runtime dependency for merge-gamma EXIF binary stream extraction.
 
 ### 3.2 Functions
 - **REQ-001**: MUST print conversion help and exit successfully when conversion command receives no arguments.
@@ -128,10 +129,11 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-018**: MUST reject `--ev-zero` unless `--ev` is specified and MUST reject `--auto-zero`, `--auto-zero-pct`, `--auto-ev-shadow-target`, `--auto-ev-highlight-target`, and `--auto-ev-pct` as removed options.
 - **REQ-019**: MUST accept `--auto-ev-shadow-clipping` and `--auto-ev-highlight-clipping` as percentage thresholds in inclusive range `0..100`, defaulting both to `20`.
 - **REQ-020**: MUST parse `--gamma=auto` as the default HDR merge-output transfer selector and MUST accept `--gamma=<linear_coeff,exponent>` as one explicit custom transfer selector.
-- **REQ-169**: MUST resolve `--gamma=auto` from original RAW/DNG EXIF color-space evidence before fallback to source-gamma diagnostics, mapping sRGB to IEC 61966-2-1 transfer, Adobe RGB to power gamma `2.19921875`, and unresolved evidence to linear transfer.
+- **REQ-169**: MUST resolve `--gamma=auto` from original RAW/DNG EXIF color-space evidence extracted via `exifread` binary stream processing before fallback to source-gamma diagnostics, mapping sRGB to IEC 61966-2-1 transfer, Adobe RGB to power gamma `2.19921875`, and unresolved evidence to linear transfer.
 - **REQ-170**: MUST apply resolved merge gamma only as the last backend-local step of `OpenCV` and `HDR-Plus` HDR merge pipelines, after backend normalization and before shared static postprocess, without introducing additional clipping above backend normalization.
 - **REQ-171**: MUST print deterministic merge-gamma runtime diagnostics containing the user request, resolved transfer label, parameter payload, and evidence source.
-- **REQ-172**: MUST print normalized EXIF merge-gamma inputs containing `ColorSpace` and `InteroperabilityIndex` values whenever `--gamma=auto` is resolved from RAW/DNG metadata.
+- **REQ-172**: MUST print normalized EXIF merge-gamma inputs containing `ColorSpace`, `InteroperabilityIndex`, and `ImageModel` values whenever `--gamma=auto` is resolved from RAW/DNG metadata.
+- **REQ-173**: MUST extract merge-gamma EXIF evidence by opening the original RAW/DNG file as a binary stream via `exifread.process_file` and MUST normalize `EXIF ColorSpace`, `Interop InteroperabilityIndex`, and `Image Model` tags for deterministic auto transfer resolution.
 - **REQ-157**: MUST derive source gamma diagnostics from RAW metadata without modifying HDR bracket extraction, which remains linear and camera-WB-aware.
 - **REQ-163**: MUST classify source gamma diagnostics by preferring explicit profile or color-space metadata, then `rawpy.tone_curve`, then `rgb_xyz_matrix`, `color_matrix`, and `color_desc`, and MUST report `unknown` when evidence is insufficient.
 - **REQ-164**: MUST print source gamma diagnostics as one deterministic runtime line containing both a source-gamma label and either a numeric gamma value or `undetermined`.
@@ -281,7 +283,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-051**: MUST verify OpenCV backend applies resolved merge gamma as the final backend-local float step without extra clipping around the gamma transfer.
 - **TST-052**: MUST verify HDR+ backend applies resolved merge gamma as the final backend-local float step without extra clipping around the gamma transfer.
 - **TST-053**: MUST verify runtime diagnostics print deterministic merge-gamma request and resolved-transfer lines.
-- **TST-054**: MUST verify automatic merge-gamma diagnostics print normalized EXIF `ColorSpace` and `InteroperabilityIndex` inputs used during resolution.
+- **TST-054**: MUST verify automatic merge-gamma diagnostics print normalized EXIF `ColorSpace`, `InteroperabilityIndex`, and `ImageModel` inputs used during resolution.
 - **TST-040**: MUST verify float-only OpenCV Mertens output applies OpenCV-equivalent `255x` exposure-fusion scaling before final `[0,1]` normalization.
 
 ## 5. Evidence Matrix
@@ -407,7 +409,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-157 | `src/dng2jpg/dng2jpg.py::_describe_source_gamma_info`, `_extract_source_gamma_info`, `run`; excerpt: derives source gamma diagnostics from RAW metadata while leaving linear HDR extraction unchanged. |
 | REQ-163 | `src/dng2jpg/dng2jpg.py::_extract_source_gamma_info`, `_classify_tone_curve_gamma`; excerpt: applies metadata-priority ordering and returns `unknown` when metadata evidence is insufficient. |
 | REQ-164 | `src/dng2jpg/dng2jpg.py::_describe_source_gamma_info`, `run`; excerpt: prints deterministic source gamma label and numeric-or-undetermined value. |
-| REQ-169 | `src/dng2jpg/dng2jpg.py::_extract_exif_gamma_tags`, `_resolve_auto_merge_gamma`, `run`; excerpt: derives auto merge transfer from EXIF color-space evidence with source-gamma fallback. |
+| REQ-169 | `src/dng2jpg/dng2jpg.py::_extract_exif_gamma_tags`, `_resolve_auto_merge_gamma`, `run`; excerpt: derives auto merge transfer from EXIF color-space evidence via `exifread` binary stream processing with source-gamma fallback. |
 | REQ-170 | `src/dng2jpg/dng2jpg.py::_apply_merge_gamma_float`, `_run_opencv_hdr_merge`, `_run_hdr_plus_merge`; excerpt: applies merge gamma only as the last backend-local float step without post-gamma clipping. |
 | REQ-171 | `src/dng2jpg/dng2jpg.py::_describe_resolved_merge_gamma`, `run`; excerpt: prints deterministic merge-gamma request and resolved-transfer diagnostics. |
 | REQ-158 | `src/dng2jpg/dng2jpg.py::_extract_base_rgb_linear_float`; excerpt: normalizes the extracted HDR base image to RGB float `[0,1]` before bracket arithmetic. |
