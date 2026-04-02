@@ -3571,8 +3571,10 @@ def _parse_run_options(args):
     OpenCV backend controls, HDR+ backend controls, and luminance backend controls
     including explicit `--tmo*` passthrough options and optional
     auto-adjust enable selector (`--auto-adjust <enable|disable>`), plus
-    optional `--debug` persistent checkpoint emission; rejects removed
-    `--gamma`, rejects unknown options, and rejects invalid arity.
+    optional `--debug` persistent checkpoint emission; parses
+    `--gamma=<auto|linear_coeff,exponent>` merge-output transfer selector
+    defaulting to `auto` when omitted, rejects unknown options, and rejects
+    invalid arity.
     @param args {list[str]} Raw command argument vector.
     @return {tuple[Path, Path, float|None, bool, PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, bool, AutoEvOptions]|None} Parsed `(input, output, ev, auto_ev, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, ev_zero_specified, auto_ev_options)` tuple; `None` on parse failure.
     @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-020, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146
