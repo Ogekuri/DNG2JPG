@@ -5399,6 +5399,46 @@ def _validate_white_balance_triplet_shape(np_module, bracket_images_float):
     return normalized_triplet
 
 
+def _build_xphoto_analysis_proxy_rgb_float(np_module, analysis_image_rgb_float):
+    """@brief Build compact EV0 float proxy for xphoto parameter evaluation.
+
+    @details Computes deterministic per-channel percentile anchors from EV0
+    normalized RGB float payload, then packs a compact synthetic RGB strip used
+    only to evaluate xphoto white-balance parameter curves. This keeps canonical
+    bracket processing in normalized float space and avoids full-image
+    discretization for xphoto-based modes.
+    @param np_module {ModuleType} Imported numpy module.
+    @param analysis_image_rgb_float {object} EV0 RGB float tensor.
+    @return {object} Compact RGB float32 proxy tensor with shape `(1,N,3)`.
+    @satisfies REQ-183, REQ-184, REQ-185, REQ-186
+    """
+
+    analysis_rgb = _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=analysis_image_rgb_float,
+    ).astype(np_module.float32, copy=False)
+    flat_rgb = analysis_rgb.reshape((-1, 3)).astype(np_module.float64, copy=False)
+    percentile_levels = (2.0, 10.0, 25.0, 50.0, 75.0, 90.0, 98.0)
+    percentile_samples = []
+    for percentile_level in percentile_levels:
+        percentile_samples.append(
+            np_module.percentile(flat_rgb, percentile_level, axis=0).astype(
+                np_module.float64, copy=False
+            )
+        )
+    channel_means = np_module.mean(flat_rgb, axis=0).astype(np_module.float64, copy=False)
+    neutral_mean = float(np_module.mean(channel_means))
+    neutral_sample = np_module.array(
+        [neutral_mean, neutral_mean, neutral_mean],
+        dtype=np_module.float64,
+    )
+    proxy_samples = np_module.vstack(percentile_samples + [channel_means, neutral_sample])
+    proxy_samples = np_module.clip(proxy_samples, 0.0, 1.0).astype(
+        np_module.float32, copy=False
+    )
+    return proxy_samples.reshape((1, proxy_samples.shape[0], 3))
+
+
 def _extract_white_balance_channel_gains_from_xphoto(
     cv2_module,
     np_module,
@@ -5407,10 +5447,11 @@ def _extract_white_balance_channel_gains_from_xphoto(
 ):
     """@brief Derive per-channel white-balance gains from one OpenCV xphoto algorithm.
 
-    @details Converts EV0 RGB float into backend-local uint8 BGR payload,
-    executes xphoto `balanceWhite(...)`, converts output back to RGB float, and
-    derives one gain vector from channel means `balanced/original`. Gains are
-    finite positive float64 values.
+    @details Builds a compact EV0 float proxy strip for tangential xphoto
+    parameter probing, converts only that proxy to backend-local uint8 BGR,
+    executes xphoto `balanceWhite(...)`, converts balanced proxy back to RGB
+    float, and derives one gain vector from channel means `balanced/original`.
+    Gains are finite positive float64 values.
     @param cv2_module {ModuleType} Imported OpenCV module.
     @param np_module {ModuleType} Imported numpy module.
     @param wb_algorithm {object} OpenCV xphoto white-balance instance.
@@ -5420,25 +5461,28 @@ def _extract_white_balance_channel_gains_from_xphoto(
     @satisfies REQ-183, REQ-184, REQ-185, REQ-186
     """
 
-    analysis_rgb = _normalize_float_rgb_image(
+    analysis_proxy_rgb = _build_xphoto_analysis_proxy_rgb_float(
         np_module=np_module,
-        image_data=analysis_image_rgb_float,
-    ).astype(np_module.float32, copy=False)
-    analysis_bgr_uint8 = cv2_module.cvtColor(
+        analysis_image_rgb_float=analysis_image_rgb_float,
+    )
+    analysis_proxy_bgr_uint8 = cv2_module.cvtColor(
         _to_uint8_image_array(
             np_module=np_module,
-            image_data=analysis_rgb,
+            image_data=analysis_proxy_rgb,
         ),
         cv2_module.COLOR_RGB2BGR,
     )
-    balanced_bgr_uint8 = wb_algorithm.balanceWhite(analysis_bgr_uint8)
-    balanced_rgb_float = _normalize_float_rgb_image(
+    balanced_proxy_bgr_uint8 = wb_algorithm.balanceWhite(analysis_proxy_bgr_uint8)
+    source_proxy_rgb_float = _normalize_float_rgb_image(
         np_module=np_module,
-        image_data=cv2_module.cvtColor(balanced_bgr_uint8, cv2_module.COLOR_BGR2RGB),
+        image_data=cv2_module.cvtColor(analysis_proxy_bgr_uint8, cv2_module.COLOR_BGR2RGB),
     ).astype(np_module.float64, copy=False)
-    source_rgb_float = analysis_rgb.astype(np_module.float64, copy=False)
-    source_mean = np_module.mean(source_rgb_float, axis=(0, 1))
-    balanced_mean = np_module.mean(balanced_rgb_float, axis=(0, 1))
+    balanced_proxy_rgb_float = _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=cv2_module.cvtColor(balanced_proxy_bgr_uint8, cv2_module.COLOR_BGR2RGB),
+    ).astype(np_module.float64, copy=False)
+    source_mean = np_module.mean(source_proxy_rgb_float, axis=(0, 1))
+    balanced_mean = np_module.mean(balanced_proxy_rgb_float, axis=(0, 1))
     source_mean = np_module.maximum(source_mean, 1e-12)
     gains = balanced_mean / source_mean
     gains = np_module.where(np_module.isfinite(gains), gains, 1.0)

@@ -2487,6 +2487,54 @@ def test_apply_white_balance_to_bracket_triplet_ia_mode_sets_hist_bins(
     assert fake_cv2.xphoto.learning_wb.hist_bin_num == 256
 
 
+def test_extract_white_balance_channel_gains_from_xphoto_uses_compact_proxy_payload(
+    monkeypatch,
+) -> None:
+    """xphoto gain extraction must quantize only compact proxy payload, not full EV0 image."""
+
+    class _FakeXphotoAlgorithm:
+        def __init__(self) -> None:
+            self.seen_payload: np.ndarray | None = None
+
+        def balanceWhite(self, image_bgr_u8: np.ndarray) -> np.ndarray:
+            self.seen_payload = np.array(image_bgr_u8, copy=True)
+            return np.array(image_bgr_u8, copy=True)
+
+    fake_cv2 = _FakeOpenCvModule()
+    fake_algorithm = _FakeXphotoAlgorithm()
+    ev_zero_rgb = np.linspace(
+        0.0,
+        1.0,
+        num=3 * 64 * 64,
+        endpoint=True,
+        dtype=np.float32,
+    ).reshape((64, 64, 3))
+    uint8_shapes: list[tuple[int, ...]] = []
+    original_uint8_converter = dng2jpg_module._to_uint8_image_array  # pylint: disable=protected-access
+
+    def _record_uint8_shape(*, np_module, image_data):
+        uint8_shapes.append(tuple(image_data.shape))
+        return original_uint8_converter(np_module=np_module, image_data=image_data)
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_to_uint8_image_array",
+        _record_uint8_shape,
+    )
+
+    gains = dng2jpg_module._extract_white_balance_channel_gains_from_xphoto(  # pylint: disable=protected-access
+        cv2_module=fake_cv2,
+        np_module=np,
+        wb_algorithm=fake_algorithm,
+        analysis_image_rgb_float=ev_zero_rgb,
+    )
+
+    assert uint8_shapes == [(1, 9, 3)]
+    assert fake_algorithm.seen_payload is not None
+    assert fake_algorithm.seen_payload.shape == (1, 9, 3)
+    np.testing.assert_allclose(gains, np.array([1.0, 1.0, 1.0], dtype=np.float64), rtol=0.0, atol=0.0)
+
+
 def test_apply_white_balance_to_bracket_triplet_color_constancy_mode_uses_skimage_luminance(
     monkeypatch,
 ) -> None:
