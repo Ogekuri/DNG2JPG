@@ -1728,14 +1728,6 @@ def test_run_luminance_hdr_cli_prints_full_command_syntax(
             tmo="mantiuk08",
             tmo_extra_args=("--tmoFerRho", "0.4"),
         ),
-        resolved_merge_gamma=dng2jpg_module.ResolvedMergeGamma(
-            request=dng2jpg_module.MergeGammaOption(mode="auto"),
-            transfer="linear",
-            label="Linear",
-            param_a=None,
-            param_b=None,
-            evidence="test-default-linear",
-        ),
     )
 
     captured = capsys.readouterr().out
@@ -1772,63 +1764,6 @@ def test_run_luminance_hdr_cli_prints_full_command_syntax(
     assert "--hdrResponseCurve" in recorded_command
     assert recorded_command[recorded_command.index("--hdrResponseCurve") + 1] == "linear"
     assert output.shape == (1, 1, 3)
-
-
-def test_run_luminance_hdr_cli_maps_resolved_merge_gamma_to_post_gamma(
-    monkeypatch, tmp_path, capsys
-) -> None:
-    """Luminance backend must map resolved merge gamma to CLI `-G` post-gamma."""
-
-    bracket_images_float = [
-        np.full((1, 1, 3), 0.1, dtype=np.float32),
-        np.full((1, 1, 3), 0.5, dtype=np.float32),
-        np.full((1, 1, 3), 0.9, dtype=np.float32),
-    ]
-    imageio_module = _FakeImageIoModule(
-        merged_rgb_u16=np.full((1, 1, 3), 32768, dtype=np.uint16)
-    )
-    recorded_command: list[str] = []
-
-    def _fake_subprocess_run(command: list[str], check: bool) -> None:
-        del check
-        recorded_command[:] = list(command)
-
-    monkeypatch.setattr(
-        dng2jpg_module.subprocess,
-        "run",
-        _fake_subprocess_run,
-    )
-
-    dng2jpg_module._run_luminance_hdr_cli(  # pylint: disable=protected-access
-        bracket_images_float=bracket_images_float,
-        temp_dir=tmp_path,
-        imageio_module=imageio_module,
-        np_module=np,
-        ev_value=1.0,
-        ev_zero=0.0,
-        luminance_options=dng2jpg_module.LuminanceOptions(
-            hdr_model="debevec",
-            hdr_weight="flat",
-            hdr_response_curve="linear",
-            tmo="mantiuk08",
-            tmo_extra_args=(),
-        ),
-        resolved_merge_gamma=dng2jpg_module.ResolvedMergeGamma(
-            request=dng2jpg_module.MergeGammaOption(mode="auto"),
-            transfer="power",
-            label="Adobe RGB",
-            param_a=2.19921875,
-            param_b=None,
-            evidence="test-exif-adobe-rgb",
-        ),
-    )
-
-    captured = capsys.readouterr().out
-    assert "-g 1" in captured
-    assert "-S 1" in captured
-    assert "-G 2.19921875" in captured
-    assert "--hdrResponseCurve linear" in captured
-    assert recorded_command[recorded_command.index("-G") + 1] == "2.19921875"
 
 
 def test_parse_run_options_rejects_non_linear_luminance_response_curve(capsys) -> None:

@@ -5803,48 +5803,6 @@ def _format_external_command_for_log(command):
     return shlex.join(command)
 
 
-def _resolve_luminance_cli_merge_gamma_options(resolved_merge_gamma):
-    """@brief Resolve luminance CLI gamma/response parameters from merge-gamma payload.
-
-    @details Enforces deterministic linear ingress for luminance backend by
-    fixing pre-gamma `-g=1`, saturation `-S=1`, and HDR response
-    `--hdrResponseCurve=linear`, while mapping resolved merge-gamma transfer to
-    post-gamma `-G` using the closest representable scalar gamma supported by
-    `luminance-hdr-cli`: `linear->1`, `power->param_a`,
-    `srgb->2.2` approximation, `rec709->1/param_b`.
-    @param resolved_merge_gamma {ResolvedMergeGamma} Resolved merge-output transfer payload.
-    @return {tuple[str, str, str, str, str]} Tuple `(pre_gamma, saturation, post_gamma, hdr_response_curve, ldr_tiff)` for luminance CLI flags `-g`, `-S`, `-G`, `--hdrResponseCurve`, `--ldrTiff`.
-    @exception ValueError Raised when required transfer parameters are missing.
-    @satisfies REQ-011, REQ-170
-    """
-
-    pre_gamma = "1"
-    saturation = "1"
-    hdr_response_curve = DEFAULT_LUMINANCE_HDR_RESPONSE_CURVE
-    ldr_tiff = "32b"
-    if resolved_merge_gamma.transfer == "linear":
-        post_gamma = "1"
-    elif resolved_merge_gamma.transfer == "power":
-        if resolved_merge_gamma.param_a is None:
-            raise ValueError("Resolved power merge gamma is missing exponent")
-        post_gamma = format(float(resolved_merge_gamma.param_a), ".15g")
-    elif resolved_merge_gamma.transfer == "srgb":
-        post_gamma = "2.2"
-    elif resolved_merge_gamma.transfer == "rec709":
-        if resolved_merge_gamma.param_b is None:
-            raise ValueError("Resolved Rec.709 merge gamma is missing exponent")
-        post_gamma = format(1.0 / float(resolved_merge_gamma.param_b), ".15g")
-    else:
-        raise ValueError(f"Unsupported merge gamma transfer: {resolved_merge_gamma.transfer}")
-    return (
-        pre_gamma,
-        saturation,
-        post_gamma,
-        hdr_response_curve,
-        ldr_tiff,
-    )
-
-
 def _run_luminance_hdr_cli(
     bracket_images_float,
     temp_dir,
@@ -5853,20 +5811,17 @@ def _run_luminance_hdr_cli(
     ev_value,
     ev_zero,
     luminance_options,
-    resolved_merge_gamma=None,
 ):
     """@brief Merge bracket float images into one RGB float image via `luminance-hdr-cli`.
 
     @details Builds deterministic luminance-hdr-cli argv using EV sequence
     centered around zero-reference (`-ev_value,0,+ev_value`) even when extraction
     uses non-zero `ev_zero`, serializes float inputs to local float32 TIFFs,
-    enforces linear bracket ingress via `-g 1`, `-S 1`,
-    `--hdrResponseCurve linear`, maps resolved merge gamma to `-G`, forwards
-    deterministic HDR/TMO arguments including `--ldrTiff 32b` to force float32
-    output, emits one runtime log line with the full executed command syntax
-    and parameters, isolates sidecar artifacts in a backend-specific temporary
-    directory, then reloads the produced float32 TIFF and normalizes it back to
-    DNG2JPG RGB float `[0,1]` working format.
+    forwards deterministic HDR/TMO arguments including `--ldrTiff 32b` to force
+    float32 output, emits one runtime log line with the full executed command
+    syntax and parameters, isolates sidecar artifacts in a backend-specific
+    temporary directory, then reloads the produced float32 TIFF and normalizes
+    it back to DNG2JPG RGB float `[0,1]` working format.
     @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors.
     @param temp_dir {Path} Temporary workspace root.
     @param imageio_module {ModuleType} Imported imageio module with `imread` and `imwrite`.
@@ -5874,22 +5829,10 @@ def _run_luminance_hdr_cli(
     @param ev_value {float} EV bracket delta used to generate exposure files.
     @param ev_zero {float} Central EV used to generate exposure files.
     @param luminance_options {LuminanceOptions} Luminance backend command controls.
-    @param resolved_merge_gamma {ResolvedMergeGamma|None} Backend-final merge-output transfer payload.
     @return {object} Normalized RGB float merged image.
     @exception subprocess.CalledProcessError Raised when `luminance-hdr-cli` returns non-zero exit status.
-    @exception ValueError Raised when merge-gamma payload is incomplete.
-    @satisfies REQ-011, REQ-033, REQ-034, REQ-035, REQ-170, REQ-174, REQ-175
+    @satisfies REQ-011, REQ-033, REQ-034, REQ-035, REQ-174, REQ-175
     """
-
-    if resolved_merge_gamma is None:
-        resolved_merge_gamma = ResolvedMergeGamma(
-            request=MergeGammaOption(mode="auto"),
-            transfer="linear",
-            label="Linear",
-            param_a=None,
-            param_b=None,
-            evidence="default-linear",
-        )
 
     backend_dir = temp_dir / "luminance"
     backend_dir.mkdir(parents=True, exist_ok=True)
@@ -5901,35 +5844,26 @@ def _run_luminance_hdr_cli(
     )
     output_hdr_tiff = backend_dir / "merged_hdr.tif"
     ordered_paths = _order_bracket_paths(bracket_paths)
-    (
-        luminance_pre_gamma,
-        luminance_saturation,
-        luminance_post_gamma,
-        luminance_hdr_response_curve,
-        luminance_ldr_tiff,
-    ) = _resolve_luminance_cli_merge_gamma_options(
-        resolved_merge_gamma=resolved_merge_gamma
-    )
     command = [
         "luminance-hdr-cli",
         "-e",
         f"{-ev_value:g},0,{ev_value:g}",
         "-g",
-        luminance_pre_gamma,
+        "1",
         "-S",
-        luminance_saturation,
+        "1",
         "-G",
-        luminance_post_gamma,
+        "1",
         "--hdrModel",
         luminance_options.hdr_model,
         "--hdrWeight",
         luminance_options.hdr_weight,
         "--hdrResponseCurve",
-        luminance_hdr_response_curve,
+        luminance_options.hdr_response_curve,
         "--tmo",
         luminance_options.tmo,
         "--ldrTiff",
-        luminance_ldr_tiff,
+        "32b",
         *luminance_options.tmo_extra_args,
         "-o",
         str(output_hdr_tiff),
@@ -11637,7 +11571,6 @@ def run(args):
                     ev_value=effective_ev_value,
                     ev_zero=resolved_ev_zero,
                     luminance_options=luminance_options,
-                    resolved_merge_gamma=resolved_merge_gamma,
                 )
             elif enable_opencv:
                 merged_image_float = _run_opencv_merge_backend(
