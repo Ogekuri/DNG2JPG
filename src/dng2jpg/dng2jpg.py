@@ -7221,15 +7221,16 @@ def _apply_static_postprocess_float(
 ):
     """@brief Execute static postprocess chain with float-only stage internals.
 
-    @details Accepts one normalized RGB float tensor, executes either
-    `--post-gamma=auto` replacement stage or legacy numeric
-    gamma/brightness/contrast/saturation substages, preserves strict numeric
-    substage order, bypasses numeric static stage when all numeric factors are
-    neutral (`1.0`), executes only non-neutral numeric substages in order, runs
-    all intermediate calculations in float domain without stage-local `[0,1]`
-    clipping on gamma/brightness/saturation stages, optionally emits persistent
-    debug TIFF checkpoints after each executed static substage, and eliminates
-    the prior float->uint16->float adaptation cycle from this step.
+    @details Accepts one normalized RGB float tensor and executes static
+    postprocess in strict order `gamma->brightness->contrast->saturation`,
+    where gamma is either numeric static gamma or auto-gamma replacement when
+    `--post-gamma=auto` is selected. Bypasses numeric static stage when all
+    numeric factors are neutral (`1.0`), executes only non-neutral numeric
+    substages in order, runs all intermediate calculations in float domain
+    without stage-local `[0,1]` clipping on gamma/brightness/saturation
+    stages, optionally emits persistent debug TIFF checkpoints after each
+    executed static substage, and eliminates the prior float->uint16->float
+    adaptation cycle from this step.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} RGB float tensor.
     @param postprocess_options {PostprocessOptions} Parsed postprocess controls.
@@ -7247,12 +7248,14 @@ def _apply_static_postprocess_float(
     brightness_factor = float(postprocess_options.brightness)
     contrast_factor = float(postprocess_options.contrast)
     saturation_factor = float(postprocess_options.saturation)
+    gamma_stage_executed = False
     if postprocess_options.post_gamma_mode == "auto":
         processed, _resolved_auto_gamma = _apply_auto_post_gamma_float(
             np_module=np_module,
             image_rgb_float=processed,
             post_gamma_auto_options=postprocess_options.post_gamma_auto_options,
         )
+        gamma_stage_executed = True
         if imageio_module is not None and debug_context is not None:
             _write_debug_rgb_float_tiff(
                 imageio_module=imageio_module,
@@ -7261,24 +7264,13 @@ def _apply_static_postprocess_float(
                 stage_suffix="_3.0_static_correction_auto_gamma",
                 image_rgb_float=processed,
             )
-        return processed
-    static_stage_enabled = any(
-        factor != 1.0
-        for factor in (
-            gamma_value,
-            brightness_factor,
-            contrast_factor,
-            saturation_factor,
-        )
-    )
-    if not static_stage_enabled:
-        return processed
-    if gamma_value != 1.0:
+    elif gamma_value != 1.0:
         processed = _apply_post_gamma_float(
             np_module=np_module,
             image_rgb_float=processed,
             gamma_value=gamma_value,
         )
+        gamma_stage_executed = True
         if imageio_module is not None and debug_context is not None:
             _write_debug_rgb_float_tiff(
                 imageio_module=imageio_module,
@@ -7287,6 +7279,16 @@ def _apply_static_postprocess_float(
                 stage_suffix="_3.1_static_correction_gamma",
                 image_rgb_float=processed,
             )
+    static_stage_enabled = gamma_stage_executed or any(
+        factor != 1.0
+        for factor in (
+            brightness_factor,
+            contrast_factor,
+            saturation_factor,
+        )
+    )
+    if not static_stage_enabled:
+        return processed
     if brightness_factor != 1.0:
         processed = _apply_brightness_float(
             np_module=np_module,

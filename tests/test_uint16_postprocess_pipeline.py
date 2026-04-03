@@ -577,10 +577,10 @@ def test_apply_static_postprocess_float_executes_only_non_neutral_substages_in_o
     assert execution_order == ["brightness", "saturation"]
 
 
-def test_apply_static_postprocess_float_replaces_numeric_static_stage_with_auto_gamma(
+def test_apply_static_postprocess_float_executes_auto_gamma_then_static_substages(
     monkeypatch,
 ) -> None:
-    """Static stage must replace numeric substages when `--post-gamma=auto` is selected."""
+    """Static stage must run `auto-gamma->brightness->contrast->saturation` in order."""
 
     image_rgb_float = np.array(
         [[[0.2, 0.4, 0.6], [0.8, 0.3, 0.1]]],
@@ -610,26 +610,42 @@ def test_apply_static_postprocess_float_replaces_numeric_static_stage_with_auto_
         del post_gamma_auto_options
         execution_order.append("auto-gamma")
         return (
-            image_rgb_float.astype(np_module.float32, copy=False) + np_module.float32(0.05),
+            image_rgb_float.astype(np_module.float32, copy=False) + np_module.float32(0.01),
             1.23,
         )
 
-    def _fail_numeric(*_args, **_kwargs):
-        raise AssertionError("Numeric static substage must not execute in auto-gamma mode")
+    def _tracked_gamma(*_args, **_kwargs):
+        execution_order.append("gamma")
+        raise AssertionError("Numeric gamma stage must not execute in auto-gamma mode")
+
+    def _tracked_brightness(*, np_module, image_rgb_float, brightness_factor):
+        del brightness_factor
+        execution_order.append("brightness")
+        return image_rgb_float.astype(np_module.float32, copy=False) + np_module.float32(0.02)
+
+    def _tracked_contrast(*, np_module, image_rgb_float, contrast_factor):
+        del contrast_factor
+        execution_order.append("contrast")
+        return image_rgb_float.astype(np_module.float32, copy=False) + np_module.float32(0.03)
+
+    def _tracked_saturation(*, np_module, image_rgb_float, saturation_factor):
+        del saturation_factor
+        execution_order.append("saturation")
+        return image_rgb_float.astype(np_module.float32, copy=False) + np_module.float32(0.04)
 
     monkeypatch.setattr(dng2jpg_module, "_apply_auto_post_gamma_float", _tracked_auto)
-    monkeypatch.setattr(dng2jpg_module, "_apply_post_gamma_float", _fail_numeric)
-    monkeypatch.setattr(dng2jpg_module, "_apply_brightness_float", _fail_numeric)
-    monkeypatch.setattr(dng2jpg_module, "_apply_contrast_float", _fail_numeric)
-    monkeypatch.setattr(dng2jpg_module, "_apply_saturation_float", _fail_numeric)
+    monkeypatch.setattr(dng2jpg_module, "_apply_post_gamma_float", _tracked_gamma)
+    monkeypatch.setattr(dng2jpg_module, "_apply_brightness_float", _tracked_brightness)
+    monkeypatch.setattr(dng2jpg_module, "_apply_contrast_float", _tracked_contrast)
+    monkeypatch.setattr(dng2jpg_module, "_apply_saturation_float", _tracked_saturation)
 
     output = dng2jpg_module._apply_static_postprocess_float(  # pylint: disable=protected-access
         np_module=np,
         image_rgb_float=image_rgb_float,
         postprocess_options=postprocess_options,
     )
-    np.testing.assert_allclose(output, image_rgb_float + np.float32(0.05), rtol=0.0, atol=0.0)
-    assert execution_order == ["auto-gamma"]
+    np.testing.assert_allclose(output, image_rgb_float + np.float32(0.10), rtol=0.0, atol=1e-7)
+    assert execution_order == ["auto-gamma", "brightness", "contrast", "saturation"]
 
 
 def test_encode_jpg_quantizes_once_at_final_boundary(monkeypatch, tmp_path) -> None:
