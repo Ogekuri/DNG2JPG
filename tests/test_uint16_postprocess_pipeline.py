@@ -577,6 +577,61 @@ def test_apply_static_postprocess_float_executes_only_non_neutral_substages_in_o
     assert execution_order == ["brightness", "saturation"]
 
 
+def test_apply_static_postprocess_float_replaces_numeric_static_stage_with_auto_gamma(
+    monkeypatch,
+) -> None:
+    """Static stage must replace numeric substages when `--post-gamma=auto` is selected."""
+
+    image_rgb_float = np.array(
+        [[[0.2, 0.4, 0.6], [0.8, 0.3, 0.1]]],
+        dtype=np.float32,
+    )
+    postprocess_options = dng2jpg_module.PostprocessOptions(
+        post_gamma=1.4,
+        brightness=1.25,
+        contrast=0.9,
+        saturation=1.1,
+        jpg_compression=25,
+        post_gamma_mode="auto",
+        post_gamma_auto_options=dng2jpg_module.PostGammaAutoOptions(
+            target_gray=0.5,
+            luma_min=0.01,
+            luma_max=0.99,
+            lut_size=256,
+        ),
+        auto_brightness_enabled=False,
+        auto_levels_enabled=False,
+        auto_adjust_enabled=False,
+        debug_enabled=False,
+    )
+    execution_order: list[str] = []
+
+    def _tracked_auto(*, np_module, image_rgb_float, post_gamma_auto_options):
+        del post_gamma_auto_options
+        execution_order.append("auto-gamma")
+        return (
+            image_rgb_float.astype(np_module.float32, copy=False) + np_module.float32(0.05),
+            1.23,
+        )
+
+    def _fail_numeric(*_args, **_kwargs):
+        raise AssertionError("Numeric static substage must not execute in auto-gamma mode")
+
+    monkeypatch.setattr(dng2jpg_module, "_apply_auto_post_gamma_float", _tracked_auto)
+    monkeypatch.setattr(dng2jpg_module, "_apply_post_gamma_float", _fail_numeric)
+    monkeypatch.setattr(dng2jpg_module, "_apply_brightness_float", _fail_numeric)
+    monkeypatch.setattr(dng2jpg_module, "_apply_contrast_float", _fail_numeric)
+    monkeypatch.setattr(dng2jpg_module, "_apply_saturation_float", _fail_numeric)
+
+    output = dng2jpg_module._apply_static_postprocess_float(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_float=image_rgb_float,
+        postprocess_options=postprocess_options,
+    )
+    np.testing.assert_allclose(output, image_rgb_float + np.float32(0.05), rtol=0.0, atol=0.0)
+    assert execution_order == ["auto-gamma"]
+
+
 def test_encode_jpg_quantizes_once_at_final_boundary(monkeypatch, tmp_path) -> None:
     """`_encode_jpg` must call float->uint8 conversion exactly once at JPEG boundary."""
 
@@ -1276,7 +1331,11 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
         "--al-clip-out-of-gamut[=<bool>]",
         "--al-highlight-reconstruction-method <name>",
         "--al-gain-threshold=<value>",
-        "--post-gamma=<value>",
+        "--post-gamma=<value|auto>",
+        "--post-gamma-auto-target-gray=<value>",
+        "--post-gamma-auto-luma-min=<value>",
+        "--post-gamma-auto-luma-max=<value>",
+        "--post-gamma-auto-lut-size=<value>",
         "--brightness=<value>",
         "--contrast=<value>",
         "--saturation=<value>",
@@ -1889,6 +1948,47 @@ def test_parse_run_options_rejects_invalid_opencv_controls() -> None:
     assert invalid_coupling is None
 
 
+def test_parse_run_options_accepts_post_gamma_auto_and_knobs() -> None:
+    """Parser must accept `--post-gamma=auto` and parse auto-gamma knobs."""
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        [
+            "input.dng",
+            "output.jpg",
+            "--ev=1",
+            "--post-gamma=auto",
+            "--post-gamma-auto-target-gray=0.42",
+            "--post-gamma-auto-luma-min=0.02",
+            "--post-gamma-auto-luma-max=0.95",
+            "--post-gamma-auto-lut-size=1024",
+        ]
+    )
+    assert parsed is not None
+    postprocess_options = parsed[4]
+    assert postprocess_options.post_gamma_mode == "auto"
+    assert postprocess_options.post_gamma_auto_options == dng2jpg_module.PostGammaAutoOptions(
+        target_gray=0.42,
+        luma_min=0.02,
+        luma_max=0.95,
+        lut_size=1024,
+    )
+
+
+def test_parse_run_options_rejects_post_gamma_auto_knobs_without_auto() -> None:
+    """Parser must reject `--post-gamma-auto-*` options without `--post-gamma=auto`."""
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        [
+            "input.dng",
+            "output.jpg",
+            "--ev=1",
+            "--post-gamma=1.2",
+            "--post-gamma-auto-target-gray=0.42",
+        ]
+    )
+    assert parsed is None
+
+
 def test_run_opencv_hdr_merge_dispatches_debevec_uint8_radiance_path_with_tonemap() -> None:
     """OpenCV Debevec radiance path must quantize locally and return float output."""
 
@@ -2128,6 +2228,83 @@ def test_parse_run_options_rejects_invalid_gamma_payload() -> None:
     assert invalid_shape is None
     assert invalid_non_positive is None
 
+
+def test_apply_auto_post_gamma_float_uses_mean_luminance_anchor_and_guards() -> None:
+    """Auto-gamma must use mean-luminance anchoring and guard-path identity behavior."""
+
+    image_rgb_float = np.array(
+        [[[0.25, 0.25, 0.25], [0.75, 0.75, 0.75]]],
+        dtype=np.float32,
+    )
+    options = dng2jpg_module.PostGammaAutoOptions(
+        target_gray=0.5,
+        luma_min=0.01,
+        luma_max=0.99,
+        lut_size=256,
+    )
+    output, resolved_gamma = dng2jpg_module._apply_auto_post_gamma_float(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_float=image_rgb_float,
+        post_gamma_auto_options=options,
+    )
+    mean_luminance = float(np.mean((0.2126 * image_rgb_float[:, :, 0]) + (0.7152 * image_rgb_float[:, :, 1]) + (0.0722 * image_rgb_float[:, :, 2])))
+    expected_gamma = float(np.log(0.5) / np.log(mean_luminance))
+    np.testing.assert_allclose(resolved_gamma, expected_gamma, rtol=1e-7, atol=0.0)
+    np.testing.assert_allclose(
+        output,
+        np.power(image_rgb_float.astype(np.float64), expected_gamma).astype(np.float32),
+        rtol=1e-5,
+        atol=1e-6,
+    )
+
+    guarded_options = dng2jpg_module.PostGammaAutoOptions(
+        target_gray=0.5,
+        luma_min=0.26,
+        luma_max=0.99,
+        lut_size=256,
+    )
+    guarded_output, guarded_gamma = dng2jpg_module._apply_auto_post_gamma_float(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_float=image_rgb_float,
+        post_gamma_auto_options=guarded_options,
+    )
+    assert guarded_gamma == 1.0
+    np.testing.assert_allclose(guarded_output, image_rgb_float, rtol=0.0, atol=0.0)
+
+
+def test_apply_auto_post_gamma_float_uses_float_lut_mapping_without_quantized_helpers(
+    monkeypatch,
+) -> None:
+    """Auto-gamma LUT mapping must stay float-only without quantized helper calls."""
+
+    image_rgb_float = np.array(
+        [[[0.125, 0.375, 0.625], [0.875, 0.5, 0.25]]],
+        dtype=np.float32,
+    )
+    options = dng2jpg_module.PostGammaAutoOptions(
+        target_gray=0.5,
+        luma_min=0.01,
+        luma_max=0.99,
+        lut_size=64,
+    )
+
+    def _fail_uint8(*_args, **_kwargs):
+        raise AssertionError("Auto-gamma must not call _to_uint8_image_array")
+
+    def _fail_uint16(*_args, **_kwargs):
+        raise AssertionError("Auto-gamma must not call _to_uint16_image_array")
+
+    monkeypatch.setattr(dng2jpg_module, "_to_uint8_image_array", _fail_uint8)
+    monkeypatch.setattr(dng2jpg_module, "_to_uint16_image_array", _fail_uint16)
+
+    output, resolved_gamma = dng2jpg_module._apply_auto_post_gamma_float(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_float=image_rgb_float,
+        post_gamma_auto_options=options,
+    )
+    assert output.dtype == np.float32
+    assert output.shape == image_rgb_float.shape
+    assert resolved_gamma > 0.0
 
 def test_extract_source_gamma_info_prefers_explicit_profile_metadata() -> None:
     """Source gamma diagnostics must prefer explicit profile metadata."""

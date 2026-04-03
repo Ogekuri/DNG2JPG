@@ -39,6 +39,11 @@ DESCRIPTION = (
     "Convert DNG to HDR-merged JPG with luminance-hdr-cli, OpenCV, or HDR+ backend."
 )
 DEFAULT_POST_GAMMA = 1.0
+DEFAULT_POST_GAMMA_MODE = "numeric"
+DEFAULT_POST_GAMMA_AUTO_TARGET_GRAY = 0.5
+DEFAULT_POST_GAMMA_AUTO_LUMA_MIN = 0.01
+DEFAULT_POST_GAMMA_AUTO_LUMA_MAX = 0.99
+DEFAULT_POST_GAMMA_AUTO_LUT_SIZE = 256
 DEFAULT_BRIGHTNESS = 1.0
 DEFAULT_CONTRAST = 1.0
 DEFAULT_SATURATION = 1.0
@@ -171,6 +176,12 @@ _AUTO_BRIGHTNESS_KNOB_OPTIONS = (
     "--ab-max-auto-boost",
     "--ab-enable-luminance-preserving-desat",
     "--ab-eps",
+)
+_POST_GAMMA_AUTO_KNOB_OPTIONS = (
+    "--post-gamma-auto-target-gray",
+    "--post-gamma-auto-luma-min",
+    "--post-gamma-auto-luma-max",
+    "--post-gamma-auto-lut-size",
 )
 _HDRPLUS_KNOB_OPTIONS = (
     "--hdrplus-proxy-mode",
@@ -443,6 +454,26 @@ class AutoLevelsOptions:
 
 
 @dataclass(frozen=True)
+class PostGammaAutoOptions:
+    """@brief Hold `--post-gamma=auto` knob values.
+
+    @details Encapsulates mean-luminance anchoring controls for the dedicated
+    auto-gamma replacement stage in static postprocess execution.
+    @param target_gray {float} Mid-gray anchor target in `(0,1)`.
+    @param luma_min {float} Lower luminance guard in `(0,1)` for gamma solving.
+    @param luma_max {float} Upper luminance guard in `(0,1)` for gamma solving.
+    @param lut_size {int} Floating-point LUT size (`>=2`) for gamma mapping.
+    @return {None} Immutable dataclass container.
+    @satisfies REQ-177, REQ-179
+    """
+
+    target_gray: float = DEFAULT_POST_GAMMA_AUTO_TARGET_GRAY
+    luma_min: float = DEFAULT_POST_GAMMA_AUTO_LUMA_MIN
+    luma_max: float = DEFAULT_POST_GAMMA_AUTO_LUMA_MAX
+    lut_size: int = DEFAULT_POST_GAMMA_AUTO_LUT_SIZE
+
+
+@dataclass(frozen=True)
 class MergeGammaOption:
     """@brief Hold requested merge-gamma CLI selector state.
 
@@ -517,8 +548,11 @@ class PostprocessOptions:
     """@brief Hold deterministic postprocessing option values.
 
     @details Encapsulates correction factors and JPEG compression level used by
-    shared TIFF-to-JPG postprocessing for both HDR backends.
-    @param post_gamma {float} Gamma correction factor for postprocessing stage.
+    shared TIFF-to-JPG postprocessing for both HDR backends, including
+    `--post-gamma=auto` replacement-stage controls.
+    @param post_gamma {float} Numeric gamma correction factor for static numeric mode.
+    @param post_gamma_mode {str} Static gamma selector in `{"numeric","auto"}`.
+    @param post_gamma_auto_options {PostGammaAutoOptions} Auto-gamma replacement stage knobs.
     @param brightness {float} Brightness enhancement factor.
     @param contrast {float} Contrast enhancement factor.
     @param saturation {float} Saturation enhancement factor.
@@ -532,7 +566,7 @@ class PostprocessOptions:
     @param debug_enabled {bool} `True` when persistent debug TIFF checkpoints are enabled.
     @param merge_gamma_option {MergeGammaOption} Parsed merge-gamma request applied only by OpenCV and HDR+ backends.
     @return {None} Immutable dataclass container.
-    @satisfies REQ-020, REQ-050, REQ-065, REQ-066, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-088, REQ-089, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-146
+    @satisfies REQ-020, REQ-050, REQ-065, REQ-066, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-088, REQ-089, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-146, REQ-176, REQ-179
     """
 
     post_gamma: float
@@ -540,6 +574,10 @@ class PostprocessOptions:
     contrast: float
     saturation: float
     jpg_compression: int
+    post_gamma_mode: str = DEFAULT_POST_GAMMA_MODE
+    post_gamma_auto_options: PostGammaAutoOptions = field(
+        default_factory=PostGammaAutoOptions
+    )
     auto_brightness_enabled: bool = False
     auto_brightness_options: AutoBrightnessOptions = field(
         default_factory=AutoBrightnessOptions
@@ -883,7 +921,7 @@ def print_help(version):
     characters. Side effects: stdout writes only.
     @param version {str} CLI version label to append in usage output.
     @return {None} Writes help text to stdout.
-    @satisfies DES-008, REQ-017, REQ-018, REQ-019, REQ-020, REQ-021, REQ-022, REQ-023, REQ-024, REQ-025, REQ-033, REQ-100, REQ-101, REQ-102, REQ-107, REQ-111, REQ-124, REQ-125, REQ-127, REQ-128, REQ-135, REQ-141, REQ-143, REQ-146, REQ-155, REQ-156
+    @satisfies DES-008, REQ-017, REQ-018, REQ-019, REQ-020, REQ-021, REQ-022, REQ-023, REQ-024, REQ-025, REQ-033, REQ-100, REQ-101, REQ-102, REQ-107, REQ-111, REQ-124, REQ-125, REQ-127, REQ-128, REQ-135, REQ-141, REQ-143, REQ-146, REQ-155, REQ-156, REQ-176, REQ-179
     """
 
     postprocess_default_rows = (
@@ -1157,8 +1195,24 @@ def print_help(version):
 
     _print_help_section("Step 6 - Static postprocess stage")
     _print_help_option(
-        "--post-gamma=<value>",
-        "Postprocess gamma correction factor; positive float. When omitted, resolves from selected backend and backend variant.",
+        "--post-gamma=<value|auto>",
+        "Postprocess gamma selector. Use a positive float for numeric static gamma or `auto` to replace numeric static gamma/brightness/contrast/saturation with one dedicated auto-gamma stage.",
+    )
+    _print_help_option(
+        "--post-gamma-auto-target-gray=<value>",
+        f"Auto-gamma gray-anchor target in `(0,1)`. Effective only when `--post-gamma=auto`. Default: `{DEFAULT_POST_GAMMA_AUTO_TARGET_GRAY:g}`.",
+    )
+    _print_help_option(
+        "--post-gamma-auto-luma-min=<value>",
+        f"Auto-gamma lower luminance guard in `(0,1)`. Effective only when `--post-gamma=auto`. Default: `{DEFAULT_POST_GAMMA_AUTO_LUMA_MIN:g}`.",
+    )
+    _print_help_option(
+        "--post-gamma-auto-luma-max=<value>",
+        f"Auto-gamma upper luminance guard in `(0,1)`. Effective only when `--post-gamma=auto`. Default: `{DEFAULT_POST_GAMMA_AUTO_LUMA_MAX:g}`.",
+    )
+    _print_help_option(
+        "--post-gamma-auto-lut-size=<value>",
+        f"Auto-gamma LUT sample size; integer `>=2`. Effective only when `--post-gamma=auto`. Default: `{DEFAULT_POST_GAMMA_AUTO_LUT_SIZE}`.",
     )
     _print_help_option(
         "--brightness=<value>",
@@ -2449,6 +2503,28 @@ def _parse_positive_float_option(option_name, option_raw):
     return option_value
 
 
+def _parse_post_gamma_selector_option(option_raw):
+    """@brief Parse `--post-gamma` selector as numeric factor or `auto`.
+
+    @details Accepts one positive float token for numeric static gamma mode or
+    literal `auto` for auto-gamma replacement mode.
+    @param option_raw {str} Raw `--post-gamma` value token from CLI args.
+    @return {tuple[float, str]|None} `(post_gamma_value, mode)` where `mode` is `numeric` or `auto`; `None` on parse failure.
+    @satisfies REQ-176
+    """
+
+    normalized = str(option_raw).strip()
+    if not normalized:
+        print_error("Invalid --post-gamma value: empty value")
+        return None
+    if normalized.lower() == "auto":
+        return (DEFAULT_POST_GAMMA, "auto")
+    parsed = _parse_positive_float_option("--post-gamma", normalized)
+    if parsed is None:
+        return None
+    return (parsed, "numeric")
+
+
 def _parse_positive_int_option(option_name, option_raw):
     """@brief Parse and validate one positive integer option value.
 
@@ -2471,6 +2547,82 @@ def _parse_positive_int_option(option_name, option_raw):
         print_error(f"{option_name} must be greater than zero.")
         return None
     return option_value
+
+
+def _parse_post_gamma_auto_options(post_gamma_auto_raw_values):
+    """@brief Parse and validate post-gamma auto replacement knobs.
+
+    @details Applies deterministic defaults for omitted knobs, validates
+    target-gray and luminance guards as exclusive `(0,1)` bounds, validates LUT
+    size as integer `>=2`, and enforces `luma_min < luma_max`.
+    @param post_gamma_auto_raw_values {dict[str, str]} Raw `--post-gamma-auto-*` option values keyed by long option name.
+    @return {PostGammaAutoOptions|None} Parsed auto-gamma options or `None` on validation error.
+    @satisfies REQ-177, REQ-179
+    """
+
+    options = PostGammaAutoOptions()
+    target_gray = options.target_gray
+    luma_min = options.luma_min
+    luma_max = options.luma_max
+    lut_size = options.lut_size
+
+    if "--post-gamma-auto-target-gray" in post_gamma_auto_raw_values:
+        parsed = _parse_float_exclusive_range_option(
+            "--post-gamma-auto-target-gray",
+            post_gamma_auto_raw_values["--post-gamma-auto-target-gray"],
+            0.0,
+            1.0,
+        )
+        if parsed is None:
+            return None
+        target_gray = parsed
+    if "--post-gamma-auto-luma-min" in post_gamma_auto_raw_values:
+        parsed = _parse_float_exclusive_range_option(
+            "--post-gamma-auto-luma-min",
+            post_gamma_auto_raw_values["--post-gamma-auto-luma-min"],
+            0.0,
+            1.0,
+        )
+        if parsed is None:
+            return None
+        luma_min = parsed
+    if "--post-gamma-auto-luma-max" in post_gamma_auto_raw_values:
+        parsed = _parse_float_exclusive_range_option(
+            "--post-gamma-auto-luma-max",
+            post_gamma_auto_raw_values["--post-gamma-auto-luma-max"],
+            0.0,
+            1.0,
+        )
+        if parsed is None:
+            return None
+        luma_max = parsed
+    if luma_min >= luma_max:
+        print_error(
+            "Invalid post-gamma auto guards: --post-gamma-auto-luma-min must be lower than --post-gamma-auto-luma-max"
+        )
+        return None
+    if "--post-gamma-auto-lut-size" in post_gamma_auto_raw_values:
+        parsed = _parse_positive_int_option(
+            "--post-gamma-auto-lut-size",
+            post_gamma_auto_raw_values["--post-gamma-auto-lut-size"],
+        )
+        if parsed is None:
+            return None
+        if parsed < 2:
+            print_error(
+                "Invalid --post-gamma-auto-lut-size value: "
+                f"{post_gamma_auto_raw_values['--post-gamma-auto-lut-size']}"
+            )
+            print_error("--post-gamma-auto-lut-size must be greater than or equal to 2.")
+            return None
+        lut_size = parsed
+
+    return PostGammaAutoOptions(
+        target_gray=target_gray,
+        luma_min=luma_min,
+        luma_max=luma_max,
+        lut_size=lut_size,
+    )
 
 
 def _parse_tmo_passthrough_value(option_name, option_raw):
@@ -3619,7 +3771,9 @@ def _parse_run_options(args):
     automatic exposure selector (`--auto-ev[=<enable|disable>]`) with explicit
     mutual exclusion against `--ev`, optional automatic exposure clipping and
     step controls,
-    optional postprocess controls, optional auto-brightness stage and
+    optional postprocess controls including `--post-gamma=<value|auto>` and
+    optional `--post-gamma-auto-*` knobs,
+    optional auto-brightness stage and
     `--ab-*` knobs, optional auto-levels stage and `--al-*` knobs,
     optional shared auto-adjust knobs, optional backend selector
     (`--hdr-merge=<Luminace-HDR|OpenCV|HDR-Plus>` default `OpenCV`),
@@ -3632,7 +3786,7 @@ def _parse_run_options(args):
     invalid arity.
     @param args {list[str]} Raw command argument vector.
     @return {tuple[Path, Path, float|None, bool, PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, bool, AutoEvOptions]|None} Parsed `(input, output, ev, auto_ev, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, ev_zero_specified, auto_ev_options)` tuple; `None` on parse failure.
-    @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-020, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146
+    @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-020, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146, REQ-176, REQ-179, REQ-180
     """
 
     positional = []
@@ -3642,6 +3796,7 @@ def _parse_run_options(args):
     ev_zero_specified = False
     auto_ev_options = AutoEvOptions()
     post_gamma = DEFAULT_POST_GAMMA
+    post_gamma_mode = DEFAULT_POST_GAMMA_MODE
     brightness = DEFAULT_BRIGHTNESS
     contrast = DEFAULT_CONTRAST
     saturation = DEFAULT_SATURATION
@@ -3656,6 +3811,7 @@ def _parse_run_options(args):
     auto_levels_raw_values = {}
     auto_adjust_enabled = DEFAULT_AUTO_ADJUST_ENABLED
     auto_adjust_raw_values = {}
+    post_gamma_auto_raw_values = {}
     debug_enabled = False
     hdr_merge_mode = HDR_MERGE_MODE_OPENCV
     opencv_raw_values = {}
@@ -4219,25 +4375,45 @@ def _parse_run_options(args):
             if idx + 1 >= len(args):
                 print_error("Missing value for --post-gamma")
                 return None
-            parsed_post_gamma = _parse_positive_float_option(
-                "--post-gamma", args[idx + 1]
-            )
-            if parsed_post_gamma is None:
+            parsed_post_gamma_selector = _parse_post_gamma_selector_option(args[idx + 1])
+            if parsed_post_gamma_selector is None:
                 return None
-            post_gamma = parsed_post_gamma
+            post_gamma, post_gamma_mode = parsed_post_gamma_selector
             post_gamma_set = True
             idx += 2
             continue
 
         if token.startswith("--post-gamma="):
-            parsed_post_gamma = _parse_positive_float_option(
-                "--post-gamma", token.split("=", 1)[1]
+            parsed_post_gamma_selector = _parse_post_gamma_selector_option(
+                token.split("=", 1)[1]
             )
-            if parsed_post_gamma is None:
+            if parsed_post_gamma_selector is None:
                 return None
-            post_gamma = parsed_post_gamma
+            post_gamma, post_gamma_mode = parsed_post_gamma_selector
             post_gamma_set = True
             idx += 1
+            continue
+
+        if token.startswith("--post-gamma-auto-"):
+            option_name = token
+            option_value = None
+            consume_count = 1
+            if "=" in token:
+                option_name, option_value = token.split("=", 1)
+            else:
+                if idx + 1 >= len(args):
+                    print_error(f"Missing value for {token}")
+                    return None
+                option_value = args[idx + 1]
+                if option_value.startswith("--"):
+                    print_error(f"Missing value for {token}")
+                    return None
+                consume_count = 2
+            if option_name not in _POST_GAMMA_AUTO_KNOB_OPTIONS:
+                print_error(f"Unknown option: {option_name}")
+                return None
+            post_gamma_auto_raw_values[option_name] = option_value
+            idx += consume_count
             continue
 
         if token == "--brightness":
@@ -4411,6 +4587,16 @@ def _parse_run_options(args):
     )
     if not post_gamma_set:
         post_gamma = backend_post_gamma
+    if (
+        post_gamma_mode != "auto"
+        and post_gamma_auto_raw_values
+    ):
+        invalid_knob = next(iter(post_gamma_auto_raw_values))
+        print_error(f"Post-gamma auto knob {invalid_knob} requires --post-gamma=auto")
+        return None
+    post_gamma_auto_options = _parse_post_gamma_auto_options(post_gamma_auto_raw_values)
+    if post_gamma_auto_options is None:
+        return None
     if not brightness_set:
         brightness = backend_brightness
     if not contrast_set:
@@ -4441,6 +4627,8 @@ def _parse_run_options(args):
         auto_ev_enabled,
         PostprocessOptions(
             post_gamma=post_gamma,
+            post_gamma_mode=post_gamma_mode,
+            post_gamma_auto_options=post_gamma_auto_options,
             brightness=brightness,
             contrast=contrast,
             saturation=saturation,
@@ -6856,6 +7044,95 @@ def _apply_post_gamma_float(np_module, image_rgb_float, gamma_value):
     return adjusted.astype(np_module.float32)
 
 
+def _build_auto_post_gamma_lut_float(np_module, gamma_value, lut_size):
+    """@brief Build one floating-point LUT for auto-gamma mapping.
+
+    @details Generates one evenly sampled domain in `[0,1]` and evaluates
+    `output = input^gamma` over that domain using float precision only.
+    @param np_module {ModuleType} Imported numpy module.
+    @param gamma_value {float} Resolved auto-gamma exponent.
+    @param lut_size {int} LUT sample count (`>=2`).
+    @return {tuple[object, object]} LUT domain and mapped values as float arrays.
+    @satisfies REQ-178
+    """
+
+    lut_domain = np_module.linspace(0.0, 1.0, int(lut_size), dtype=np_module.float64)
+    lut_values = np_module.power(lut_domain, float(gamma_value))
+    return lut_domain, lut_values
+
+
+def _ensure_three_channel_float_array_no_range_adjust(np_module, image_data):
+    """@brief Normalize one image payload to three-channel float tensor without range clipping.
+
+    @details Converts numeric image payloads into RGB `float64` while preserving
+    original numeric range, expands grayscale and single-channel input to RGB,
+    and drops alpha channels.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_data {object} Numeric image payload.
+    @return {object} RGB `float64` tensor with shape `(H,W,3)`.
+    @exception ValueError Raised when the input shape cannot be normalized to RGB.
+    @satisfies REQ-178
+    """
+
+    numeric_data = np_module.asarray(image_data, dtype=np_module.float64)
+    if len(numeric_data.shape) == 2:
+        numeric_data = numeric_data[:, :, None]
+    if len(numeric_data.shape) == 3 and numeric_data.shape[2] == 1:
+        numeric_data = np_module.repeat(numeric_data, 3, axis=2)
+    if len(numeric_data.shape) == 3 and numeric_data.shape[2] == 4:
+        numeric_data = numeric_data[:, :, :3]
+    if len(numeric_data.shape) != 3 or numeric_data.shape[2] < 3:
+        raise ValueError("Float stage input image has unsupported shape")
+    if numeric_data.shape[2] > 3:
+        numeric_data = numeric_data[:, :, :3]
+    return numeric_data
+
+
+def _apply_auto_post_gamma_float(np_module, image_rgb_float, post_gamma_auto_options):
+    """@brief Apply mean-luminance anchored auto-gamma over RGB float tensor.
+
+    @details Computes grayscale mean luminance from normalized RGB float input,
+    solves `gamma=log(target_gray)/log(mean_luminance)` when mean luminance is
+    strictly within configured guards, otherwise returns input unchanged with
+    resolved gamma `1.0`, then applies one floating-point LUT-domain mapping
+    `output=input^gamma` without quantized intermediates or stage-local
+    clipping.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_float {object} RGB float image tensor.
+    @param post_gamma_auto_options {PostGammaAutoOptions} Auto-gamma replacement stage knobs.
+    @return {tuple[object, float]} RGB float tensor and resolved gamma value.
+    @satisfies REQ-177, REQ-178
+    """
+
+    validated_input = _ensure_three_channel_float_array_no_range_adjust(
+        np_module=np_module,
+        image_data=image_rgb_float,
+    )
+    luminance = (
+        (0.2126 * validated_input[:, :, 0])
+        + (0.7152 * validated_input[:, :, 1])
+        + (0.0722 * validated_input[:, :, 2])
+    )
+    mean_luminance = float(np_module.mean(luminance)) if luminance.size else 0.0
+    if (
+        mean_luminance <= float(post_gamma_auto_options.luma_min)
+        or mean_luminance >= float(post_gamma_auto_options.luma_max)
+    ):
+        return (validated_input.astype(np_module.float32), 1.0)
+    resolved_gamma = math.log(float(post_gamma_auto_options.target_gray)) / math.log(
+        mean_luminance
+    )
+    lut_domain, lut_values = _build_auto_post_gamma_lut_float(
+        np_module=np_module,
+        gamma_value=resolved_gamma,
+        lut_size=post_gamma_auto_options.lut_size,
+    )
+    flattened_input = validated_input.astype(np_module.float64, copy=False).reshape(-1)
+    mapped_flat = np_module.interp(flattened_input, lut_domain, lut_values)
+    mapped = mapped_flat.reshape(validated_input.shape).astype(np_module.float32)
+    return (mapped, float(resolved_gamma))
+
+
 def _apply_brightness_float(np_module, image_rgb_float, brightness_factor):
     """@brief Apply static brightness factor on RGB float tensor.
 
@@ -6944,11 +7221,12 @@ def _apply_static_postprocess_float(
 ):
     """@brief Execute static postprocess chain with float-only stage internals.
 
-    @details Accepts one normalized RGB float tensor, preserves the legacy
-    gamma/brightness/contrast/saturation equations and strict substage order,
-    bypasses the static stage when all static factors are neutral (`1.0`),
-    otherwise executes only non-neutral substages in order, runs all
-    intermediate calculations in float domain without stage-local `[0,1]`
+    @details Accepts one normalized RGB float tensor, executes either
+    `--post-gamma=auto` replacement stage or legacy numeric
+    gamma/brightness/contrast/saturation substages, preserves strict numeric
+    substage order, bypasses numeric static stage when all numeric factors are
+    neutral (`1.0`), executes only non-neutral numeric substages in order, runs
+    all intermediate calculations in float domain without stage-local `[0,1]`
     clipping on gamma/brightness/saturation stages, optionally emits persistent
     debug TIFF checkpoints after each executed static substage, and eliminates
     the prior float->uint16->float adaptation cycle from this step.
@@ -6958,7 +7236,7 @@ def _apply_static_postprocess_float(
     @param imageio_module {ModuleType|None} Optional imageio module used for debug TIFF checkpoint emission.
     @param debug_context {DebugArtifactContext|None} Optional persistent debug output metadata.
     @return {object} RGB float tensor after static postprocess chain.
-    @satisfies REQ-012, REQ-013, REQ-132, REQ-134, REQ-148
+    @satisfies REQ-012, REQ-013, REQ-132, REQ-134, REQ-148, REQ-176, REQ-177, REQ-178
     """
 
     processed = _normalize_float_rgb_image(
@@ -6969,6 +7247,21 @@ def _apply_static_postprocess_float(
     brightness_factor = float(postprocess_options.brightness)
     contrast_factor = float(postprocess_options.contrast)
     saturation_factor = float(postprocess_options.saturation)
+    if postprocess_options.post_gamma_mode == "auto":
+        processed, _resolved_auto_gamma = _apply_auto_post_gamma_float(
+            np_module=np_module,
+            image_rgb_float=processed,
+            post_gamma_auto_options=postprocess_options.post_gamma_auto_options,
+        )
+        if imageio_module is not None and debug_context is not None:
+            _write_debug_rgb_float_tiff(
+                imageio_module=imageio_module,
+                np_module=np_module,
+                debug_context=debug_context,
+                stage_suffix="_3.0_static_correction_auto_gamma",
+                image_rgb_float=processed,
+            )
+        return processed
     static_stage_enabled = any(
         factor != 1.0
         for factor in (
@@ -10265,7 +10558,8 @@ def _encode_jpg(
     """@brief Encode merged HDR float payload into final JPG output.
 
     @details Accepts one normalized RGB float image from the selected merge
-    backend, executes static post-gamma/brightness/contrast/saturation stage,
+    backend, executes static postprocess stage (numeric
+    gamma/brightness/contrast/saturation or auto-gamma replacement),
     optional auto-brightness stage, optional auto-levels stage, optional
     auto-adjust stage, and then performs exactly one float-to-uint8
     conversion immediately before JPEG save. When debug context is present, the
@@ -10283,7 +10577,7 @@ def _encode_jpg(
     @param debug_context {DebugArtifactContext|None} Optional persistent debug output metadata.
     @return {None} Side effects only.
     @exception RuntimeError Raised when numpy or auto-adjust dependencies are missing.
-    @satisfies REQ-012, REQ-013, REQ-014, REQ-041, REQ-050, REQ-069, REQ-073, REQ-074, REQ-075, REQ-078, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-106, REQ-123, REQ-132, REQ-133, REQ-134, REQ-148
+    @satisfies REQ-012, REQ-013, REQ-014, REQ-041, REQ-050, REQ-069, REQ-073, REQ-074, REQ-075, REQ-078, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-106, REQ-123, REQ-132, REQ-133, REQ-134, REQ-148, REQ-176
     """
 
     if numpy_module is not None:
@@ -10540,9 +10834,14 @@ def run(args):
         if piexif_module is None:
             return 1
     print_info(f"Reading DNG input: {input_dng}")
+    post_gamma_text = (
+        "auto"
+        if postprocess_options.post_gamma_mode == "auto"
+        else f"{postprocess_options.post_gamma:g}"
+    )
     print_info(
         "Postprocess factors: "
-        f"gamma={postprocess_options.post_gamma:g}, "
+        f"gamma={post_gamma_text}, "
         f"brightness={postprocess_options.brightness:g}, "
         f"contrast={postprocess_options.contrast:g}, "
         f"saturation={postprocess_options.saturation:g}, "
@@ -10552,6 +10851,14 @@ def run(args):
         f"auto-adjust={'enabled' if postprocess_options.auto_adjust_enabled else 'disabled'}, "
         f"debug={'enabled' if postprocess_options.debug_enabled else 'disabled'}"
     )
+    if postprocess_options.post_gamma_mode == "auto":
+        print_info(
+            "Post-gamma auto knobs: "
+            f"target-gray={postprocess_options.post_gamma_auto_options.target_gray:g}, "
+            f"luma-min={postprocess_options.post_gamma_auto_options.luma_min:g}, "
+            f"luma-max={postprocess_options.post_gamma_auto_options.luma_max:g}, "
+            f"lut-size={postprocess_options.post_gamma_auto_options.lut_size}"
+        )
     if postprocess_options.auto_brightness_enabled:
         resolved_ab_key = postprocess_options.auto_brightness_options.key_value
         if resolved_ab_key is None:
