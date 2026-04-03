@@ -229,6 +229,36 @@ class _FakeTonemap:
         return np.clip(self.last_input * scale, 0.0, 1.0).astype(np.float32)
 
 
+class _FakeAdvancedTonemap:
+    """Minimal OpenCV advanced-tonemap shim preserving un-clipped float range."""
+
+    def __init__(self, kind: str, **params: float) -> None:
+        self.kind = kind
+        self.params = dict(params)
+        self.last_input: np.ndarray | None = None
+
+    def process(self, image: np.ndarray) -> np.ndarray:
+        self.last_input = np.array(image, copy=True)
+        assert self.last_input is not None
+        if self.kind == "drago":
+            gain = float(self.params.get("saturation", 1.0)) + float(
+                self.params.get("bias", 0.0)
+            )
+            return (self.last_input * gain).astype(np.float32)
+        if self.kind == "reinhard":
+            offset = float(self.params.get("intensity", 0.0))
+            gain = 1.0 + float(self.params.get("light_adapt", 0.0)) + float(
+                self.params.get("color_adapt", 0.0)
+            )
+            return ((self.last_input * gain) + offset).astype(np.float32)
+        if self.kind == "mantiuk":
+            gain = float(self.params.get("scale", 1.0)) * float(
+                self.params.get("saturation", 1.0)
+            )
+            return (self.last_input * gain).astype(np.float32)
+        raise AssertionError(f"Unsupported fake advanced tonemap kind: {self.kind}")
+
+
 class _FakeXphotoWhiteBalanceAlgorithm:
     """Minimal OpenCV xphoto white-balance algorithm shim."""
 
@@ -286,6 +316,9 @@ class _FakeOpenCvModule:
         self.xphoto = _FakeXphotoModule()
         self.written_image: np.ndarray | None = None
         self.last_tonemap: _FakeTonemap | None = None
+        self.last_tonemap_drago: _FakeAdvancedTonemap | None = None
+        self.last_tonemap_reinhard: _FakeAdvancedTonemap | None = None
+        self.last_tonemap_mantiuk: _FakeAdvancedTonemap | None = None
 
     def register_image(self, path: Path, image: np.ndarray) -> None:
         self._images_by_path[str(path)] = np.array(image, copy=True)
@@ -319,6 +352,56 @@ class _FakeOpenCvModule:
     def createTonemap(self, gamma: float) -> _FakeTonemap:
         self.last_tonemap = _FakeTonemap(gamma=gamma)
         return self.last_tonemap
+
+    def createTonemapDrago(
+        self,
+        *,
+        gamma: float,
+        saturation: float,
+        bias: float,
+    ) -> _FakeAdvancedTonemap:
+        assert gamma == 1.0
+        self.last_tonemap_drago = _FakeAdvancedTonemap(
+            "drago",
+            gamma=float(gamma),
+            saturation=float(saturation),
+            bias=float(bias),
+        )
+        return self.last_tonemap_drago
+
+    def createTonemapReinhard(
+        self,
+        *,
+        gamma: float,
+        intensity: float,
+        light_adapt: float,
+        color_adapt: float,
+    ) -> _FakeAdvancedTonemap:
+        assert gamma == 1.0
+        self.last_tonemap_reinhard = _FakeAdvancedTonemap(
+            "reinhard",
+            gamma=float(gamma),
+            intensity=float(intensity),
+            light_adapt=float(light_adapt),
+            color_adapt=float(color_adapt),
+        )
+        return self.last_tonemap_reinhard
+
+    def createTonemapMantiuk(
+        self,
+        *,
+        gamma: float,
+        scale: float,
+        saturation: float,
+    ) -> _FakeAdvancedTonemap:
+        assert gamma == 1.0
+        self.last_tonemap_mantiuk = _FakeAdvancedTonemap(
+            "mantiuk",
+            gamma=float(gamma),
+            scale=float(scale),
+            saturation=float(saturation),
+        )
+        return self.last_tonemap_mantiuk
 
     def imwrite(self, _path: str, image: np.ndarray) -> bool:
         self.written_image = np.array(image, copy=True)
@@ -1391,6 +1474,45 @@ def test_parse_run_options_defaults_hdr_merge_to_opencv() -> None:
     assert parsed[10] is False
 
 
+def test_parse_run_options_accepts_opencv_tonemap_backend_and_requires_single_selector(
+) -> None:
+    """Parser must accept OpenCV-Tonemap and require exactly one tonemap selector."""
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        [
+            "input.dng",
+            "output.jpg",
+            "--ev=1",
+            "--hdr-merge=OpenCV-Tonemap",
+            "--tonemap-drago",
+        ]
+    )
+    assert parsed is not None
+    postprocess = parsed[4]
+    assert postprocess.opencv_tonemap_options is not None
+    assert postprocess.opencv_tonemap_options.tonemap_map == "drago"
+    assert parsed[5] is False
+    assert parsed[6] is False
+    assert parsed[10] is False
+
+    missing_selector = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--ev=1", "--hdr-merge=OpenCV-Tonemap"]
+    )
+    assert missing_selector is None
+
+    multiple_selectors = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        [
+            "input.dng",
+            "output.jpg",
+            "--ev=1",
+            "--hdr-merge=OpenCV-Tonemap",
+            "--tonemap-drago",
+            "--tonemap-reinhard",
+        ]
+    )
+    assert multiple_selectors is None
+
+
 def test_resolve_default_postprocess_opencv_uses_updated_static_defaults() -> None:
     """OpenCV backend defaults must resolve to the updated static factors."""
 
@@ -1467,15 +1589,18 @@ def test_print_help_orders_sections_by_pipeline_step(capsys) -> None:
         "--al-clip-pct=<value>"
     )
     assert output.index("--white-balance <mode>") < output.index(
-        "--hdr-merge <Luminace-HDR|OpenCV-Merge|HDR-Plus>"
+        "--hdr-merge <Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>"
     )
-    assert output.index("--hdr-merge <Luminace-HDR|OpenCV-Merge|HDR-Plus>") < output.index(
+    assert output.index("--hdr-merge <Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>") < output.index(
         "--opencv-merge-algorithm=<name>"
     )
-    assert output.index("--hdr-merge <Luminace-HDR|OpenCV-Merge|HDR-Plus>") < output.index(
+    assert output.index("--hdr-merge <Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>") < output.index(
+        "--tonemap-drago"
+    )
+    assert output.index("--hdr-merge <Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>") < output.index(
         "--hdrplus-proxy-mode=<name>"
     )
-    assert output.index("--hdr-merge <Luminace-HDR|OpenCV-Merge|HDR-Plus>") < output.index(
+    assert output.index("--hdr-merge <Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>") < output.index(
         "--luminance-hdr-model=<name>"
     )
 
@@ -1497,10 +1622,20 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
         "--auto-ev-highlight-clipping=<0..100>",
         "--auto-ev-step=<value>",
         "--white-balance <mode>",
-        "--hdr-merge <Luminace-HDR|OpenCV-Merge|HDR-Plus>",
+        "--hdr-merge <Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>",
         "--opencv-merge-algorithm=<name>",
         "--opencv-tonemap=<bool>",
         "--opencv-tonemap-gamma=<value>",
+        "--tonemap-drago",
+        "--tonemap-reinhard",
+        "--tonemap-mantiuk",
+        "--tonemap-drago-saturation=<value>",
+        "--tonemap-drago-bias=<0..1>",
+        "--tonemap-reinhard-intensity=<value>",
+        "--tonemap-reinhard-light_adapt=<0..1>",
+        "--tonemap-reinhard-color_adapt=<0..1>",
+        "--tonemap-mantiuk-scale=<value>",
+        "--tonemap-mantiuk-saturation=<value>",
         "--hdrplus-proxy-mode=<name>",
         "--hdrplus-search-radius=<value>",
         "--hdrplus-temporal-factor=<value>",
@@ -1560,6 +1695,7 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
     assert "Allowed values: rggb, bt709, mean." in output
     assert "Allowed values: Simple, GrayworldWB, IA, ColorConstancy, TTL." in output
     assert "Effective only when `--hdr-merge OpenCV-Merge`." in output
+    assert "Effective only when `--hdr-merge OpenCV-Tonemap`" in output
     assert "Effective only when `--hdr-merge HDR-Plus`." in output
     assert "Effective only when `--hdr-merge Luminace-HDR`." in output
     assert "Default: `OpenCV-Merge`." in output
@@ -2143,6 +2279,44 @@ def test_parse_run_options_rejects_invalid_opencv_controls() -> None:
     assert invalid_coupling is None
 
 
+def test_parse_run_options_rejects_tonemap_options_without_opencv_tonemap_backend() -> None:
+    """Parser must reject OpenCV-Tonemap options outside OpenCV-Tonemap backend."""
+
+    invalid_selector = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        [
+            "input.dng",
+            "output.jpg",
+            "--ev=1",
+            "--hdr-merge=OpenCV-Merge",
+            "--tonemap-drago",
+        ]
+    )
+    assert invalid_selector is None
+
+    invalid_knob = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        [
+            "input.dng",
+            "output.jpg",
+            "--ev=1",
+            "--hdr-merge=OpenCV-Merge",
+            "--tonemap-drago-saturation=1.2",
+        ]
+    )
+    assert invalid_knob is None
+
+    invalid_map_knob = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        [
+            "input.dng",
+            "output.jpg",
+            "--ev=1",
+            "--hdr-merge=OpenCV-Tonemap",
+            "--tonemap-drago",
+            "--tonemap-reinhard-intensity=0.2",
+        ]
+    )
+    assert invalid_map_knob is None
+
+
 def test_parse_run_options_accepts_post_gamma_auto_and_knobs() -> None:
     """Parser must accept `--post-gamma=auto` and parse auto-gamma knobs."""
 
@@ -2348,6 +2522,195 @@ def test_run_opencv_merge_backend_skips_tonemap_for_mertens_when_disabled() -> N
     assert fake_cv2.merge_mertens.last_inputs is not None
     assert fake_cv2.merge_debevec.last_inputs is None
     assert fake_cv2.merge_robertson.last_inputs is None
+
+
+def test_run_opencv_tonemap_backend_uses_ev_zero_only() -> None:
+    """OpenCV-Tonemap backend must consume only bracket index 1 (ev_zero)."""
+
+    fake_cv2 = _FakeOpenCvModule()
+    bracket_images_float = [
+        np.full((1, 1, 3), 10.0, dtype=np.float32),
+        np.full((1, 1, 3), 2.0, dtype=np.float32),
+        np.full((1, 1, 3), 99.0, dtype=np.float32),
+    ]
+
+    result = dng2jpg_module._run_opencv_tonemap_backend(  # pylint: disable=protected-access
+        bracket_images_float=bracket_images_float,
+        opencv_tonemap_options=dng2jpg_module.OpenCvTonemapOptions(
+            tonemap_map="drago"
+        ),
+        auto_adjust_dependencies=(fake_cv2, np),
+        resolved_merge_gamma=dng2jpg_module.ResolvedMergeGamma(
+            request=dng2jpg_module.MergeGammaOption(mode="auto"),
+            transfer="linear",
+            label="Linear",
+            param_a=None,
+            param_b=None,
+            evidence="default-linear",
+        ),
+    )
+    assert fake_cv2.last_tonemap_drago is not None
+    np.testing.assert_allclose(
+        fake_cv2.last_tonemap_drago.last_input,
+        np.full((1, 1, 3), 2.0, dtype=np.float32),
+        rtol=0.0,
+        atol=0.0,
+    )
+    assert float(np.max(result)) < 10.0
+
+
+def test_run_opencv_tonemap_backend_dispatches_algorithms_with_fixed_gamma() -> None:
+    """OpenCV-Tonemap backend must dispatch drago/reinhard/mantiuk with gamma 1.0."""
+
+    fake_cv2 = _FakeOpenCvModule()
+    bracket_images_float = [
+        np.full((2, 2, 3), 0.2, dtype=np.float32),
+        np.full((2, 2, 3), 0.4, dtype=np.float32),
+        np.full((2, 2, 3), 0.6, dtype=np.float32),
+    ]
+
+    drago_result = dng2jpg_module._run_opencv_tonemap_backend(  # pylint: disable=protected-access
+        bracket_images_float=bracket_images_float,
+        opencv_tonemap_options=dng2jpg_module.OpenCvTonemapOptions(
+            tonemap_map="drago",
+            drago_saturation=1.2,
+            drago_bias=0.8,
+        ),
+        auto_adjust_dependencies=(fake_cv2, np),
+        resolved_merge_gamma=dng2jpg_module.ResolvedMergeGamma(
+            request=dng2jpg_module.MergeGammaOption(mode="auto"),
+            transfer="linear",
+            label="Linear",
+            param_a=None,
+            param_b=None,
+            evidence="default-linear",
+        ),
+    )
+    assert fake_cv2.last_tonemap_drago is not None
+    assert fake_cv2.last_tonemap_drago.params["gamma"] == 1.0
+    np.testing.assert_allclose(drago_result, np.full((2, 2, 3), 0.8, dtype=np.float32))
+
+    reinhard_result = dng2jpg_module._run_opencv_tonemap_backend(  # pylint: disable=protected-access
+        bracket_images_float=bracket_images_float,
+        opencv_tonemap_options=dng2jpg_module.OpenCvTonemapOptions(
+            tonemap_map="reinhard",
+            reinhard_intensity=0.2,
+            reinhard_light_adapt=0.3,
+            reinhard_color_adapt=0.1,
+        ),
+        auto_adjust_dependencies=(fake_cv2, np),
+        resolved_merge_gamma=dng2jpg_module.ResolvedMergeGamma(
+            request=dng2jpg_module.MergeGammaOption(mode="auto"),
+            transfer="linear",
+            label="Linear",
+            param_a=None,
+            param_b=None,
+            evidence="default-linear",
+        ),
+    )
+    assert fake_cv2.last_tonemap_reinhard is not None
+    assert fake_cv2.last_tonemap_reinhard.params["gamma"] == 1.0
+    np.testing.assert_allclose(
+        reinhard_result,
+        np.full((2, 2, 3), 0.76, dtype=np.float32),
+    )
+
+    mantiuk_result = dng2jpg_module._run_opencv_tonemap_backend(  # pylint: disable=protected-access
+        bracket_images_float=bracket_images_float,
+        opencv_tonemap_options=dng2jpg_module.OpenCvTonemapOptions(
+            tonemap_map="mantiuk",
+            mantiuk_scale=0.75,
+            mantiuk_saturation=1.1,
+        ),
+        auto_adjust_dependencies=(fake_cv2, np),
+        resolved_merge_gamma=dng2jpg_module.ResolvedMergeGamma(
+            request=dng2jpg_module.MergeGammaOption(mode="auto"),
+            transfer="linear",
+            label="Linear",
+            param_a=None,
+            param_b=None,
+            evidence="default-linear",
+        ),
+    )
+    assert fake_cv2.last_tonemap_mantiuk is not None
+    assert fake_cv2.last_tonemap_mantiuk.params["gamma"] == 1.0
+    np.testing.assert_allclose(
+        mantiuk_result,
+        np.full((2, 2, 3), 0.33, dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+
+
+def test_run_opencv_tonemap_backend_applies_merge_gamma_last() -> None:
+    """OpenCV-Tonemap backend must apply merge gamma only after tone mapping."""
+
+    fake_cv2 = _FakeOpenCvModule()
+    bracket_images_float = [
+        np.full((1, 1, 3), 0.1, dtype=np.float32),
+        np.full((1, 1, 3), 0.4, dtype=np.float32),
+        np.full((1, 1, 3), 0.8, dtype=np.float32),
+    ]
+
+    result = dng2jpg_module._run_opencv_tonemap_backend(  # pylint: disable=protected-access
+        bracket_images_float=bracket_images_float,
+        opencv_tonemap_options=dng2jpg_module.OpenCvTonemapOptions(
+            tonemap_map="drago",
+            drago_saturation=1.0,
+            drago_bias=0.0,
+        ),
+        auto_adjust_dependencies=(fake_cv2, np),
+        resolved_merge_gamma=dng2jpg_module.ResolvedMergeGamma(
+            request=dng2jpg_module.MergeGammaOption(
+                mode="custom",
+                linear_coeff=4.5,
+                exponent=0.5,
+            ),
+            transfer="rec709",
+            label="Rec.709 custom",
+            param_a=4.5,
+            param_b=0.5,
+            evidence="cli-custom",
+        ),
+    )
+    np.testing.assert_allclose(
+        result,
+        np.full((1, 1, 3), 0.596, dtype=np.float32),
+        rtol=1e-4,
+        atol=1e-4,
+    )
+
+
+def test_run_opencv_tonemap_backend_preserves_dynamic_range_without_clipping() -> None:
+    """OpenCV-Tonemap backend must preserve out-of-range float values without clipping."""
+
+    fake_cv2 = _FakeOpenCvModule()
+    bracket_images_float = [
+        np.full((1, 1, 3), 0.1, dtype=np.float32),
+        np.full((1, 1, 3), 2.0, dtype=np.float32),
+        np.full((1, 1, 3), 0.9, dtype=np.float32),
+    ]
+
+    result = dng2jpg_module._run_opencv_tonemap_backend(  # pylint: disable=protected-access
+        bracket_images_float=bracket_images_float,
+        opencv_tonemap_options=dng2jpg_module.OpenCvTonemapOptions(
+            tonemap_map="reinhard",
+            reinhard_intensity=1.0,
+            reinhard_light_adapt=1.0,
+            reinhard_color_adapt=1.0,
+        ),
+        auto_adjust_dependencies=(fake_cv2, np),
+        resolved_merge_gamma=dng2jpg_module.ResolvedMergeGamma(
+            request=dng2jpg_module.MergeGammaOption(mode="auto"),
+            transfer="linear",
+            label="Linear",
+            param_a=None,
+            param_b=None,
+            evidence="default-linear",
+        ),
+    )
+    assert result.dtype == np.float32
+    assert float(result[0, 0, 0]) > 1.0
 
 
 def test_extract_bracket_images_float_uses_single_linear_base_pass() -> None:

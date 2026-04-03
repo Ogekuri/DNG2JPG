@@ -113,12 +113,16 @@ DEFAULT_LUMINANCE_TMO = "mantiuk08"
 DEFAULT_AUTO_ADJUST_ENABLED = True
 HDR_MERGE_MODE_LUMINANCE = "Luminace-HDR"
 HDR_MERGE_MODE_OPENCV_MERGE = "OpenCV-Merge"
+HDR_MERGE_MODE_OPENCV_TONEMAP = "OpenCV-Tonemap"
 HDR_MERGE_MODE_HDR_PLUS = "HDR-Plus"
 WHITE_BALANCE_MODE_SIMPLE = "Simple"
 WHITE_BALANCE_MODE_GRAYWORLD = "GrayworldWB"
 WHITE_BALANCE_MODE_IA = "IA"
 WHITE_BALANCE_MODE_COLOR_CONSTANCY = "ColorConstancy"
 WHITE_BALANCE_MODE_TTL = "TTL"
+OPENCV_TONEMAP_MAP_DRAGO = "drago"
+OPENCV_TONEMAP_MAP_REINHARD = "reinhard"
+OPENCV_TONEMAP_MAP_MANTIUK = "mantiuk"
 OPENCV_MERGE_ALGORITHM_DEBEVEC = "Debevec"
 OPENCV_MERGE_ALGORITHM_ROBERTSON = "Robertson"
 OPENCV_MERGE_ALGORITHM_MERTENS = "Mertens"
@@ -156,6 +160,13 @@ DEFAULT_OPENCV_SATURATION = DEFAULT_OPENCV_ROBERTSON_SATURATION
 DEFAULT_OPENCV_MERGE_ALGORITHM = OPENCV_MERGE_ALGORITHM_ROBERTSON
 DEFAULT_OPENCV_TONEMAP_ENABLED = True
 DEFAULT_OPENCV_TONEMAP_GAMMA = DEFAULT_OPENCV_ROBERTSON_TONEMAP_GAMMA
+DEFAULT_OPENCV_TONEMAP_DRAGO_SATURATION = 1.0
+DEFAULT_OPENCV_TONEMAP_DRAGO_BIAS = 0.85
+DEFAULT_OPENCV_TONEMAP_REINHARD_INTENSITY = 0.0
+DEFAULT_OPENCV_TONEMAP_REINHARD_LIGHT_ADAPT = 0.0
+DEFAULT_OPENCV_TONEMAP_REINHARD_COLOR_ADAPT = 0.0
+DEFAULT_OPENCV_TONEMAP_MANTIUK_SCALE = 0.7
+DEFAULT_OPENCV_TONEMAP_MANTIUK_SATURATION = 1.0
 DEFAULT_HDRPLUS_PROXY_MODE = "rggb"
 DEFAULT_HDRPLUS_SEARCH_RADIUS = 4
 DEFAULT_HDRPLUS_TEMPORAL_FACTOR = 8.0
@@ -225,10 +236,30 @@ _OPENCV_KNOB_OPTIONS = (
     "--opencv-tonemap",
     "--opencv-tonemap-gamma",
 )
+_OPENCV_TONEMAP_SELECTOR_OPTIONS = (
+    "--tonemap-drago",
+    "--tonemap-reinhard",
+    "--tonemap-mantiuk",
+)
+_OPENCV_TONEMAP_KNOB_OPTIONS = (
+    "--tonemap-drago-saturation",
+    "--tonemap-drago-bias",
+    "--tonemap-reinhard-intensity",
+    "--tonemap-reinhard-light_adapt",
+    "--tonemap-reinhard-color_adapt",
+    "--tonemap-mantiuk-scale",
+    "--tonemap-mantiuk-saturation",
+)
 _HDR_MERGE_MODES = (
     HDR_MERGE_MODE_LUMINANCE,
     HDR_MERGE_MODE_OPENCV_MERGE,
+    HDR_MERGE_MODE_OPENCV_TONEMAP,
     HDR_MERGE_MODE_HDR_PLUS,
+)
+_OPENCV_TONEMAP_MAPS = (
+    OPENCV_TONEMAP_MAP_DRAGO,
+    OPENCV_TONEMAP_MAP_REINHARD,
+    OPENCV_TONEMAP_MAP_MANTIUK,
 )
 _WHITE_BALANCE_MODES = (
     WHITE_BALANCE_MODE_SIMPLE,
@@ -581,6 +612,37 @@ class ExifGammaTags:
 
 
 @dataclass(frozen=True)
+class OpenCvTonemapOptions:
+    """@brief Hold deterministic OpenCV-Tonemap backend option values.
+
+    @details Encapsulates one mandatory OpenCV tone-map algorithm selector and
+    optional algorithm-specific parameters for the `--hdr-merge=OpenCV-Tonemap`
+    backend. The backend executes one selected algorithm only, uses fixed
+    OpenCV tone-map `gamma=1.0` for linear-image processing, and applies merge
+    gamma only as the backend-final step.
+    @param tonemap_map {str} Selected OpenCV tone-map algorithm in `{"drago","reinhard","mantiuk"}`.
+    @param drago_saturation {float} Drago saturation parameter.
+    @param drago_bias {float} Drago bias parameter.
+    @param reinhard_intensity {float} Reinhard intensity parameter.
+    @param reinhard_light_adapt {float} Reinhard light adaptation parameter in `[0,1]`.
+    @param reinhard_color_adapt {float} Reinhard color adaptation parameter in `[0,1]`.
+    @param mantiuk_scale {float} Mantiuk scale parameter.
+    @param mantiuk_saturation {float} Mantiuk saturation parameter.
+    @return {None} Immutable dataclass container.
+    @satisfies REQ-190, REQ-193, REQ-194, REQ-195, REQ-196, REQ-198
+    """
+
+    tonemap_map: str
+    drago_saturation: float = DEFAULT_OPENCV_TONEMAP_DRAGO_SATURATION
+    drago_bias: float = DEFAULT_OPENCV_TONEMAP_DRAGO_BIAS
+    reinhard_intensity: float = DEFAULT_OPENCV_TONEMAP_REINHARD_INTENSITY
+    reinhard_light_adapt: float = DEFAULT_OPENCV_TONEMAP_REINHARD_LIGHT_ADAPT
+    reinhard_color_adapt: float = DEFAULT_OPENCV_TONEMAP_REINHARD_COLOR_ADAPT
+    mantiuk_scale: float = DEFAULT_OPENCV_TONEMAP_MANTIUK_SCALE
+    mantiuk_saturation: float = DEFAULT_OPENCV_TONEMAP_MANTIUK_SATURATION
+
+
+@dataclass(frozen=True)
 class PostprocessOptions:
     """@brief Hold deterministic postprocessing option values.
 
@@ -603,8 +665,9 @@ class PostprocessOptions:
     @param debug_enabled {bool} `True` when persistent debug TIFF checkpoints are enabled.
     @param merge_gamma_option {MergeGammaOption} Parsed merge-gamma request applied only by OpenCV and HDR+ backends.
     @param white_balance_mode {str|None} Optional white-balance mode applied to bracket triplet before HDR merge backend execution.
+    @param opencv_tonemap_options {OpenCvTonemapOptions|None} Optional OpenCV-Tonemap backend selector and knob payload.
     @return {None} Immutable dataclass container.
-    @satisfies REQ-020, REQ-050, REQ-065, REQ-066, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-088, REQ-089, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-146, REQ-176, REQ-179, REQ-181, REQ-182
+    @satisfies REQ-020, REQ-050, REQ-065, REQ-066, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-088, REQ-089, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-146, REQ-176, REQ-179, REQ-181, REQ-182, REQ-190, REQ-194, REQ-195, REQ-196
     """
 
     post_gamma: float
@@ -627,6 +690,7 @@ class PostprocessOptions:
     debug_enabled: bool = False
     merge_gamma_option: MergeGammaOption = field(default_factory=MergeGammaOption)
     white_balance_mode: str | None = None
+    opencv_tonemap_options: OpenCvTonemapOptions | None = None
 
 
 @dataclass(frozen=True)
@@ -960,7 +1024,7 @@ def print_help(version):
     characters. Side effects: stdout writes only.
     @param version {str} CLI version label to append in usage output.
     @return {None} Writes help text to stdout.
-    @satisfies DES-008, REQ-017, REQ-018, REQ-019, REQ-020, REQ-021, REQ-022, REQ-023, REQ-024, REQ-025, REQ-033, REQ-100, REQ-101, REQ-102, REQ-107, REQ-111, REQ-124, REQ-125, REQ-127, REQ-128, REQ-135, REQ-141, REQ-143, REQ-146, REQ-155, REQ-156, REQ-176, REQ-179, REQ-181, REQ-182
+    @satisfies DES-008, REQ-017, REQ-018, REQ-019, REQ-020, REQ-021, REQ-022, REQ-023, REQ-024, REQ-025, REQ-033, REQ-100, REQ-101, REQ-102, REQ-107, REQ-111, REQ-124, REQ-125, REQ-127, REQ-128, REQ-135, REQ-141, REQ-143, REQ-146, REQ-155, REQ-156, REQ-176, REQ-179, REQ-181, REQ-182, REQ-189, REQ-190, REQ-194, REQ-195, REQ-196
     """
 
     postprocess_default_rows = (
@@ -1075,12 +1139,12 @@ def print_help(version):
         ),
     )
     _print_help_option(
-        f"--hdr-merge <{HDR_MERGE_MODE_LUMINANCE}|{HDR_MERGE_MODE_OPENCV_MERGE}|{HDR_MERGE_MODE_HDR_PLUS}>",
+        f"--hdr-merge <{HDR_MERGE_MODE_LUMINANCE}|{HDR_MERGE_MODE_OPENCV_MERGE}|{HDR_MERGE_MODE_OPENCV_TONEMAP}|{HDR_MERGE_MODE_HDR_PLUS}>",
         f"Select HDR merge backend. Default: `{HDR_MERGE_MODE_OPENCV_MERGE}`.",
     )
     _print_help_option(
         "--gamma=<auto|a,b>",
-        f"HDR merge-output transfer selector for `{HDR_MERGE_MODE_OPENCV_MERGE}` and `{HDR_MERGE_MODE_HDR_PLUS}` final backend-local output stage.",
+        f"HDR merge-output transfer selector for `{HDR_MERGE_MODE_OPENCV_MERGE}`, `{HDR_MERGE_MODE_OPENCV_TONEMAP}`, and `{HDR_MERGE_MODE_HDR_PLUS}` final backend-local output stage.",
         (
             "Default: `auto`.",
             "Use `--gamma=auto` to resolve source transfer from RAW/DNG EXIF evidence.",
@@ -1108,6 +1172,46 @@ def print_help(version):
             f"`{OPENCV_MERGE_ALGORITHM_ROBERTSON}={DEFAULT_OPENCV_ROBERTSON_TONEMAP_GAMMA:g}`, "
             f"`{OPENCV_MERGE_ALGORITHM_MERTENS}={DEFAULT_OPENCV_MERTENS_TONEMAP_GAMMA:g}`.",
         ),
+    )
+    _print_help_option(
+        "--tonemap-drago",
+        f"Select OpenCV Drago tone mapping for `{HDR_MERGE_MODE_OPENCV_TONEMAP}`. Exactly one OpenCV-Tonemap selector is required.",
+    )
+    _print_help_option(
+        "--tonemap-reinhard",
+        f"Select OpenCV Reinhard tone mapping for `{HDR_MERGE_MODE_OPENCV_TONEMAP}`. Exactly one OpenCV-Tonemap selector is required.",
+    )
+    _print_help_option(
+        "--tonemap-mantiuk",
+        f"Select OpenCV Mantiuk tone mapping for `{HDR_MERGE_MODE_OPENCV_TONEMAP}`. Exactly one OpenCV-Tonemap selector is required.",
+    )
+    _print_help_option(
+        "--tonemap-drago-saturation=<value>",
+        f"Drago saturation parameter. Effective only when `--hdr-merge {HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-drago` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_DRAGO_SATURATION:g}`.",
+    )
+    _print_help_option(
+        "--tonemap-drago-bias=<0..1>",
+        f"Drago bias parameter. Effective only when `--hdr-merge {HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-drago` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_DRAGO_BIAS:g}`.",
+    )
+    _print_help_option(
+        "--tonemap-reinhard-intensity=<value>",
+        f"Reinhard intensity parameter. Effective only when `--hdr-merge {HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-reinhard` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_REINHARD_INTENSITY:g}`.",
+    )
+    _print_help_option(
+        "--tonemap-reinhard-light_adapt=<0..1>",
+        f"Reinhard light adaptation parameter. Effective only when `--hdr-merge {HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-reinhard` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_REINHARD_LIGHT_ADAPT:g}`.",
+    )
+    _print_help_option(
+        "--tonemap-reinhard-color_adapt=<0..1>",
+        f"Reinhard color adaptation parameter. Effective only when `--hdr-merge {HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-reinhard` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_REINHARD_COLOR_ADAPT:g}`.",
+    )
+    _print_help_option(
+        "--tonemap-mantiuk-scale=<value>",
+        f"Mantiuk scale parameter. Effective only when `--hdr-merge {HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-mantiuk` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_MANTIUK_SCALE:g}`.",
+    )
+    _print_help_option(
+        "--tonemap-mantiuk-saturation=<value>",
+        f"Mantiuk saturation parameter. Effective only when `--hdr-merge {HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-mantiuk` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_MANTIUK_SATURATION:g}`.",
     )
     _print_help_option(
         "--hdrplus-proxy-mode=<name>",
@@ -1728,6 +1832,169 @@ def _parse_opencv_merge_backend_options(opencv_raw_values):
         merge_algorithm=merge_algorithm,
         tonemap_enabled=tonemap_enabled,
         tonemap_gamma=tonemap_gamma,
+    )
+
+
+def _parse_opencv_tonemap_backend_options(
+    tonemap_selector_options,
+    tonemap_knob_raw_values,
+):
+    """@brief Parse and validate OpenCV-Tonemap backend selector and knobs.
+
+    @details Requires exactly one selector in `--tonemap-drago`,
+    `--tonemap-reinhard`, `--tonemap-mantiuk`, applies deterministic defaults
+    for optional algorithm-specific knobs, and rejects knobs that do not belong
+    to the selected algorithm.
+    @param tonemap_selector_options {list[str]} Ordered list of selected OpenCV-Tonemap selector options.
+    @param tonemap_knob_raw_values {dict[str, str]} Raw `--tonemap-*` knob payloads keyed by option name.
+    @return {OpenCvTonemapOptions|None} Parsed OpenCV-Tonemap options or `None` on validation failure.
+    @satisfies REQ-190, REQ-194, REQ-195, REQ-196
+    """
+
+    selector_count = len(tonemap_selector_options)
+    if selector_count != 1:
+        print_error(
+            "OpenCV-Tonemap requires exactly one selector: "
+            + ", ".join(_OPENCV_TONEMAP_SELECTOR_OPTIONS)
+        )
+        return None
+
+    selector = tonemap_selector_options[0]
+    selector_map = {
+        "--tonemap-drago": OPENCV_TONEMAP_MAP_DRAGO,
+        "--tonemap-reinhard": OPENCV_TONEMAP_MAP_REINHARD,
+        "--tonemap-mantiuk": OPENCV_TONEMAP_MAP_MANTIUK,
+    }
+    tonemap_map = selector_map.get(selector)
+    if tonemap_map is None:
+        print_error(f"Unknown OpenCV-Tonemap selector: {selector}")
+        return None
+
+    options = OpenCvTonemapOptions(tonemap_map=tonemap_map)
+    drago_saturation = options.drago_saturation
+    drago_bias = options.drago_bias
+    reinhard_intensity = options.reinhard_intensity
+    reinhard_light_adapt = options.reinhard_light_adapt
+    reinhard_color_adapt = options.reinhard_color_adapt
+    mantiuk_scale = options.mantiuk_scale
+    mantiuk_saturation = options.mantiuk_saturation
+
+    if "--tonemap-drago-saturation" in tonemap_knob_raw_values:
+        parsed = _parse_positive_float_option(
+            "--tonemap-drago-saturation",
+            tonemap_knob_raw_values["--tonemap-drago-saturation"],
+        )
+        if parsed is None:
+            return None
+        drago_saturation = parsed
+    if "--tonemap-drago-bias" in tonemap_knob_raw_values:
+        parsed = _parse_float_in_range_option(
+            "--tonemap-drago-bias",
+            tonemap_knob_raw_values["--tonemap-drago-bias"],
+            0.0,
+            1.0,
+        )
+        if parsed is None:
+            return None
+        drago_bias = parsed
+    if "--tonemap-reinhard-intensity" in tonemap_knob_raw_values:
+        parsed = _parse_non_negative_float_option(
+            "--tonemap-reinhard-intensity",
+            tonemap_knob_raw_values["--tonemap-reinhard-intensity"],
+        )
+        if parsed is None:
+            return None
+        reinhard_intensity = parsed
+    if "--tonemap-reinhard-light_adapt" in tonemap_knob_raw_values:
+        parsed = _parse_float_in_range_option(
+            "--tonemap-reinhard-light_adapt",
+            tonemap_knob_raw_values["--tonemap-reinhard-light_adapt"],
+            0.0,
+            1.0,
+        )
+        if parsed is None:
+            return None
+        reinhard_light_adapt = parsed
+    if "--tonemap-reinhard-color_adapt" in tonemap_knob_raw_values:
+        parsed = _parse_float_in_range_option(
+            "--tonemap-reinhard-color_adapt",
+            tonemap_knob_raw_values["--tonemap-reinhard-color_adapt"],
+            0.0,
+            1.0,
+        )
+        if parsed is None:
+            return None
+        reinhard_color_adapt = parsed
+    if "--tonemap-mantiuk-scale" in tonemap_knob_raw_values:
+        parsed = _parse_positive_float_option(
+            "--tonemap-mantiuk-scale",
+            tonemap_knob_raw_values["--tonemap-mantiuk-scale"],
+        )
+        if parsed is None:
+            return None
+        mantiuk_scale = parsed
+    if "--tonemap-mantiuk-saturation" in tonemap_knob_raw_values:
+        parsed = _parse_positive_float_option(
+            "--tonemap-mantiuk-saturation",
+            tonemap_knob_raw_values["--tonemap-mantiuk-saturation"],
+        )
+        if parsed is None:
+            return None
+        mantiuk_saturation = parsed
+
+    for knob_name in tonemap_knob_raw_values:
+        if tonemap_map == OPENCV_TONEMAP_MAP_DRAGO and knob_name.startswith(
+            "--tonemap-reinhard-"
+        ):
+            print_error(
+                f"OpenCV-Tonemap knob {knob_name} requires --tonemap-reinhard selector"
+            )
+            return None
+        if tonemap_map == OPENCV_TONEMAP_MAP_DRAGO and knob_name.startswith(
+            "--tonemap-mantiuk-"
+        ):
+            print_error(
+                f"OpenCV-Tonemap knob {knob_name} requires --tonemap-mantiuk selector"
+            )
+            return None
+        if tonemap_map == OPENCV_TONEMAP_MAP_REINHARD and knob_name.startswith(
+            "--tonemap-drago-"
+        ):
+            print_error(
+                f"OpenCV-Tonemap knob {knob_name} requires --tonemap-drago selector"
+            )
+            return None
+        if tonemap_map == OPENCV_TONEMAP_MAP_REINHARD and knob_name.startswith(
+            "--tonemap-mantiuk-"
+        ):
+            print_error(
+                f"OpenCV-Tonemap knob {knob_name} requires --tonemap-mantiuk selector"
+            )
+            return None
+        if tonemap_map == OPENCV_TONEMAP_MAP_MANTIUK and knob_name.startswith(
+            "--tonemap-drago-"
+        ):
+            print_error(
+                f"OpenCV-Tonemap knob {knob_name} requires --tonemap-drago selector"
+            )
+            return None
+        if tonemap_map == OPENCV_TONEMAP_MAP_MANTIUK and knob_name.startswith(
+            "--tonemap-reinhard-"
+        ):
+            print_error(
+                f"OpenCV-Tonemap knob {knob_name} requires --tonemap-reinhard selector"
+            )
+            return None
+
+    return OpenCvTonemapOptions(
+        tonemap_map=tonemap_map,
+        drago_saturation=drago_saturation,
+        drago_bias=drago_bias,
+        reinhard_intensity=reinhard_intensity,
+        reinhard_light_adapt=reinhard_light_adapt,
+        reinhard_color_adapt=reinhard_color_adapt,
+        mantiuk_scale=mantiuk_scale,
+        mantiuk_saturation=mantiuk_saturation,
     )
 
 
@@ -3488,6 +3755,60 @@ def _parse_hdrplus_options(hdrplus_raw_values):
     )
 
 
+def _apply_merge_gamma_float_no_clip(np_module, image_rgb_float, resolved_merge_gamma):
+    """@brief Apply resolved merge-gamma transfer without any input/output clipping.
+
+    @details Executes the same transfer families as `_apply_merge_gamma_float`
+    but intentionally avoids lower-bound clipping to preserve unbounded positive
+    and negative float dynamic range for OpenCV-Tonemap backend execution.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_float {object} Backend RGB float tensor.
+    @param resolved_merge_gamma {ResolvedMergeGamma} Resolved merge-gamma payload.
+    @return {object} RGB float32 tensor after transfer evaluation.
+    @satisfies REQ-197, REQ-198
+    """
+
+    image_rgb = _ensure_three_channel_float_array_no_bounds(
+        np_module=np_module,
+        image_data=image_rgb_float,
+    )
+    if resolved_merge_gamma.transfer == "linear":
+        return image_rgb.astype(np_module.float32, copy=False)
+    if resolved_merge_gamma.transfer == "srgb":
+        encoded = np_module.empty_like(image_rgb, dtype=np_module.float64)
+        low_mask = image_rgb <= 0.0031308
+        encoded[low_mask] = image_rgb[low_mask] * 12.92
+        high_mask = ~low_mask
+        encoded[high_mask] = (
+            1.055 * np_module.power(np_module.maximum(image_rgb[high_mask], 0.0), 1.0 / 2.4)
+        ) - 0.055
+        return encoded.astype(np_module.float32)
+    if resolved_merge_gamma.transfer == "power":
+        if resolved_merge_gamma.param_a is None:
+            raise ValueError("Resolved power merge gamma is missing exponent")
+        exponent = 1.0 / float(resolved_merge_gamma.param_a)
+        return np_module.sign(image_rgb) * np_module.power(
+            np_module.abs(image_rgb),
+            exponent,
+        ).astype(np_module.float32)
+    if resolved_merge_gamma.transfer == "rec709":
+        if resolved_merge_gamma.param_a is None or resolved_merge_gamma.param_b is None:
+            raise ValueError("Resolved Rec.709 merge gamma is missing parameters")
+        linear_coeff = float(resolved_merge_gamma.param_a)
+        exponent = float(resolved_merge_gamma.param_b)
+        encoded = np_module.empty_like(image_rgb, dtype=np_module.float64)
+        low_mask = image_rgb < 0.018
+        encoded[low_mask] = image_rgb[low_mask] * linear_coeff
+        high_mask = ~low_mask
+        encoded[high_mask] = (
+            1.099
+            * np_module.sign(image_rgb[high_mask])
+            * np_module.power(np_module.abs(image_rgb[high_mask]), exponent)
+        ) - 0.099
+        return encoded.astype(np_module.float32)
+    raise ValueError(f"Unsupported merge gamma transfer: {resolved_merge_gamma.transfer}")
+
+
 def _parse_auto_adjust_option(auto_adjust_raw):
     """@brief Parse auto-adjust enable selector option value.
 
@@ -3548,7 +3869,7 @@ def _parse_hdr_merge_option(hdr_merge_raw):
     them to canonical runtime mode names.
     @param hdr_merge_raw {str} Raw `--hdr-merge` selector token.
     @return {str|None} Canonical HDR merge mode or `None` on parse failure.
-    @satisfies CTN-002, REQ-023, REQ-024, REQ-107, REQ-111
+    @satisfies CTN-002, REQ-023, REQ-024, REQ-107, REQ-111, REQ-189
     """
 
     hdr_merge_text = hdr_merge_raw.strip()
@@ -3559,6 +3880,7 @@ def _parse_hdr_merge_option(hdr_merge_raw):
     mapping = {
         HDR_MERGE_MODE_LUMINANCE.lower(): HDR_MERGE_MODE_LUMINANCE,
         HDR_MERGE_MODE_OPENCV_MERGE.lower(): HDR_MERGE_MODE_OPENCV_MERGE,
+        HDR_MERGE_MODE_OPENCV_TONEMAP.lower(): HDR_MERGE_MODE_OPENCV_TONEMAP,
         HDR_MERGE_MODE_HDR_PLUS.lower(): HDR_MERGE_MODE_HDR_PLUS,
     }
     resolved = mapping.get(normalized)
@@ -3566,7 +3888,7 @@ def _parse_hdr_merge_option(hdr_merge_raw):
         return resolved
     print_error(f"Invalid --hdr-merge value: {hdr_merge_raw}")
     print_error(
-        f"Allowed values: {HDR_MERGE_MODE_LUMINANCE}, {HDR_MERGE_MODE_OPENCV_MERGE}, {HDR_MERGE_MODE_HDR_PLUS}"
+        f"Allowed values: {HDR_MERGE_MODE_LUMINANCE}, {HDR_MERGE_MODE_OPENCV_MERGE}, {HDR_MERGE_MODE_OPENCV_TONEMAP}, {HDR_MERGE_MODE_HDR_PLUS}"
     )
     return None
 
@@ -4017,6 +4339,36 @@ def _ensure_three_channel_float_array_no_clip(np_module, image_data):
     return numeric_data
 
 
+def _ensure_three_channel_float_array_no_bounds(np_module, image_data):
+    """@brief Normalize one image payload to RGB float tensor without clipping bounds.
+
+    @details Converts numeric image payloads into RGB `float64`, preserves
+    finite values on the full float range without lower/upper clipping,
+    expands grayscale/single-channel data to RGB, drops alpha, and raises on
+    non-finite payloads to avoid silent range mutations.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_data {object} Numeric image payload.
+    @return {object} RGB `float64` tensor with shape `(H,W,3)` and unbounded finite range.
+    @exception ValueError Raised when image shape is unsupported or contains non-finite values.
+    @satisfies REQ-198
+    """
+
+    numeric_data = np_module.asarray(image_data, dtype=np_module.float64)
+    if not bool(np_module.all(np_module.isfinite(numeric_data))):
+        raise ValueError("OpenCV-Tonemap backend received non-finite float values")
+    if len(numeric_data.shape) == 2:
+        numeric_data = numeric_data[:, :, None]
+    if len(numeric_data.shape) == 3 and numeric_data.shape[2] == 1:
+        numeric_data = np_module.repeat(numeric_data, 3, axis=2)
+    if len(numeric_data.shape) == 3 and numeric_data.shape[2] == 4:
+        numeric_data = numeric_data[:, :, :3]
+    if len(numeric_data.shape) != 3 or numeric_data.shape[2] < 3:
+        raise ValueError("Float stage input image has unsupported shape")
+    if numeric_data.shape[2] > 3:
+        numeric_data = numeric_data[:, :, :3]
+    return numeric_data
+
+
 def _apply_merge_gamma_float(np_module, image_rgb_float, resolved_merge_gamma):
     """@brief Apply one resolved merge-output transfer without extra clipping.
 
@@ -4085,8 +4437,8 @@ def _parse_run_options(args):
     optional auto-brightness stage and
     `--ab-*` knobs, optional auto-levels stage and `--al-*` knobs,
     optional shared auto-adjust knobs, optional backend selector
-    (`--hdr-merge=<Luminace-HDR|OpenCV-Merge|HDR-Plus>` default `OpenCV-Merge`),
-    OpenCV backend controls, HDR+ backend controls, and luminance backend controls
+    (`--hdr-merge=<Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>` default `OpenCV-Merge`),
+    OpenCV backend controls, OpenCV-Tonemap backend controls, HDR+ backend controls, and luminance backend controls
     including explicit `--tmo*` passthrough options and optional
     auto-adjust enable selector (`--auto-adjust <enable|disable>`), plus
     optional `--debug` persistent checkpoint emission; parses
@@ -4095,7 +4447,7 @@ def _parse_run_options(args):
     invalid arity.
     @param args {list[str]} Raw command argument vector.
     @return {tuple[Path, Path, float|None, bool, PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, bool, AutoEvOptions]|None} Parsed `(input, output, ev, auto_ev, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, ev_zero_specified, auto_ev_options)` tuple; `None` on parse failure.
-    @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-020, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146, REQ-176, REQ-179, REQ-180, REQ-181, REQ-183
+    @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-020, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146, REQ-176, REQ-179, REQ-180, REQ-181, REQ-183, REQ-189, REQ-190, REQ-191, REQ-194, REQ-195, REQ-196
     """
 
     positional = []
@@ -4125,6 +4477,8 @@ def _parse_run_options(args):
     white_balance_mode = None
     hdr_merge_mode = HDR_MERGE_MODE_OPENCV_MERGE
     opencv_raw_values = {}
+    opencv_tonemap_selector_options = []
+    opencv_tonemap_knob_raw_values = {}
     merge_gamma_option = MergeGammaOption(mode="auto")
     hdrplus_raw_values = {}
     luminance_hdr_model = DEFAULT_LUMINANCE_HDR_MODEL
@@ -4201,6 +4555,33 @@ def _parse_run_options(args):
                 print_error(f"Unknown option: {option_name}")
                 return None
             opencv_raw_values[option_name] = option_value
+            idx += consume_count
+            continue
+
+        if token in _OPENCV_TONEMAP_SELECTOR_OPTIONS:
+            opencv_tonemap_selector_options.append(token)
+            idx += 1
+            continue
+
+        if token.startswith("--tonemap-"):
+            option_name = token
+            option_value = None
+            consume_count = 1
+            if "=" in token:
+                option_name, option_value = token.split("=", 1)
+            else:
+                if idx + 1 >= len(args):
+                    print_error(f"Missing value for {token}")
+                    return None
+                option_value = args[idx + 1]
+                if option_value.startswith("--"):
+                    print_error(f"Missing value for {token}")
+                    return None
+                consume_count = 2
+            if option_name not in _OPENCV_TONEMAP_KNOB_OPTIONS:
+                print_error(f"Unknown option: {option_name}")
+                return None
+            opencv_tonemap_knob_raw_values[option_name] = option_value
             idx += consume_count
             continue
 
@@ -4905,10 +5286,33 @@ def _parse_run_options(args):
             f"OpenCV knob {invalid_knob} requires --hdr-merge {HDR_MERGE_MODE_OPENCV_MERGE}"
         )
         return None
+    if (
+        hdr_merge_mode != HDR_MERGE_MODE_OPENCV_TONEMAP
+        and (
+            opencv_tonemap_selector_options
+            or opencv_tonemap_knob_raw_values
+        )
+    ):
+        if opencv_tonemap_selector_options:
+            invalid_knob = opencv_tonemap_selector_options[0]
+        else:
+            invalid_knob = next(iter(opencv_tonemap_knob_raw_values))
+        print_error(
+            f"OpenCV-Tonemap option {invalid_knob} requires --hdr-merge {HDR_MERGE_MODE_OPENCV_TONEMAP}"
+        )
+        return None
 
     opencv_merge_options = _parse_opencv_merge_backend_options(opencv_raw_values)
     if opencv_merge_options is None:
         return None
+    opencv_tonemap_options = None
+    if hdr_merge_mode == HDR_MERGE_MODE_OPENCV_TONEMAP:
+        opencv_tonemap_options = _parse_opencv_tonemap_backend_options(
+            tonemap_selector_options=opencv_tonemap_selector_options,
+            tonemap_knob_raw_values=opencv_tonemap_knob_raw_values,
+        )
+        if opencv_tonemap_options is None:
+            return None
     (
         backend_post_gamma,
         backend_brightness,
@@ -4976,6 +5380,7 @@ def _parse_run_options(args):
             debug_enabled=debug_enabled,
             merge_gamma_option=merge_gamma_option,
             white_balance_mode=white_balance_mode,
+            opencv_tonemap_options=opencv_tonemap_options,
         ),
         enable_luminance,
         enable_opencv,
@@ -6379,6 +6784,93 @@ def _normalize_debevec_hdr_to_unit_range(np_module, hdr_rgb_float32, white_point
         np_module=np_module,
         hdr_rgb_float32=hdr_rgb_float32,
     )
+
+
+def _run_opencv_tonemap_backend(
+    bracket_images_float,
+    opencv_tonemap_options,
+    auto_adjust_dependencies,
+    resolved_merge_gamma,
+):
+    """@brief Execute OpenCV-Tonemap backend on ev-zero only.
+
+    @details Selects bracket index `1` (`ev_zero`) as the only tone-map input,
+    dispatches exactly one OpenCV tone-map implementation (`Drago`, `Reinhard`,
+    or `Mantiuk`) with fixed OpenCV `gamma=1.0`, preserves float-domain dynamic
+    range without backend-local clipping, and applies merge gamma strictly as
+    backend-final step.
+    @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors `(ev_minus, ev_zero, ev_plus)`.
+    @param opencv_tonemap_options {OpenCvTonemapOptions} OpenCV-Tonemap selector and knob payload.
+    @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
+    @param resolved_merge_gamma {ResolvedMergeGamma} Backend-final merge-output transfer payload.
+    @return {object} OpenCV-Tonemap RGB float tensor after backend-final merge gamma.
+    @exception RuntimeError Raised when OpenCV/numpy dependencies are missing.
+    @exception ValueError Raised when bracket payload or selector is invalid.
+    @satisfies REQ-192, REQ-193, REQ-194, REQ-195, REQ-196, REQ-197, REQ-198
+    """
+
+    if len(bracket_images_float) != 3:
+        raise ValueError("OpenCV-Tonemap requires exactly three bracket images")
+    if auto_adjust_dependencies is not None:
+        cv2_module, np_module = auto_adjust_dependencies
+    else:
+        resolved_dependencies = _resolve_auto_adjust_dependencies()
+        if resolved_dependencies is None:
+            raise RuntimeError("Missing required dependencies: opencv-python and numpy")
+        cv2_module, np_module = resolved_dependencies
+
+    ev_zero_rgb = _ensure_three_channel_float_array_no_clip(
+        np_module=np_module,
+        image_data=bracket_images_float[1],
+    ).astype(np_module.float32, copy=False)
+
+    if opencv_tonemap_options.tonemap_map == OPENCV_TONEMAP_MAP_DRAGO:
+        tonemap = cv2_module.createTonemapDrago(
+            gamma=1.0,
+            saturation=float(opencv_tonemap_options.drago_saturation),
+            bias=float(opencv_tonemap_options.drago_bias),
+        )
+    elif opencv_tonemap_options.tonemap_map == OPENCV_TONEMAP_MAP_REINHARD:
+        tonemap = cv2_module.createTonemapReinhard(
+            gamma=1.0,
+            intensity=float(opencv_tonemap_options.reinhard_intensity),
+            light_adapt=float(opencv_tonemap_options.reinhard_light_adapt),
+            color_adapt=float(opencv_tonemap_options.reinhard_color_adapt),
+        )
+    elif opencv_tonemap_options.tonemap_map == OPENCV_TONEMAP_MAP_MANTIUK:
+        tonemap = cv2_module.createTonemapMantiuk(
+            gamma=1.0,
+            scale=float(opencv_tonemap_options.mantiuk_scale),
+            saturation=float(opencv_tonemap_options.mantiuk_saturation),
+        )
+    else:
+        raise ValueError(
+            f"Unsupported OpenCV-Tonemap selector: {opencv_tonemap_options.tonemap_map}"
+        )
+
+    tonemapped_rgb = np_module.asarray(
+        tonemap.process(ev_zero_rgb),
+        dtype=np_module.float32,
+    )
+    return _apply_merge_gamma_float_no_clip(
+        np_module=np_module,
+        image_rgb_float=tonemapped_rgb,
+        resolved_merge_gamma=resolved_merge_gamma,
+    )
+
+
+def _derive_opencv_tonemap_enabled(postprocess_options):
+    """@brief Resolve OpenCV-Tonemap backend enable state from parsed options.
+
+    @details Returns `True` only when one OpenCV-Tonemap selector payload is
+    present in postprocess options. This helper centralizes backend-enable
+    derivation for parse output compatibility and run-time dispatch.
+    @param postprocess_options {PostprocessOptions} Parsed postprocess payload.
+    @return {bool} `True` when OpenCV-Tonemap backend is selected.
+    @satisfies REQ-189, REQ-190
+    """
+
+    return postprocess_options.opencv_tonemap_options is not None
 
 
 def _run_opencv_merge_backend(
@@ -11451,7 +11943,7 @@ def run(args):
     directory lifecycle.
     @param args {list[str]} Command argument vector excluding command token.
     @return {int} `0` on success; `1` on parse/validation/dependency/processing failure.
-    @satisfies PRJ-001, CTN-001, CTN-004, CTN-005, REQ-010, REQ-011, REQ-012, REQ-013, REQ-014, REQ-015, REQ-050, REQ-052, REQ-100, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-127, REQ-128, REQ-129, REQ-131, REQ-132, REQ-133, REQ-134, REQ-138, REQ-139, REQ-140, REQ-146, REQ-147, REQ-148, REQ-149, REQ-157, REQ-158, REQ-159, REQ-160, REQ-181, REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188
+    @satisfies PRJ-001, CTN-001, CTN-004, CTN-005, REQ-010, REQ-011, REQ-012, REQ-013, REQ-014, REQ-015, REQ-050, REQ-052, REQ-100, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-127, REQ-128, REQ-129, REQ-131, REQ-132, REQ-133, REQ-134, REQ-138, REQ-139, REQ-140, REQ-146, REQ-147, REQ-148, REQ-149, REQ-157, REQ-158, REQ-159, REQ-160, REQ-181, REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188, REQ-189, REQ-190, REQ-191, REQ-192, REQ-193, REQ-194, REQ-195, REQ-196, REQ-197, REQ-198
     """
 
     if not _is_supported_runtime_os():
@@ -11477,6 +11969,7 @@ def run(args):
         ev_zero_specified,
         auto_ev_options,
     ) = parsed
+    enable_opencv_tonemap = _derive_opencv_tonemap_enabled(postprocess_options)
 
     if input_dng.suffix.lower() != ".dng":
         print_error(f"Input file must have .dng extension: {input_dng}")
@@ -11507,7 +12000,12 @@ def run(args):
     numpy_module = _resolve_numpy_dependency()
     if numpy_module is None:
         return 1
-    if postprocess_options.auto_adjust_enabled or enable_opencv or auto_ev_enabled:
+    if (
+        postprocess_options.auto_adjust_enabled
+        or enable_opencv
+        or enable_opencv_tonemap
+        or auto_ev_enabled
+    ):
         auto_adjust_dependencies = _resolve_auto_adjust_dependencies()
         if auto_adjust_dependencies is None:
             return 1
@@ -11628,6 +12126,30 @@ def run(args):
             f"(algorithm={opencv_merge_options.merge_algorithm}, "
             f"tonemap={'enabled' if opencv_merge_options.tonemap_enabled else 'disabled'}, "
             f"tonemapGamma={opencv_merge_options.tonemap_gamma:g})"
+        )
+    elif enable_opencv_tonemap:
+        opencv_tonemap_options = postprocess_options.opencv_tonemap_options
+        if opencv_tonemap_options is None:
+            raise RuntimeError("Missing OpenCV-Tonemap selector configuration")
+        if opencv_tonemap_options.tonemap_map == OPENCV_TONEMAP_MAP_DRAGO:
+            tonemap_details = (
+                f"drago-saturation={opencv_tonemap_options.drago_saturation:g}, "
+                f"drago-bias={opencv_tonemap_options.drago_bias:g}"
+            )
+        elif opencv_tonemap_options.tonemap_map == OPENCV_TONEMAP_MAP_REINHARD:
+            tonemap_details = (
+                f"reinhard-intensity={opencv_tonemap_options.reinhard_intensity:g}, "
+                f"reinhard-light_adapt={opencv_tonemap_options.reinhard_light_adapt:g}, "
+                f"reinhard-color_adapt={opencv_tonemap_options.reinhard_color_adapt:g}"
+            )
+        else:
+            tonemap_details = (
+                f"mantiuk-scale={opencv_tonemap_options.mantiuk_scale:g}, "
+                f"mantiuk-saturation={opencv_tonemap_options.mantiuk_saturation:g}"
+            )
+        print_info(
+            f"HDR backend: {HDR_MERGE_MODE_OPENCV_TONEMAP} "
+            f"(map={opencv_tonemap_options.tonemap_map}, gamma=1.0, {tonemap_details})"
         )
     elif enable_hdr_plus:
         print_info(
@@ -11847,6 +12369,15 @@ def run(args):
                     ev_zero=resolved_ev_zero,
                     source_exposure_time_seconds=source_exposure_time_seconds,
                     opencv_merge_options=opencv_merge_options,
+                    auto_adjust_dependencies=auto_adjust_dependencies,
+                    resolved_merge_gamma=resolved_merge_gamma,
+                )
+            elif enable_opencv_tonemap:
+                if postprocess_options.opencv_tonemap_options is None:
+                    raise RuntimeError("Missing OpenCV-Tonemap selector configuration")
+                merged_image_float = _run_opencv_tonemap_backend(
+                    bracket_images_float=bracket_images_float,
+                    opencv_tonemap_options=postprocess_options.opencv_tonemap_options,
                     auto_adjust_dependencies=auto_adjust_dependencies,
                     resolved_merge_gamma=resolved_merge_gamma,
                 )
