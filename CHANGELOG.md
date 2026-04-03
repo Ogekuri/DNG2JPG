@@ -1,2 +1,490 @@
 # Changelog
 
+## [0.1.0](https://github.com/Ogekuri/DNG2JPG/releases/tag/v0.1.0) - 2026-04-03
+### ⛰️  Features
+- add OpenCV-Tonemap HDR backend with selector/knobs [useReq] *(dng2jpg)*
+  - Append REQ-189..REQ-198 and TST-069..TST-074 in REQUIREMENTS.md.
+  - Implement --hdr-merge OpenCV-Tonemap with mandatory --tonemap-<map> selector.
+  - Add Drago/Reinhard/Mantiuk knob parsing, validation, and fixed gamma=1.0 dispatch.
+  - Run ev_zero-only tone mapping, ignore minus/plus brackets, and apply merge gamma last.
+  - Preserve OpenCV-Tonemap float dynamic range without backend-local clipping.
+  - Add parser/help/backend tests for selector coupling, dispatch, merge-gamma-last, and no-clipping.
+  - Update WORKFLOW.md runtime model and regenerate REFERENCES.md.
+- add optional white-balance stage [useReq] *(dng2jpg)*
+  - append white-balance requirements and tests coverage IDs\n- add --white-balance parser with strict mode validation\n- apply EV0-derived gains identically across the triplet\n- implement Simple, GrayworldWB, IA, ColorConstancy, TTL modes\n- update workflow model and regenerate references
+- add debug TIFF pipeline checkpoints [useReq] *(dng2jpg)*
+  - Append debug requirements and runtime docs.\nPersist stage TIFF checkpoints for --debug.\nAdd parser and pipeline tests for debug outputs.
+- add HDR+ merge backend and docs [useReq] *(core)*
+  - Add --enable-hdr-plus backend selection and integrate a Python HDR+ tile merge port for aligned 16-bit RGB brackets.
+  - Update requirements, workflow, and references to capture the new backend and its source-step traceability.
+  - Keep existing OpenCV/enfuse/luminance behavior unchanged and preserve the existing parser tuple contract used by tests.
+- add OpenCV HDR merge backend with Mertens+Debevec [useReq] *(dng2jpg)*
+  - append REQ-107..REQ-110 and TST-013..TST-015 in SRS
+  - implement --enable-opencv backend with exclusive selector parsing
+  - add OpenCV merge pipeline using Mertens+Debevec and uint16 output
+  - keep merge/postprocess workflow in 16-bit pipeline boundaries
+  - add parser/EV-time/Debevec-normalization unit tests
+  - refresh WORKFLOW.md and regenerate REFERENCES.md
+- add auto-levels pipeline stage and CLI controls [useReq] *(dng2jpg)*
+  - Append REQ-100..102 and TST-010..011 for auto-levels behavior.
+  - Port histogram-based auto-levels algorithm into uint16 RGB pipeline.
+  - Add configurable clip percent and optional highlight reconstruction methods.
+  - Update workflow/runtime and symbol references documentation.
+- add auto-levels stage and controls [useReq] *(dng2jpg)*
+  - Append REQ-053..REQ-057 and TST-010..TST-011 for auto-levels feature.
+  - Implement --auto-levels stage between auto-brightness and static postprocess.
+  - Add configurable clip percent and optional highlight reconstruction with mandatory method selector.
+  - Regenerate docs/WORKFLOW.md and docs/REFERENCES.md for traceability.
+- Add docs/REQUIREMENTS.md.
+- Add guidelines.
+- First implementation.
+- Initial commit.
+
+### 🐛  Bug Fixes
+- add exiftool subprocess fallback for DNG MakerNotes ColorSpace [useReq] *(_extract_exif_gamma_tags)*
+  - exifread cannot extract Canon MakerNotes ColorSpace from DNG files
+  - Added _exiftool_color_space_fallback() for vendor MakerNotes recovery
+  - Maps exiftool Adobe RGB -> "2", sRGB -> "1" for EXIF-compatible tokens
+  - Fallback only invoked when exifread yields no EXIF ColorSpace tag
+  - Canon DNG 2004-08-28_15-51-40.dng now correctly resolves Adobe RGB
+  - All 79 existing tests pass without modification
+- correct docstring to document --gamma parsing instead of rejection [useReq] *(_parse_run_options)*
+  - The @details docstring of _parse_run_options incorrectly stated
+  - "rejects removed --gamma" while the implementation correctly parses
+  - --gamma=auto (default) and --gamma=<linear_coeff,exponent> per REQ-020.
+  - Fixed: replaced "rejects removed --gamma" with accurate description of
+  - --gamma=<auto|linear_coeff,exponent> merge-output transfer selector
+  - parsing behavior, defaulting to auto when omitted.
+  - Updated docs/REFERENCES.md to reflect current symbol line ranges.
+- expose merge gamma transfer parameters [useReq] *(dng2jpg)*
+  - Restore explicit merge-gamma diagnostic parameters.
+  - emit linear and curve segment details for sRGB/Adobe RGB/custom
+  - preserve stable numeric formatting for Adobe RGB gamma
+  - cover formatter and runtime diagnostics with tests
+- enforce linear luminance hdr command [useReq] *(luminance)*
+  - force luminance-hdr-cli deterministic linear response settings
+  - reject non-linear luminance response-curve overrides
+  - update luminance command tests and derived docs
+- honor raw white level in base extraction [useReq] *(auto-ev)*
+  - Add a targeted reproducer for auto-EV collapsing to 0,0,0.
+  - Scale the automatic base RGB image against RAW white_level when present.
+  - Refresh workflow and references after the defect fix.
+- confine radiance calibration to uint8 [useReq] *(opencv)*
+  - restore OpenCV Debevec/Robertson execution for real Robertson pipeline runs
+  - keep repository pipeline interfaces on normalized float RGB buffers
+  - quantize only the backend-local calibrated radiance step required by OpenCV
+  - add regression coverage for Debevec/Robertson radiance path payload types
+  - refresh workflow and references docs for the corrected runtime contract
+- read nested EXIF ExposureTime for radiance merge [useReq] *(dng2jpg)*
+  - add regression coverage for nested EXIF IFD exposure metadata
+  - fallback to EXIF IFD when Pillow omits ExposureTime from root EXIF
+  - refresh workflow and references docs for the extraction path
+- isolate ImageMagick sidecar files [useReq] *(auto-adjust)*
+  - run ImageMagick auto-adjust with cwd bound to temp workspace
+  - add failing->passing reproducer for workspace pollution by .pp3 sidecars
+  - update WORKFLOW and regenerate REFERENCES for runtime traceability
+- normalize Mertens float pipeline [useReq] *(opencv-merge)*
+  - add failing reproducer for OpenCV uint16-scale artifact
+  - keep Debevec input on uint16 and preserve uint16 TIFF write
+  - update WORKFLOW call-trace and regenerate REFERENCES
+- Fix version number.
+- keep static postprocess in uint16 domain [useReq] *(dng2jpg)*
+  - remove byte-domain conversion in static postprocess stages\n- keep single uint16->uint8 conversion at JPEG boundary\n- add targeted unit tests for quantization boundary\n- update workflow/runtime and symbol references docs
+- restore Pillow parity in uint16 static stage [useReq] *(postprocess)*
+  - Fix mixed-factor numeric drift in static postprocess after uint16 refactor.
+  - Use Pillow-compatible byte-domain operations for brightness/contrast/color
+  - inside uint16 helper functions, lifting results back as u8*257.
+  - Preserve function order and single final uint8 quantization behavior.
+  - Update WORKFLOW.md and regenerate REFERENCES.md.
+- restore Pillow parity in uint16 static stage [useReq] *(postprocess)*
+  - Fix mixed-factor numeric drift in static postprocess after uint16 refactor.
+  - Use Pillow-compatible byte-domain operations for brightness/contrast/color
+  - inside uint16 helper functions, lifting results back as u8*257.
+  - Preserve function order and single final uint8 quantization behavior.
+  - Update WORKFLOW.md and regenerate REFERENCES.md.
+
+### 🚜  Changes
+- improve WB analysis source and robustness [useReq] *(white-balance)*
+  - Update REQUIREMENTS with WB analysis-source selector and robust stats requirements.
+  - Implement linear-base unclipped WB analysis payload and parser support.
+  - Replace xphoto fixed proxy with deterministic real-image downsampled analysis.
+  - Apply robust masked statistics for ColorConstancy and TTL gain estimation.
+  - Update WB tests, workflow model, and regenerated references.
+- align RAW WB multipliers to green reference [useReq] *(dng2jpg)*
+  - Update REQ-031 and REQ-158 to define green-referenced WB normalization.
+  - Align RAW base extraction white-balance multiplier normalization.
+  - Update WORKFLOW runtime model and regenerate REFERENCES index.
+  - Align RAW bracket/base unit tests with green-anchored multipliers.
+- handle RAW dynamic range with white/black levels [useReq] *(dng2jpg)*
+  - update REQ-158 and TST-043 to require sensor-dynamic-range normalization
+  - compute base normalization denominator from white_level and black_level_per_channel
+  - preserve float headroom by removing pre-clipping before WB and EV bracket scaling
+  - adapt extraction and debug checkpoint tests to dynamic-range behavior
+  - refresh WORKFLOW and REFERENCES traceability docs
+- refactor neutral RAW extraction and WB defaults [useReq] *(dng2jpg)*
+  - update REQ-010/031/157/158 and TST-043 for neutral RAW plus normalized WB pipeline
+  - extract RAW with neutral rawpy settings and apply mean-normalized camera WB afterward
+  - ensure auto-ev and bracketing consume WB-corrected linear float image
+  - adapt and extend uint16 pipeline tests for the new extraction contract
+  - refresh WORKFLOW and REFERENCES traceability docs
+- update hdr pipeline defaults [useReq] *(dng2jpg)*
+  - Update requirements for per-pipeline default parameters.
+  - Implement algorithm-specific OpenCV defaults and tone-map gamma defaults.
+  - Apply new Luminace-HDR and HDR-Plus static postprocess defaults.
+  - Adjust parser/help/runtime default resolution behavior.
+  - Update tests, workflow model, and references for traceability.
+- remove non-functional static clipping [useReq] *(dng2jpg-static-postprocess)*
+  - Update REQ-134 to forbid stage-local clipping in static substage adaptation/equations.
+  - Refactor static postprocess gamma/brightness/contrast/saturation to use unclipped RGB-float shape normalization.
+  - Remove explicit contrast np.clip from static stage implementation.
+  - Add/adjust static-stage unit tests for unclipped float-domain behavior.
+  - Regenerate WORKFLOW and REFERENCES to align runtime/documentation traceability.
+- extend OpenCV tonemap to Mertens [useReq] *(dng2jpg)*
+  - Update REQ-143/REQ-154 and TST-034 for OpenCV Mertens tonemap behavior.
+  - Apply --opencv-tonemap/--opencv-tonemap-gamma to Mertens as final OpenCV step.
+  - Refresh parser/help docs and OpenCvMergeOptions Doxygen traces.
+  - Add Mertens enabled/disabled tonemap tests and adapt merge helper call sites.
+  - Regenerate docs/REFERENCES.md and update docs/WORKFLOW.md call trace.
+- align luminance gamma flags with merge gamma [useReq] *(dng2jpg-luminance)*
+  - Update REQ-011/REQ-170 and related evidence mappings.
+  - Refactor luminance CLI invocation to keep linear ingress on -g/-S and map resolved merge gamma to -G.
+  - Add helper _resolve_luminance_cli_merge_gamma_options for deterministic mapping.
+  - Pass resolved_merge_gamma into luminance backend from run() dispatch.
+  - Add targeted tests for luminance -G mapping and preserve existing command diagnostics coverage.
+  - Regenerate REFERENCES.md and patch WORKFLOW.md call-trace node coverage.
+- refactor xphoto WB float-flow discretization boundary [useReq] *(dng2jpg.white-balance)*
+  - Update REQ-183..186 and TST-064..066 to require float-domain WB flow.
+  - Refactor xphoto WB modes to quantize only compact tangential proxy payloads.
+  - Keep canonical bracket WB pipeline normalized float end-to-end.
+  - Add WB test that validates compact proxy quantization boundary.
+  - Refresh WORKFLOW.md and regenerate REFERENCES.md for traceability.
+- rename hdr-merge OpenCV to OpenCV-Merge [useReq] *(dng2jpg)*
+  - Update requirements for --hdr-merge selector value rename.
+  - Rename backend selector constant and parser/help surface to OpenCV-Merge.
+  - Rename OpenCV backend helper symbols for nomenclature consistency.
+  - Update unit tests and requirement evidence references to new names.
+  - Regenerate REFERENCES.md and align WORKFLOW.md call-trace names.
+- move gamma stage for Mertens inputs [useReq] *(opencv-merge)*
+  - Update REQ-154 and REQ-170 to scope merge-gamma timing by OpenCV algorithm.
+  - Refactor OpenCV Mertens path to apply identical resolved merge-gamma on all three input brackets before createMergeMertens.
+  - Remove post-fusion merge-gamma application from OpenCV Mertens output path.
+  - Keep OpenCV Debevec/Robertson and HDR-Plus gamma flow unchanged.
+  - Update WORKFLOW and regenerate REFERENCES for traceability.
+- align auto gamma with static chain [useReq] *(postprocess)*
+  - Update requirements so --post-gamma=auto replaces only gamma.
+  - Keep static pipeline order as auto-gamma->brightness->contrast->saturation.
+  - Adjust static postprocess implementation and execution gating.
+  - Update targeted unit test and workflow/reference docs.
+- add auto post-gamma mode [useReq] *(static-postprocess)*
+  - Update REQUIREMENTS for --post-gamma=auto replacement behavior and knobs.
+  - Implement parser/dataclass support for auto post-gamma selector and options.
+  - Add float-only auto-gamma LUT stage anchored to mean luminance.
+  - Switch static postprocess execution to auto replacement when selected.
+  - Update HELP, WORKFLOW, REFERENCES, and targeted unit tests.
+- gate static postprocess by neutral factors [useReq] *(dng2jpg)*
+  - Update REQ-132/REQ-134 and TST-027 for selective static substage execution.
+  - Implement static stage bypass when all factors are 1.0.
+  - Execute only non-neutral substages while preserving gamma->brightness->contrast->saturation order.
+  - Update workflow/references and add targeted static postprocess tests.
+- remove OpenCV entry normalization pass [useReq] *(opencv-hdr-merge)*
+  - update REQ-108 to require OpenCV entry pass-through
+  - pass bracket buffers as float32 without entry clipping in _run_opencv_hdr_merge
+  - update WORKFLOW call-trace for OpenCV entry behavior
+  - regenerate REFERENCES index
+- BREAKING CHANGE: Remove intermediate stage-local clipping from float pipeline [useReq] *(postprocess)*
+  - Remove np.clip(0,1) from 7 float pipeline functions
+  - Add safety clip in _encode_jpg and _write_rgb_float_tiff16
+  - Preserve all by-design clips: contrast, clip_out_of_gamut, _clamp01
+  - Update REQ-134 to encode removal of stage-local clipping
+  - Update WORKFLOW.md and regenerate REFERENCES.md
+- BREAKING CHANGE: refactor luminance pipeline to float32 TIFF [useReq] *(luminance-hdr)*
+  - REQ-011: Updated to mandate --ldrTiff 32b and float32 TIFF intermediates
+  - REQ-174: New requirement for float32 TIFF bracket serialization
+  - REQ-175: New requirement for float32 TIFF output import/normalization
+  - Added _write_rgb_float_tiff32 for float32 TIFF serialization
+  - Changed _materialize_bracket_tiffs_from_float to use float32 writer
+  - Changed --ldrTiff from 16b to 32b in luminance-hdr-cli command
+  - Updated WORKFLOW.md call-trace for luminance backend float32 path
+  - Debug TIFF checkpoints (DES-009) remain TIFF16 unchanged
+- add human-readable ColorProfile label to EXIF diagnostics [useReq] *(_describe_exif_gamma_tags)*
+  - REQ-172: EXIF diagnostics now include ColorProfile label derived from ColorSpace/InteroperabilityIndex
+  - Mapping: ColorSpace=1 -> sRGB, ColorSpace=2 or R03 interop -> Adobe RGB, 65535 -> Uncalibrated
+  - Label appended at end of diagnostic line preserving backward-compatible substring format
+  - All 79 tests pass without modification
+- BREAKING CHANGE: derive merge gamma from DNG EXIF color profile with sRGB default fallback [useReq] *(gamma)*
+  - REQ-157: source gamma diagnostics now prioritize DNG EXIF color-profile metadata
+  - REQ-163: classify gamma from DNG EXIF ColorSpace/InteroperabilityIndex fields
+  - REQ-169: unresolved auto merge gamma defaults to sRGB instead of linear
+  - REQ-172: EXIF diagnostics now include ImageMake field
+  - ExifGammaTags: added image_make field
+  - _extract_exif_gamma_tags: extracts Image Make tag from DNG EXIF
+  - _resolve_auto_merge_gamma: removed source_gamma_info fallback path
+  - _describe_exif_gamma_tags: shows ImageMake in diagnostics
+  - run: EXIF extraction/diagnostics always execute regardless of gamma mode
+  - All 79 tests pass without modification
+- BREAKING CHANGE: switch EXIF extraction to exifread for merge-gamma resolution [useReq] *(gamma)*
+  - REQ-169: merge-gamma auto uses exifread binary stream processing
+  - REQ-172: diagnostics include ImageModel alongside ColorSpace
+  - REQ-173: new req for exifread.process_file-based EXIF extraction
+  - DES-010: exifread declared as project runtime dependency
+  - Removed unused Pillow-specific EXIF constants
+  - Updated WORKFLOW.md and REFERENCES.md
+  - All 79 existing unit tests pass
+- expose gamma exif evidence [useReq] *(dng2jpg)*
+  - Update requirements for EXIF gamma-process evidence output.
+  - Print normalized EXIF gamma inputs during auto merge-gamma resolution.
+  - Extend runtime diagnostics coverage for merge gamma evidence.
+  - Refresh workflow and references traceability.
+- restore merge gamma pipeline [useReq] *(dng2jpg)*
+  - Update REQUIREMENTS.md for restored --gamma behavior.
+  - Implement EXIF auto/custom merge gamma resolution.
+  - Apply merge gamma as final OpenCV and HDR+ backend step.
+  - Extend pipeline tests for parser, resolution, backend application, and diagnostics.
+  - Refresh WORKFLOW.md and REFERENCES.md traceability.
+- raise clipping defaults to 20 [useReq] *(auto-ev)*
+  - Update REQ-019 for new auto-EV clipping defaults.\nSet shadow clipping default to 20.\nSet highlight clipping default to 20.\nAdjust help and parser default coverage.\nRefresh references documentation.
+- log luminance command syntax [useReq] *(dng2jpg)*
+  - Update REQ-011 to require runtime logging of the luminance command.\nAdd deterministic external-command formatter for runtime diagnostics.\nPrint full luminance-hdr-cli command syntax with parameters.\nAdd targeted runtime logging coverage.\nRefresh workflow and references documentation.
+- refactor EV planning and bracketing [useReq] *(dng2jpg)*
+  - Update requirements for continuous manual EV values and iterative clipping bracketing.
+  - Replace legacy joint auto-EV solver with ev_zero selection from exposure measures.
+  - Add new auto EV clipping and step options, remove legacy auto-EV targets and pct.
+  - Rename runtime diagnostics to Exposure Misure EV and refresh tests/docs.
+- configure auto-ev targets and logs [useReq] *(dng2jpg)*
+  - Update REQUIREMENTS for configurable auto-EV targets and readable logs.
+  - Implement AutoEvOptions parsing, validation, solver wiring, and diagnostics.
+  - Refresh workflow/reference docs for the updated runtime and symbols.
+  - Extend existing pytest coverage for parser, solver, and runtime logging.
+- implement histogram-validated bracket width [useReq] *(auto-ev)*
+  - Update requirements for histogram-validated auto-EV bracket width.
+  - Implement progressive bracket scanning with clipping/detail-loss analysis.
+  - Add auto-EV quality tests and refresh workflow/reference docs.
+- switch raw extraction to zero-processing linear mode [useReq] *(dng2jpg)*
+  - Update REQ-010, REQ-158, and TST-043 for zero-processing RAW export.
+  - Implement rawpy postprocess with disabled camera white balance and auto-scale.
+  - Remove white_level rescaling from base HDR extraction.
+  - Refresh workflow and references docs.
+  - Validate with req static check and pytest suite.
+- atomize EV correction diagnostic requirements [useReq] *(exposure-diagnostics)*
+  - Split REQ-052 to extract histogram EV correction diagnostics into
+  - dedicated atomic requirements REQ-171, REQ-172.
+  - REQ-171: print each histogram EV correction (ETTR, Entropy, Detail)
+  - individually as labeled output when --auto-ev resolves to enable.
+  - REQ-172: print the selected most conservative EV correction value
+  - (smallest absolute value) as labeled diagnostic output.
+  - Move _smoothstep helper outside sweep loop in
+  - _compute_histogram_ev_corrections for 1-to-1 source algorithm match.
+  - Update @satisfies tags on AutoEvHistogramSolution and
+  - _resolve_auto_ev_histogram_solution to include REQ-171, REQ-172.
+- BREAKING CHANGE: refactor auto-ev to histogram-based analysis [useReq] *(auto-ev)*
+  - Breaking: replace clipping-scan auto-ev solver with histogram analysis.
+  - Remove REQ-031, REQ-032 (clipping classification, safe interval derivation)
+  - Add REQ-166 (ETTR), REQ-167 (entropy), REQ-168 (detail preservation)
+  - Add REQ-169 (conservative selection + SAFE_ZERO_MAX clamping)
+  - Add REQ-170 (bracket fork maximization)
+  - Replace AutoEvBracketingParams/Solution with AutoEvHistogramSolution
+  - New _compute_histogram_ev_corrections and _resolve_auto_ev_histogram_solution
+  - Remove _is_auto_ev_candidate_clipped, _compute_auto_ev_bracketing_solution
+  - Remove _max_symmetric_half_range, _resolve_auto_ev_bracketing_solution
+  - Replace TST-004, add TST-047, TST-048 for histogram-based tests
+- replace solver with bracketing triplet [useReq] *(auto-ev)*
+  - Update requirements for the new auto-EV contract.
+  - Port the bracketing triplet solver and remove legacy heuristics.
+  - Drop --auto-ev-pct and align tests, workflow, and references.
+- align tonal transform with RawTherapee [useReq] *(auto-levels)*
+  - Update requirements for RawTherapee-equivalent mixed-overflow and gamut clipping.
+  - Port auto-levels tone path to keep mixed-overflow pixels on tonecurve sampling.
+  - Replace isotropic gamut normalization with RawTherapee filmlike_clip behavior.
+  - Adjust auto-levels tests and regenerate workflow/reference docs.
+- port RawTherapee tone transform [useReq] *(auto-levels)*
+  - Update requirements for explicit auto-levels tone transform and highlight toggle.
+  - Port RawTherapee-like complex auto-levels tone processing to float domain.
+  - Keep highlight reconstruction explicit and gamut clipping post-transform.
+  - Extend auto-levels tests for float tone transform and explicit enablement.
+  - Regenerate workflow and references docs.
+- make auto exposure clipping-safe [useReq] *(auto-ev)*
+  - Update REQ-008, REQ-009, REQ-028, REQ-032, and REQ-052.
+  - Add histogram-based clipping-risk guardrails to auto-EV.
+  - Contract auto brackets when highlight headroom is insufficient.
+  - Extend deterministic diagnostics and focused tests.
+  - Refresh workflow and references documentation.
+- BREAKING CHANGE: remove CLI gamma and add source diagnostics [useReq] *(dng2jpg)*
+  - Update requirements for removing CLI --gamma.
+  - Derive source gamma info from RAW metadata for diagnostics only.
+  - Keep HDR bracket extraction linear with gamma=(1.0,1.0).
+  - Remove dead gamma plumbing from OpenCV and bracket helpers.
+  - Refresh workflow/reference docs and targeted tests.
+- BREAKING CHANGE: replace auto-zero with joint auto-ev solver [useReq] *(dng2jpg)*
+  - Update REQUIREMENTS, WORKFLOW, and REFERENCES for the new exposure contract.
+  - Implement joint symmetric auto-ev solving and static --ev/--ev-zero handling.
+  - Remove --auto-zero and --auto-zero-pct from parser, help, runtime, and tests.
+  - Rewrite exposure parser, solver, and runtime coverage.
+- calibrate OpenCV radiance merge from EXIF exposure [useReq] *(dng2jpg)*
+  - Update requirements for OpenCV radiance timing and response calibration.
+  - Extract EXIF ExposureTime and compute Debevec/Robertson times in seconds.
+  - Run CalibrateDebevec/CalibrateRobertson before MergeDebevec/MergeRobertson.
+  - Preserve RGB float [0,1] interfaces and print radiance timing diagnostics.
+  - Update workflow, references, and tests for the new contract.
+- replace auto-zero exposure evaluation [useReq] *(dng2jpg)*
+  - Update requirements for migrated auto-zero evaluation.
+  - Replace preview-based EV-zero logic with linear-image candidate scoring.
+  - Compute miglior_ev, ev_ettr, and ev_dettaglio and select the minimum.
+  - Print candidate diagnostics and preserve downstream pipeline behavior.
+  - Update workflow/references docs and unit tests for the new path.
+- reorder static postprocess before auto brightness [useReq] *(core)*
+  - Update requirements REQ-013 and REQ-100 for the post-merge stage order.
+  - Move the static postprocess block ahead of optional auto-brightness.
+  - Preserve internal static order: post-gamma, brightness, contrast, saturation.
+  - Adjust runtime docs, references, help text, and pipeline-order tests.
+- refactor RAW bracketing to single-pass linear base [useReq] *(dng2jpg)*
+  - Update requirements for single-pass linear RAW base bracketing.
+  - Implement linear base extraction and NumPy EV bracket synthesis.
+  - Remove OpenCV gamma-inversion preprocessing for radiance merges.
+  - Keep --gamma as compatibility-only CLI input for diagnostics/help.
+  - Refresh workflow/references docs and align verification tests.
+- update help ordering and OpenCV defaults [useReq] *(core)*
+  - Update REQUIREMENTS for help ordering, OpenCV defaults, and EXIF thumbnail fidelity.
+  - Implement pipeline-ordered conversion help with aligned defaults and activation notes.
+  - Resolve OpenCV postprocess defaults using the selected merge algorithm.
+  - Refresh WORKFLOW and regenerate REFERENCES for the new help/rendering flow.
+  - Extend tests for help coverage and per-algorithm OpenCV default resolution.
+- align HDR evidence matrix [useReq] *(requirements)*
+  - update OpenCV HDR evidence rows after float-path refactor
+  - align test evidence with renamed/added OpenCV coverage
+- fix HDR float merge exposure [useReq] *(opencv)*
+  - update OpenCV HDR requirements and defaults
+  - linearize Debevec/Robertson inputs in float
+  - remove Calibrate* preprocessing from radiance paths
+  - rescale Mertens float output for exposure-fusion parity
+  - refresh tests, workflow model, and references
+- rebuild EXIF thumbnail from final save buffer [useReq] *(jpg-pipeline)*
+  - update requirements for EXIF thumbnail source and timestamp ordering
+  - reuse final RGB uint8 save buffer for JPEG and thumbnail generation
+  - add regression coverage for EXIF thumbnail refresh from final saved pixels
+  - refresh workflow and references docs
+- refactor OpenCV HDR merge modes [useReq] *(opencv-hdr)*
+  - Update REQUIREMENTS for OpenCV Debevec/Robertson/Mertens behavior.
+  - Refactor OpenCV backend to zero-centered exposure times,
+  - backend-local merge quantization, and optional simple tonemap.
+  - Set neutral OpenCV downstream defaults and extend parser/runtime tests.
+  - Refresh WORKFLOW and REFERENCES for the new OpenCV flow.
+- update OpenCV HDR postprocess defaults [useReq] *(dng2jpg)*
+  - update DES-008 OpenCV static postprocess defaults\n- align OpenCV default resolver constants\n- refresh TST-031 assertion and references/workflow docs
+- BREAKING CHANGE: remove legacy auto-adjust and enfuse paths [useReq] *(core)*
+  - Update requirements for single auto-adjust pipeline and reduced HDR backends; remove ImageMagick auto-adjust and enfuse; switch --auto-adjust to enable|disable default enable; keep only Luminace-HDR, OpenCV, HDR-Plus for --hdr-merge; adjust tests and docs.
+- renumber version-check requirement IDs [useReq] *(core)*
+  - replace colliding REQ-107/REQ-108 additions with REQ-141/REQ-142
+  - realign code traceability tags and regenerated references
+  - preserve validated version-check cache behavior
+- align version-check idle cache policy [useReq] *(core)*
+  - update REQ-016 and add REQ-107/REQ-108
+  - use 3600s success delay and 86400s error delay
+  - rewrite version-check cache JSON after every API attempt
+  - refresh workflow and references docs
+- normalize HDR+ float32 pipeline [useReq] *(hdrplus)*
+  - Update HDR+ requirements for normalized float32 internals
+  - Remove HDR+ uint16 staging from proxy and spatial merge
+  - Remap temporal controls for [0,1] distance inputs
+  - Refresh workflow/references and HDR+ regression tests
+- update OpenCV static postprocess defaults [useReq] *(dng2jpg)*
+  - Update DES-006 and add DES-008/TST-031.\nImplement OpenCV-specific static postprocess defaults.\nAdd targeted test coverage for resolved OpenCV defaults.\nRefresh WORKFLOW.md and REFERENCES.md.
+- move CLAHE-luma into OpenCV auto-adjust [useReq] *(dng2jpg)*
+  - Update SRS for CLAHE-luma ownership and ordering.
+  - Remove CLAHE-luma controls from auto-brightness.
+  - Add float-domain OpenCV CLAHE-luma stage after level.
+  - Extend auto-adjust parser/help with CLAHE controls.
+  - Keep auto-brightness limited to key analysis, Reinhard, and desaturation.
+  - Refresh workflow/references docs and targeted unit tests.
+- port legacy postprocess to float-only [useReq] *(static-postprocess)*
+  - change REQ-012 and add REQ-132/REQ-133/REQ-134 for float-only static postprocess
+  - port gamma, brightness, contrast, and saturation helpers from uint16 adaptation to float-domain execution
+  - keep legacy equations and stage order while removing static float->uint16->float quantization
+  - update requirement evidence, workflow model, references, and regression tests
+- enforce external tool preflight by selected options [useReq] *(dng2jpg)*
+  - Update CTN-005 and TST-002 to require explicit external executable preflight and missing-tool diagnostics.
+  - Implement _collect_missing_external_executables to aggregate missing tools based on resolved --hdr-merge and --auto-adjust modes.
+  - Integrate preflight check in run() before processing starts and preserve deterministic error output.
+  - Add unit tests covering luminance, enfuse, ImageMagick, and aggregated missing-tool cases.
+  - Update WORKFLOW.md call-trace and regenerate REFERENCES.md for symbol-level traceability.
+- refactor CLI selectors and defaults [useReq] *(dng2jpg-cli)*
+  - replace backend flags with --hdr-merge selector (default OpenCV)
+  - enforce enable|disable for auto-brightness/auto-levels/auto-ev/auto-zero
+  - implement --ev and --ev-zero precedence with ignored-option diagnostics
+  - default --auto-adjust mode to OpenCV and update help/docs/tests
+- align requirement evidence to float pipeline symbols [useReq] *(requirements)*
+  - update REQUIREMENTS evidence pointers from removed uint16 wrappers to active *_float symbols
+  - align PRJ-001 and REQ-010 evidence with _extract_bracket_images_float bracket extraction
+  - align REQ-050/100/102/104/119/120/123 and TST-011 evidence with current _encode_jpg orchestration
+- switch image stage interfaces to float [useReq] *(pipeline)*
+  - Update requirements to mandate float [0,1] stage interfaces.\nRefactor bracket extraction, HDR backends, and JPG encode path to float I/O.\nConfine uint16 and TIFF16 conversions to backend or stage-local wrappers.\nKeep final uint8 quantization only at JPEG save boundary.\nRefresh runtime/reference docs and adapt unit tests to float contracts.
+- port hierarchical HDR+ alignment and controls [useReq] *(hdrplus)*
+  - Update HDR+ requirements for scalar proxy, alignment, and runtime controls.
+  - Port hierarchical tile alignment and aligned temporal merge into the Python backend.
+  - Expose HDR+ CLI knobs and runtime diagnostics for proxy and temporal thresholds.
+  - Add deterministic HDR+ parser, proxy, alignment, and merge regression tests.
+  - Refresh workflow and references documentation for the new HDR+ call graph.
+- align auto-brightness port with source workflow [useReq] *(dng2jpg)*
+  - Update requirements for source-faithful auto-brightness behavior.
+  - Expose the original tonemap controls on the CLI.
+  - Rename the uint16 auto-brightness stage and fold local contrast into it.
+  - Restore original clipping proxies and automatic key selection rules.
+  - Add parser and pipeline tests for the new controls and stage order.
+  - Regenerate workflow and symbol reference documentation.
+- align TST-018 auto-levels evidence [useReq] *(tests)*
+  - Rename the auto-levels highlight-method test to match the requirement evidence entry.\nAssert float internal buffers reach highlight-recovery helpers while uint16 output is preserved.
+- align auto-levels with RawTherapee [useReq] *(dng2jpg)*
+  - Update requirements and workflow for RawTherapee-compatible auto-levels.\nImplement luminance-histogram calibration, extended CLI knobs, and gamut clipping.\nAdd deterministic Color Propagation and Inpaint Opposed highlight recovery approximations.\nExpand tests for parser defaults, histogram math, gamut clipping, and method dispatch.
+- align auto-levels with RawTherapee workflow [useReq] *(auto-levels)*
+  - Update requirements for RawTherapee-style auto-levels behavior.
+  - Add RawTherapee-derived auto-levels transfer, film-like OOG clipping,
+  - and Inpaint Opposed highlight reconstruction defaults.
+  - Extend parser coverage for auto-levels boolean knobs and defaults.
+  - Add deterministic unit tests for histogram metrics and auto-levels dispatch.
+  - Refresh workflow and references documentation.
+- align help command label to canonical executable [useReq] *(dng2jpg)*
+  - Update REQ-017 to require canonical dng2jpg usage label.
+  - Set converter PROGRAM constant to dng2jpg.
+  - Fix conversion help usage prefix to avoid duplicated command token.
+  - Regenerate references and update workflow runtime wording.
+- refactor uint16 static postprocess pipeline [useReq] *(dng2jpg)*
+  - Update REQ-012 and REQ-013 with uint16 static postprocess guarantees.
+  - Add REQ-106 and TST-012 for final single uint8 quantization semantics.
+  - Refactor _encode_jpg and static postprocess helpers to keep uint16 buffers.
+  - Regenerate REFERENCES.md and update WORKFLOW.md call-trace entries.
+- adopt key-adaptive Reinhard auto-brightness [useReq] *(dng2jpg)*
+  - replace legacy gain/EV-cap auto-brightness with BT.709 key-adaptive Reinhard mapping\n- add robust Lwhite burn-out compression plus luminance-preserving desaturation\n- add optional CLAHE-based local contrast controls in auto-brightness
+- refactor uint16 static postprocess pipeline [useReq] *(dng2jpg)*
+  - Update REQ-012 and REQ-013 with uint16 static postprocess guarantees.
+  - Add REQ-106 and TST-012 for final single uint8 quantization semantics.
+  - Refactor _encode_jpg and static postprocess helpers to keep uint16 buffers.
+  - Regenerate REFERENCES.md and update WORKFLOW.md call-trace entries.
+
+### ✨  Refactor
+- normalize auto-levels float domain [useReq] *(auto-levels)*
+  - Keep auto-levels histogram, solver, and highlight recovery in normalized float units.\nPreserve compatibility metrics and legacy helper aliases for deterministic tests.\nUpdate workflow and references docs for the float-native auto-levels runtime model.
+- remove CLAHE uint16 round-trip [useReq] *(auto-adjust)*
+  - Implement native float-domain CLAHE-luma helpers.\nPreserve auto-adjust stage order and existing CLI knobs.\nRegenerate workflow and references documentation.
+
+### 📚  Documentation
+- recreate SRS structure and coverage [useReq] *(requirements)*
+  - Preserve all existing requirement IDs and reorganize hierarchy.
+  - Add evidence-backed requirements for launcher, release workflow, and runtime constraints.
+  - Expand atomic REQ/TST coverage to reflect implemented behavior in src/, scripts/, and workflows.
+- regenerate runtime execution model [useReq] *(workflow)*
+  - add execution units index for CLI, launcher, and release jobs
+  - add complete internal call-trace tree for main process
+  - add explicit communication edges and channels
+
+### ◀️  Revert
+- Roll back branch to 503e62fb (503e62fb0bbc81c177f2691372f34bea8c9f0f6d).
+- Roll back branch to 8ba5ac81 (8ba5ac81494807d95fa062a520de2915f3978fa7).
+- Roll back branch to 16735f85 (16735f85f3f89b10bb45bc26718b9e220c169698).
+- Roll back branch to 2a3fa356 (2a3fa356eac5b69ba8d63a886f5efae96e6362cd).
+- Roll back branch to 4a752aff (4a752affbe7e988417aeb113a442360e4730bb73).
+
+
+# History
+
+- \[0.1.0\]: https://github.com/Ogekuri/DNG2JPG/releases/tag/v0.1.0
+
+[0.1.0]: https://github.com/Ogekuri/DNG2JPG/releases/tag/v0.1.0
