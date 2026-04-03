@@ -112,6 +112,11 @@ DEFAULT_AUTO_ADJUST_ENABLED = True
 HDR_MERGE_MODE_LUMINANCE = "Luminace-HDR"
 HDR_MERGE_MODE_OPENCV = "OpenCV"
 HDR_MERGE_MODE_HDR_PLUS = "HDR-Plus"
+WHITE_BALANCE_MODE_SIMPLE = "Simple"
+WHITE_BALANCE_MODE_GRAYWORLD = "GrayworldWB"
+WHITE_BALANCE_MODE_IA = "IA"
+WHITE_BALANCE_MODE_COLOR_CONSTANCY = "ColorConstancy"
+WHITE_BALANCE_MODE_TTL = "TTL"
 OPENCV_MERGE_ALGORITHM_DEBEVEC = "Debevec"
 OPENCV_MERGE_ALGORITHM_ROBERTSON = "Robertson"
 OPENCV_MERGE_ALGORITHM_MERTENS = "Mertens"
@@ -199,6 +204,13 @@ _HDR_MERGE_MODES = (
     HDR_MERGE_MODE_LUMINANCE,
     HDR_MERGE_MODE_OPENCV,
     HDR_MERGE_MODE_HDR_PLUS,
+)
+_WHITE_BALANCE_MODES = (
+    WHITE_BALANCE_MODE_SIMPLE,
+    WHITE_BALANCE_MODE_GRAYWORLD,
+    WHITE_BALANCE_MODE_IA,
+    WHITE_BALANCE_MODE_COLOR_CONSTANCY,
+    WHITE_BALANCE_MODE_TTL,
 )
 _OPENCV_MERGE_ALGORITHMS = (
     OPENCV_MERGE_ALGORITHM_DEBEVEC,
@@ -565,8 +577,9 @@ class PostprocessOptions:
     @param auto_adjust_options {AutoAdjustOptions} Knobs for the sole auto-adjust implementation.
     @param debug_enabled {bool} `True` when persistent debug TIFF checkpoints are enabled.
     @param merge_gamma_option {MergeGammaOption} Parsed merge-gamma request applied only by OpenCV and HDR+ backends.
+    @param white_balance_mode {str|None} Optional white-balance mode applied to bracket triplet before HDR merge backend execution.
     @return {None} Immutable dataclass container.
-    @satisfies REQ-020, REQ-050, REQ-065, REQ-066, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-088, REQ-089, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-146, REQ-176, REQ-179
+    @satisfies REQ-020, REQ-050, REQ-065, REQ-066, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-088, REQ-089, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-146, REQ-176, REQ-179, REQ-181, REQ-182
     """
 
     post_gamma: float
@@ -588,6 +601,7 @@ class PostprocessOptions:
     auto_adjust_options: AutoAdjustOptions = field(default_factory=AutoAdjustOptions)
     debug_enabled: bool = False
     merge_gamma_option: MergeGammaOption = field(default_factory=MergeGammaOption)
+    white_balance_mode: str | None = None
 
 
 @dataclass(frozen=True)
@@ -921,7 +935,7 @@ def print_help(version):
     characters. Side effects: stdout writes only.
     @param version {str} CLI version label to append in usage output.
     @return {None} Writes help text to stdout.
-    @satisfies DES-008, REQ-017, REQ-018, REQ-019, REQ-020, REQ-021, REQ-022, REQ-023, REQ-024, REQ-025, REQ-033, REQ-100, REQ-101, REQ-102, REQ-107, REQ-111, REQ-124, REQ-125, REQ-127, REQ-128, REQ-135, REQ-141, REQ-143, REQ-146, REQ-155, REQ-156, REQ-176, REQ-179
+    @satisfies DES-008, REQ-017, REQ-018, REQ-019, REQ-020, REQ-021, REQ-022, REQ-023, REQ-024, REQ-025, REQ-033, REQ-100, REQ-101, REQ-102, REQ-107, REQ-111, REQ-124, REQ-125, REQ-127, REQ-128, REQ-135, REQ-141, REQ-143, REQ-146, REQ-155, REQ-156, REQ-176, REQ-179, REQ-181, REQ-182
     """
 
     postprocess_default_rows = (
@@ -1022,7 +1036,19 @@ def print_help(version):
         f"Positive EV increment used by iterative bracket expansion. Default: `{DEFAULT_AUTO_EV_STEP:g}`.",
     )
 
-    _print_help_section("Step 3 - HDR backend selection and backend-local configuration")
+    _print_help_section(
+        "Step 3 - Optional white-balance stage and HDR backend selection"
+    )
+    _print_help_option(
+        "--white-balance <mode>",
+        "Optional bracket white-balance stage executed after bracket extraction and before HDR merge backend selection.",
+        (
+            "Allowed values: "
+            + ", ".join(_WHITE_BALANCE_MODES)
+            + ".",
+            "Default: disabled (stage skipped when omitted).",
+        ),
+    )
     _print_help_option(
         "--hdr-merge <Luminace-HDR|OpenCV|HDR-Plus>",
         f"Select HDR merge backend. Default: `{HDR_MERGE_MODE_OPENCV}`.",
@@ -3243,6 +3269,35 @@ def _parse_auto_adjust_option(auto_adjust_raw):
     return None
 
 
+def _parse_white_balance_mode_option(white_balance_raw):
+    """@brief Parse white-balance mode selector option value.
+
+    @details Accepts case-insensitive white-balance selector names and
+    normalizes them to canonical runtime mode names.
+    @param white_balance_raw {str} Raw `--white-balance` selector token.
+    @return {str|None} Canonical white-balance mode or `None` on parse failure.
+    @satisfies REQ-181, REQ-183
+    """
+
+    white_balance_text = str(white_balance_raw).strip()
+    if not white_balance_text:
+        print_error("Invalid --white-balance value: empty value")
+        return None
+    mapping = {
+        WHITE_BALANCE_MODE_SIMPLE.lower(): WHITE_BALANCE_MODE_SIMPLE,
+        WHITE_BALANCE_MODE_GRAYWORLD.lower(): WHITE_BALANCE_MODE_GRAYWORLD,
+        WHITE_BALANCE_MODE_IA.lower(): WHITE_BALANCE_MODE_IA,
+        WHITE_BALANCE_MODE_COLOR_CONSTANCY.lower(): WHITE_BALANCE_MODE_COLOR_CONSTANCY,
+        WHITE_BALANCE_MODE_TTL.lower(): WHITE_BALANCE_MODE_TTL,
+    }
+    resolved_mode = mapping.get(white_balance_text.lower())
+    if resolved_mode is not None:
+        return resolved_mode
+    print_error(f"Invalid --white-balance value: {white_balance_raw}")
+    print_error("Allowed values: " + ", ".join(_WHITE_BALANCE_MODES))
+    return None
+
+
 def _parse_hdr_merge_option(hdr_merge_raw):
     """@brief Parse HDR backend selector option value.
 
@@ -3771,6 +3826,8 @@ def _parse_run_options(args):
     automatic exposure selector (`--auto-ev[=<enable|disable>]`) with explicit
     mutual exclusion against `--ev`, optional automatic exposure clipping and
     step controls,
+    optional white-balance selector (`--white-balance=<mode>`) applied to
+    bracket triplet before backend merge when enabled,
     optional postprocess controls including `--post-gamma=<value|auto>` and
     optional `--post-gamma-auto-*` knobs,
     optional auto-brightness stage and
@@ -3786,7 +3843,7 @@ def _parse_run_options(args):
     invalid arity.
     @param args {list[str]} Raw command argument vector.
     @return {tuple[Path, Path, float|None, bool, PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, bool, AutoEvOptions]|None} Parsed `(input, output, ev, auto_ev, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, ev_zero_specified, auto_ev_options)` tuple; `None` on parse failure.
-    @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-020, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146, REQ-176, REQ-179, REQ-180
+    @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-020, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146, REQ-176, REQ-179, REQ-180, REQ-181, REQ-183
     """
 
     positional = []
@@ -3813,6 +3870,7 @@ def _parse_run_options(args):
     auto_adjust_raw_values = {}
     post_gamma_auto_raw_values = {}
     debug_enabled = False
+    white_balance_mode = None
     hdr_merge_mode = HDR_MERGE_MODE_OPENCV
     opencv_raw_values = {}
     merge_gamma_option = MergeGammaOption(mode="auto")
@@ -4052,6 +4110,30 @@ def _parse_run_options(args):
                 return None
             auto_adjust_raw_values[option_name] = option_value
             idx += consume_count
+            continue
+
+        if token == "--white-balance":
+            if idx + 1 >= len(args):
+                print_error("Missing value for --white-balance")
+                return None
+            if args[idx + 1].startswith("--"):
+                print_error("Missing value for --white-balance")
+                return None
+            parsed_white_balance_mode = _parse_white_balance_mode_option(args[idx + 1])
+            if parsed_white_balance_mode is None:
+                return None
+            white_balance_mode = parsed_white_balance_mode
+            idx += 2
+            continue
+
+        if token.startswith("--white-balance="):
+            parsed_white_balance_mode = _parse_white_balance_mode_option(
+                token.split("=", 1)[1]
+            )
+            if parsed_white_balance_mode is None:
+                return None
+            white_balance_mode = parsed_white_balance_mode
+            idx += 1
             continue
 
         if token == "--luminance-hdr-model":
@@ -4641,6 +4723,7 @@ def _parse_run_options(args):
             auto_adjust_options=auto_adjust_options,
             debug_enabled=debug_enabled,
             merge_gamma_option=merge_gamma_option,
+            white_balance_mode=white_balance_mode,
         ),
         enable_luminance,
         enable_opencv,
@@ -5286,6 +5369,298 @@ def _build_bracket_images_from_linear_base_float(np_module, base_rgb_float, mult
         )
         bracket_images_float.append(scaled.astype(np_module.float32))
     return bracket_images_float
+
+
+def _validate_white_balance_triplet_shape(np_module, bracket_images_float):
+    """@brief Validate white-balance bracket triplet shape contract.
+
+    @details Normalizes each bracket to RGB float32 and verifies that all three
+    bracket tensors share identical shape so one EV0-derived correction payload
+    can be applied deterministically to every bracket.
+    @param np_module {ModuleType} Imported numpy module.
+    @param bracket_images_float {Sequence[object]} Candidate bracket tensors.
+    @return {tuple[object, object, object]} Normalized `(ev_minus, ev_zero, ev_plus)` RGB float32 tensors.
+    @exception ValueError Raised when bracket count is not three or shapes differ.
+    @satisfies REQ-183
+    """
+
+    if len(bracket_images_float) != 3:
+        raise ValueError("White-balance stage requires exactly three bracket images")
+    normalized_triplet = tuple(
+        _normalize_float_rgb_image(
+            np_module=np_module,
+            image_data=bracket_image,
+        ).astype(np_module.float32, copy=False)
+        for bracket_image in bracket_images_float
+    )
+    reference_shape = normalized_triplet[0].shape
+    if normalized_triplet[1].shape != reference_shape or normalized_triplet[2].shape != reference_shape:
+        raise ValueError("White-balance stage requires bracket images with identical shapes")
+    return normalized_triplet
+
+
+def _extract_white_balance_channel_gains_from_xphoto(
+    cv2_module,
+    np_module,
+    wb_algorithm,
+    analysis_image_rgb_float,
+):
+    """@brief Derive per-channel white-balance gains from one OpenCV xphoto algorithm.
+
+    @details Converts EV0 RGB float into backend-local uint8 BGR payload,
+    executes xphoto `balanceWhite(...)`, converts output back to RGB float, and
+    derives one gain vector from channel means `balanced/original`. Gains are
+    finite positive float64 values.
+    @param cv2_module {ModuleType} Imported OpenCV module.
+    @param np_module {ModuleType} Imported numpy module.
+    @param wb_algorithm {object} OpenCV xphoto white-balance instance.
+    @param analysis_image_rgb_float {object} EV0 RGB float tensor.
+    @return {object} Channel gains vector with shape `(3,)`.
+    @exception RuntimeError Raised when xphoto result shape is invalid.
+    @satisfies REQ-183, REQ-184, REQ-185, REQ-186
+    """
+
+    analysis_rgb = _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=analysis_image_rgb_float,
+    ).astype(np_module.float32, copy=False)
+    analysis_bgr_uint8 = cv2_module.cvtColor(
+        _to_uint8_image_array(
+            np_module=np_module,
+            image_data=analysis_rgb,
+        ),
+        cv2_module.COLOR_RGB2BGR,
+    )
+    balanced_bgr_uint8 = wb_algorithm.balanceWhite(analysis_bgr_uint8)
+    balanced_rgb_float = _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=cv2_module.cvtColor(balanced_bgr_uint8, cv2_module.COLOR_BGR2RGB),
+    ).astype(np_module.float64, copy=False)
+    source_rgb_float = analysis_rgb.astype(np_module.float64, copy=False)
+    source_mean = np_module.mean(source_rgb_float, axis=(0, 1))
+    balanced_mean = np_module.mean(balanced_rgb_float, axis=(0, 1))
+    source_mean = np_module.maximum(source_mean, 1e-12)
+    gains = balanced_mean / source_mean
+    gains = np_module.where(np_module.isfinite(gains), gains, 1.0)
+    gains = np_module.maximum(gains, 1e-12)
+    if gains.shape != (3,):
+        raise RuntimeError("White-balance gain extraction returned invalid channel vector")
+    return gains.astype(np_module.float64, copy=False)
+
+
+def _estimate_xphoto_white_balance_gains_rgb(
+    cv2_module,
+    np_module,
+    white_balance_mode,
+    analysis_image_rgb_float,
+):
+    """@brief Estimate EV0-derived white-balance gains using OpenCV xphoto modes.
+
+    @details Creates one OpenCV xphoto white-balance instance for `Simple`,
+    `GrayworldWB`, or `IA`, applies optional mode-specific setup, and derives
+    one channel-gain vector from EV0 analysis only.
+    @param cv2_module {ModuleType} Imported OpenCV module.
+    @param np_module {ModuleType} Imported numpy module.
+    @param white_balance_mode {str} Canonical white-balance mode selector.
+    @param analysis_image_rgb_float {object} EV0 RGB float tensor.
+    @return {object} Channel gains vector with shape `(3,)`.
+    @exception RuntimeError Raised when required xphoto API is unavailable.
+    @exception ValueError Raised when mode is unsupported for xphoto estimation.
+    @satisfies REQ-183, REQ-184, REQ-185, REQ-186
+    """
+
+    xphoto_module = getattr(cv2_module, "xphoto", None)
+    if xphoto_module is None:
+        raise RuntimeError("OpenCV xphoto module is unavailable for white-balance stage")
+    if white_balance_mode == WHITE_BALANCE_MODE_SIMPLE:
+        factory = getattr(xphoto_module, "createSimpleWB", None)
+        if factory is None:
+            raise RuntimeError("OpenCV xphoto SimpleWB is unavailable")
+        wb_algorithm = factory()
+    elif white_balance_mode == WHITE_BALANCE_MODE_GRAYWORLD:
+        factory = getattr(xphoto_module, "createGrayworldWB", None)
+        if factory is None:
+            raise RuntimeError("OpenCV xphoto GrayworldWB is unavailable")
+        wb_algorithm = factory()
+    elif white_balance_mode == WHITE_BALANCE_MODE_IA:
+        factory = getattr(xphoto_module, "createLearningBasedWB", None)
+        if factory is None:
+            raise RuntimeError("OpenCV xphoto LearningBasedWB is unavailable")
+        wb_algorithm = factory()
+        set_hist_bins = getattr(wb_algorithm, "setHistBinNum", None)
+        if callable(set_hist_bins):
+            set_hist_bins(256)
+    else:
+        raise ValueError(f"Unsupported xphoto white-balance mode: {white_balance_mode}")
+    return _extract_white_balance_channel_gains_from_xphoto(
+        cv2_module=cv2_module,
+        np_module=np_module,
+        wb_algorithm=wb_algorithm,
+        analysis_image_rgb_float=analysis_image_rgb_float,
+    )
+
+
+def _estimate_color_constancy_white_balance_gains_rgb(
+    np_module,
+    skimage_color_module,
+    analysis_image_rgb_float,
+):
+    """@brief Estimate EV0-derived white-balance gains using scikit-image color constancy.
+
+    @details Converts EV0 RGB float to one scalar luminance map via
+    `skimage.color.rgb2gray(...)`, computes channel means and luminance mean, and
+    derives one Von-Kries-like gain vector `luma_mean/channel_mean`.
+    @param np_module {ModuleType} Imported numpy module.
+    @param skimage_color_module {ModuleType} Imported scikit-image color module.
+    @param analysis_image_rgb_float {object} EV0 RGB float tensor.
+    @return {object} Channel gains vector with shape `(3,)`.
+    @satisfies REQ-183, REQ-187
+    """
+
+    analysis_rgb = _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=analysis_image_rgb_float,
+    ).astype(np_module.float64, copy=False)
+    luminance = skimage_color_module.rgb2gray(analysis_rgb)
+    luminance_mean = float(np_module.mean(luminance))
+    channel_means = np_module.mean(analysis_rgb, axis=(0, 1))
+    channel_means = np_module.maximum(channel_means, 1e-12)
+    gains = luminance_mean / channel_means
+    gains = np_module.where(np_module.isfinite(gains), gains, 1.0)
+    gains = np_module.maximum(gains, 1e-12)
+    return gains.astype(np_module.float64, copy=False)
+
+
+def _estimate_ttl_white_balance_gains_rgb(np_module, analysis_image_rgb_float):
+    """@brief Estimate EV0-derived TTL white-balance gains using channel averages.
+
+    @details Computes EV0 channel means `(R,G,B)`, computes global gray average
+    as `(R+G+B)/3`, and derives channel gains as `gray/channel_mean` without
+    clipping for downstream float-domain application.
+    @param np_module {ModuleType} Imported numpy module.
+    @param analysis_image_rgb_float {object} EV0 RGB float tensor.
+    @return {object} Channel gains vector with shape `(3,)`.
+    @satisfies REQ-183, REQ-188
+    """
+
+    analysis_rgb = _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=analysis_image_rgb_float,
+    ).astype(np_module.float64, copy=False)
+    channel_means = np_module.mean(analysis_rgb, axis=(0, 1))
+    channel_means = np_module.maximum(channel_means, 1e-12)
+    gray_mean = float(np_module.mean(channel_means))
+    gains = gray_mean / channel_means
+    gains = np_module.where(np_module.isfinite(gains), gains, 1.0)
+    gains = np_module.maximum(gains, 1e-12)
+    return gains.astype(np_module.float64, copy=False)
+
+
+def _apply_channel_gains_to_white_balance_triplet(
+    np_module,
+    bracket_triplet_rgb_float,
+    channel_gains,
+):
+    """@brief Apply one shared channel-gain vector to all three bracket images.
+
+    @details Broadcast-multiplies RGB channels of each bracket with the same
+    gain vector to enforce identical white-balance transform across
+    `(ev_minus, ev_zero, ev_plus)` without stage-local clipping.
+    @param np_module {ModuleType} Imported numpy module.
+    @param bracket_triplet_rgb_float {tuple[object, object, object]} Normalized RGB bracket tensors.
+    @param channel_gains {object} Channel gains vector `(r_gain, g_gain, b_gain)`.
+    @return {list[object]} White-balanced bracket tensors in canonical order.
+    @satisfies REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188
+    """
+
+    gains_rgb = np_module.asarray(channel_gains, dtype=np_module.float64).reshape((1, 1, 3))
+    balanced_triplet = []
+    for bracket_image_rgb in bracket_triplet_rgb_float:
+        balanced_triplet.append(
+            (
+                bracket_image_rgb.astype(np_module.float64, copy=False)
+                * gains_rgb
+            ).astype(np_module.float32)
+        )
+    return balanced_triplet
+
+
+def _apply_white_balance_to_bracket_triplet(
+    bracket_images_float,
+    white_balance_mode,
+    auto_adjust_dependencies,
+):
+    """@brief Apply optional EV0-derived white-balance correction to bracket triplet.
+
+    @details Keeps the stage disabled when `white_balance_mode` is `None`. When
+    enabled, analyzes EV0 only, derives one correction payload by selected mode,
+    and applies identical correction to all three brackets before HDR merge.
+    @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors `(ev_minus, ev_zero, ev_plus)`.
+    @param white_balance_mode {str|None} Optional canonical white-balance mode selector.
+    @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
+    @return {list[object]} Ordered bracket tensors after optional white-balance stage.
+    @exception RuntimeError Raised when required dependencies are missing.
+    @exception ValueError Raised when mode is unsupported or bracket contract is invalid.
+    @satisfies REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188
+    """
+
+    if white_balance_mode is None:
+        return [bracket_image for bracket_image in bracket_images_float]
+    if auto_adjust_dependencies is not None:
+        cv2_module, np_module = auto_adjust_dependencies
+    else:
+        numpy_module = _resolve_numpy_dependency()
+        if numpy_module is None:
+            raise RuntimeError("Missing required dependency: numpy")
+        cv2_module = None
+        np_module = numpy_module
+    normalized_triplet = _validate_white_balance_triplet_shape(
+        np_module=np_module,
+        bracket_images_float=bracket_images_float,
+    )
+    _ev_minus_rgb, ev_zero_rgb, _ev_plus_rgb = normalized_triplet
+    if white_balance_mode in (
+        WHITE_BALANCE_MODE_SIMPLE,
+        WHITE_BALANCE_MODE_GRAYWORLD,
+        WHITE_BALANCE_MODE_IA,
+    ):
+        if cv2_module is None:
+            resolved_dependencies = _resolve_auto_adjust_dependencies()
+            if resolved_dependencies is None:
+                raise RuntimeError(
+                    "Missing required dependencies: opencv-contrib-python and numpy"
+                )
+            cv2_module, np_module = resolved_dependencies
+        channel_gains = _estimate_xphoto_white_balance_gains_rgb(
+            cv2_module=cv2_module,
+            np_module=np_module,
+            white_balance_mode=white_balance_mode,
+            analysis_image_rgb_float=ev_zero_rgb,
+        )
+    elif white_balance_mode == WHITE_BALANCE_MODE_COLOR_CONSTANCY:
+        try:
+            from skimage import color as skimage_color_module  # type: ignore
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "Missing required dependency: scikit-image"
+            ) from exc
+        channel_gains = _estimate_color_constancy_white_balance_gains_rgb(
+            np_module=np_module,
+            skimage_color_module=skimage_color_module,
+            analysis_image_rgb_float=ev_zero_rgb,
+        )
+    elif white_balance_mode == WHITE_BALANCE_MODE_TTL:
+        channel_gains = _estimate_ttl_white_balance_gains_rgb(
+            np_module=np_module,
+            analysis_image_rgb_float=ev_zero_rgb,
+        )
+    else:
+        raise ValueError(f"Unsupported --white-balance mode: {white_balance_mode}")
+    return _apply_channel_gains_to_white_balance_triplet(
+        np_module=np_module,
+        bracket_triplet_rgb_float=normalized_triplet,
+        channel_gains=channel_gains,
+    )
 
 
 def _extract_bracket_images_float(
@@ -6664,24 +7039,28 @@ def _resolve_auto_adjust_dependencies():
     """@brief Resolve OpenCV and numpy runtime dependencies for image-domain stages.
 
     @details Imports `cv2` and `numpy` modules required by the auto-adjust
-    pipeline, the OpenCV HDR backend, and the automatic EV-zero evaluation, and
-    returns `None` with deterministic error output when dependencies are
-    missing.
+    pipeline, the OpenCV HDR backend, white-balance stage execution, and the
+    automatic EV-zero evaluation, and returns `None` with deterministic error
+    output when dependencies are missing.
     @return {tuple[ModuleType, ModuleType]|None} `(cv2_module, numpy_module)` when available; `None` on dependency failure.
-    @satisfies REQ-037, REQ-059, REQ-073, REQ-075
+    @satisfies REQ-037, REQ-059, REQ-073, REQ-075, REQ-184, REQ-185, REQ-186
     """
 
     try:
         import cv2  # type: ignore
     except ModuleNotFoundError:
         print_error("Python dependency missing: opencv-python")
-        print_error("Install dependencies with: uv pip install opencv-python numpy")
+        print_error(
+            "Install dependencies with: uv pip install opencv-contrib-python numpy"
+        )
         return None
     try:
         import numpy as numpy_module  # type: ignore
     except ModuleNotFoundError:
         print_error("Python dependency missing: numpy")
-        print_error("Install dependencies with: uv pip install opencv-python numpy")
+        print_error(
+            "Install dependencies with: uv pip install opencv-contrib-python numpy"
+        )
         return None
     return (cv2, numpy_module)
 
@@ -10753,7 +11132,7 @@ def run(args):
     directory lifecycle.
     @param args {list[str]} Command argument vector excluding command token.
     @return {int} `0` on success; `1` on parse/validation/dependency/processing failure.
-    @satisfies PRJ-001, CTN-001, CTN-004, CTN-005, REQ-010, REQ-011, REQ-012, REQ-013, REQ-014, REQ-015, REQ-050, REQ-052, REQ-100, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-127, REQ-128, REQ-129, REQ-131, REQ-132, REQ-133, REQ-134, REQ-138, REQ-139, REQ-140, REQ-146, REQ-147, REQ-148, REQ-149, REQ-157, REQ-158, REQ-159, REQ-160
+    @satisfies PRJ-001, CTN-001, CTN-004, CTN-005, REQ-010, REQ-011, REQ-012, REQ-013, REQ-014, REQ-015, REQ-050, REQ-052, REQ-100, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-127, REQ-128, REQ-129, REQ-131, REQ-132, REQ-133, REQ-134, REQ-138, REQ-139, REQ-140, REQ-146, REQ-147, REQ-148, REQ-149, REQ-157, REQ-158, REQ-159, REQ-160, REQ-181, REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188
     """
 
     if not _is_supported_runtime_os():
@@ -10853,6 +11232,10 @@ def run(args):
         f"auto-adjust={'enabled' if postprocess_options.auto_adjust_enabled else 'disabled'}, "
         f"debug={'enabled' if postprocess_options.debug_enabled else 'disabled'}"
     )
+    if postprocess_options.white_balance_mode is None:
+        print_info("White-balance stage: disabled")
+    else:
+        print_info(f"White-balance stage: mode={postprocess_options.white_balance_mode}")
     if postprocess_options.post_gamma_mode == "auto":
         print_info(
             "Post-gamma auto knobs: "
@@ -11099,6 +11482,12 @@ def run(args):
                     multipliers=multipliers,
                     base_rgb_float=base_rgb_float,
                 )
+                if postprocess_options.white_balance_mode is not None:
+                    bracket_images_float = _apply_white_balance_to_bracket_triplet(
+                        bracket_images_float=bracket_images_float,
+                        white_balance_mode=postprocess_options.white_balance_mode,
+                        auto_adjust_dependencies=auto_adjust_dependencies,
+                    )
                 if debug_context is not None:
                     extraction_suffixes = (
                         "_1.1_ev_min"

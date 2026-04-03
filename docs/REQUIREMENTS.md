@@ -1,8 +1,8 @@
 ---
 title: "DNG2JPG Requirements"
 description: Software requirements specification derived from implemented behavior
-version: "0.4.0"
-date: "2026-03-31"
+version: "0.5.0"
+date: "2026-04-03"
 author: "GitHub Copilot CLI (req-recreate)"
 scope:
   paths:
@@ -235,6 +235,14 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-147**: MUST write each debug TIFF from normalized RGB float `[0,1]` data using filename `<input-dng-stem><stage-suffix>.tiff` in the resolved output JPG directory.
 - **REQ-148**: MUST use monotonically increasing numeric stage suffixes with phase labels covering bracket extraction (`ev_min`, `ev_zero`, `ev_max`), HDR merge, static postprocess, auto-brightness, auto-levels, and auto-adjust checkpoints when those stages execute.
 - **REQ-149**: MUST preserve debug TIFF files after command completion while keeping temporary workspace cleanup behavior unchanged for non-debug intermediates.
+- **REQ-181**: MUST parse optional `--white-balance <Simple|GrayworldWB|IA|ColorConstancy|TTL>`, defaulting to disabled when omitted and rejecting unknown values.
+- **REQ-182**: MUST execute white-balance only when `--white-balance` is specified, after bracket triplet extraction and before HDR backend merge; omitted option MUST skip the stage without altering existing merge behavior.
+- **REQ-183**: MUST estimate white-balance correction parameters exclusively from `ev_zero` and apply the exact same parameters to `ev_minus`, `ev_zero`, and `ev_plus`.
+- **REQ-184**: MUST implement `--white-balance Simple` with OpenCV xphoto `createSimpleWB`-derived parameters and apply the resulting transform in DNG2JPG float RGB representation without non-mandatory clipping or rescaling.
+- **REQ-185**: MUST implement `--white-balance GrayworldWB` with OpenCV xphoto `createGrayworldWB`-derived parameters and apply the resulting transform in DNG2JPG float RGB representation without non-mandatory clipping or rescaling.
+- **REQ-186**: MUST implement `--white-balance IA` with OpenCV xphoto `createLearningBasedWB`, configuring histogram bins to `256`, and apply the resulting transform in DNG2JPG float RGB representation without non-mandatory clipping or rescaling.
+- **REQ-187**: MUST implement `--white-balance ColorConstancy` using scikit-image-derived color-constancy analysis on `ev_zero` and apply identical float-domain channel correction to all three brackets without non-mandatory clipping or rescaling.
+- **REQ-188**: MUST implement `--white-balance TTL` with Von Kries-style per-channel gains computed from `ev_zero` channel means and apply those gains identically to all three brackets without stage-local clipping.
 
 ## 4. Test Requirements
 
@@ -297,6 +305,15 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-058**: MUST verify auto-gamma luminance anchoring computes `gamma=log(target_gray)/log(mean_luminance)` and returns unchanged image when mean luminance is outside configured guard bounds.
 - **TST-059**: MUST verify auto-gamma LUT-domain mapping runs in float space without quantized intermediates and without stage-local clipping.
 - **TST-040**: MUST verify float-only OpenCV Mertens output applies OpenCV-equivalent `255x` exposure-fusion scaling before final `[0,1]` normalization.
+- **TST-060**: MUST verify `_parse_run_options` defaults white-balance to disabled when omitted and accepts `Simple`, `GrayworldWB`, `IA`, `ColorConstancy`, and `TTL`.
+- **TST-061**: MUST verify `_parse_run_options` rejects missing or unsupported `--white-balance` values with deterministic parse diagnostics.
+- **TST-062**: MUST verify `run` skips white-balance stage when `--white-balance` is omitted and forwards extracted bracket tensors unchanged to selected HDR backend.
+- **TST-063**: MUST verify `_apply_white_balance_to_bracket_triplet` computes correction parameters from bracket index `1` (`ev_zero`) only and applies identical parameters to all three brackets.
+- **TST-064**: MUST verify `Simple` white-balance path invokes OpenCV xphoto `createSimpleWB` and applies EV0-derived channel-gain payload identically to `ev_minus`, `ev_zero`, and `ev_plus`.
+- **TST-065**: MUST verify `GrayworldWB` white-balance path invokes OpenCV xphoto `createGrayworldWB` and applies EV0-derived channel-gain payload identically to all brackets.
+- **TST-066**: MUST verify `IA` white-balance path invokes OpenCV xphoto `createLearningBasedWB`, applies `setHistBinNum(256)` when supported, and applies EV0-derived channel-gain payload identically to all brackets.
+- **TST-067**: MUST verify `ColorConstancy` white-balance path uses scikit-image luminance analysis to derive EV0-only gains and applies them identically to all brackets.
+- **TST-068**: MUST verify `TTL` white-balance path computes gains as `avg_gray/avg_channel` from `ev_zero` and applies un-clipped float-domain gains identically to all brackets.
 
 ## 5. Evidence Matrix
 
@@ -498,3 +515,20 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | TST-057 | `tests/test_uint16_postprocess_pipeline.py::test_apply_static_postprocess_float_executes_auto_gamma_then_static_substages`; verifies auto-gamma plus downstream static brightness/contrast/saturation order under `--post-gamma=auto`. |
 | TST-058 | `tests/test_uint16_postprocess_pipeline.py::test_apply_auto_post_gamma_float_uses_mean_luminance_anchor_and_guards`; verifies luminance-anchor gamma formula and guard-path unchanged output behavior. |
 | TST-059 | `tests/test_uint16_postprocess_pipeline.py::test_apply_auto_post_gamma_float_uses_float_lut_mapping_without_quantized_helpers`; verifies float LUT-domain mapping without quantized intermediates or stage-local clipping. |
+| REQ-181 | `src/dng2jpg/dng2jpg.py::_parse_white_balance_mode_option`, `_parse_run_options`, `print_help`; excerpt: parses optional `--white-balance`, validates mode set, and leaves stage disabled when omitted. |
+| REQ-182 | `src/dng2jpg/dng2jpg.py::run`; excerpt: executes white-balance stage only when mode is configured and positions it strictly between bracket extraction and HDR merge dispatch. |
+| REQ-183 | `src/dng2jpg/dng2jpg.py::_apply_white_balance_to_bracket_triplet`; excerpt: estimates correction from `ev_zero` only and reuses one identical parameter payload across all three brackets. |
+| REQ-184 | `src/dng2jpg/dng2jpg.py::_estimate_xphoto_white_balance_gains_rgb`; excerpt: `Simple` mode uses `cv2.xphoto.createSimpleWB()` and EV0-derived gain extraction, then applies float-domain transform to triplet. |
+| REQ-185 | `src/dng2jpg/dng2jpg.py::_estimate_xphoto_white_balance_gains_rgb`; excerpt: `GrayworldWB` mode uses `cv2.xphoto.createGrayworldWB()` and EV0-derived gain extraction, then applies float-domain transform to triplet. |
+| REQ-186 | `src/dng2jpg/dng2jpg.py::_estimate_xphoto_white_balance_gains_rgb`; excerpt: `IA` mode uses `cv2.xphoto.createLearningBasedWB()` with `setHistBinNum(256)` when available and applies EV0-derived gain extraction to triplet. |
+| REQ-187 | `src/dng2jpg/dng2jpg.py::_estimate_color_constancy_white_balance_gains_rgb`; excerpt: uses scikit-image luminance conversion on EV0 to derive one channel-gain payload applied identically to triplet in float domain. |
+| REQ-188 | `src/dng2jpg/dng2jpg.py::_estimate_ttl_white_balance_gains_rgb`; excerpt: computes Von Kries-style gains from EV0 channel means and applies un-clipped float-domain gains identically to triplet. |
+| TST-060 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_accepts_white_balance_modes_and_defaults_disabled`; verifies accepted mode set and default disabled state. |
+| TST-061 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_rejects_invalid_white_balance_mode`; verifies deterministic parse rejection for unsupported mode. |
+| TST-062 | `tests/test_uint16_postprocess_pipeline.py::test_run_skips_white_balance_when_mode_not_specified`; verifies no white-balance call when option omitted. |
+| TST-063 | `tests/test_uint16_postprocess_pipeline.py::test_apply_white_balance_to_bracket_triplet_uses_ev_zero_analysis_only`; verifies center-only analysis with identical triplet application. |
+| TST-064 | `tests/test_uint16_postprocess_pipeline.py::test_apply_white_balance_to_bracket_triplet_simple_mode_uses_xphoto_factory`; verifies `Simple` mode xphoto factory path. |
+| TST-065 | `tests/test_uint16_postprocess_pipeline.py::test_apply_white_balance_to_bracket_triplet_grayworld_mode_uses_xphoto_factory`; verifies `GrayworldWB` mode xphoto factory path. |
+| TST-066 | `tests/test_uint16_postprocess_pipeline.py::test_apply_white_balance_to_bracket_triplet_ia_mode_sets_hist_bins`; verifies `IA` mode learning-based xphoto path and histogram-bin configuration. |
+| TST-067 | `tests/test_uint16_postprocess_pipeline.py::test_apply_white_balance_to_bracket_triplet_color_constancy_mode_uses_skimage_luminance`; verifies scikit-image-driven color-constancy path. |
+| TST-068 | `tests/test_uint16_postprocess_pipeline.py::test_apply_white_balance_to_bracket_triplet_ttl_mode_applies_unclipped_gains`; verifies TTL gain formula and unclipped float application. |

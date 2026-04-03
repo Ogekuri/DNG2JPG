@@ -229,6 +229,45 @@ class _FakeTonemap:
         return np.clip(self.last_input * scale, 0.0, 1.0).astype(np.float32)
 
 
+class _FakeXphotoWhiteBalanceAlgorithm:
+    """Minimal OpenCV xphoto white-balance algorithm shim."""
+
+    def __init__(self, marker: str) -> None:
+        self.marker = marker
+        self.hist_bin_num: int | None = None
+
+    def setHistBinNum(self, hist_bin_num: int) -> None:
+        self.hist_bin_num = int(hist_bin_num)
+
+    def balanceWhite(self, image_bgr_u8: np.ndarray) -> np.ndarray:
+        del image_bgr_u8
+        return np.zeros((1, 1, 3), dtype=np.uint8)
+
+
+class _FakeXphotoModule:
+    """Minimal OpenCV xphoto factory shim for white-balance mode tests."""
+
+    def __init__(self) -> None:
+        self.simple_wb = _FakeXphotoWhiteBalanceAlgorithm("simple")
+        self.grayworld_wb = _FakeXphotoWhiteBalanceAlgorithm("grayworld")
+        self.learning_wb = _FakeXphotoWhiteBalanceAlgorithm("learning")
+        self.simple_calls = 0
+        self.grayworld_calls = 0
+        self.learning_calls = 0
+
+    def createSimpleWB(self) -> _FakeXphotoWhiteBalanceAlgorithm:
+        self.simple_calls += 1
+        return self.simple_wb
+
+    def createGrayworldWB(self) -> _FakeXphotoWhiteBalanceAlgorithm:
+        self.grayworld_calls += 1
+        return self.grayworld_wb
+
+    def createLearningBasedWB(self) -> _FakeXphotoWhiteBalanceAlgorithm:
+        self.learning_calls += 1
+        return self.learning_wb
+
+
 class _FakeOpenCvModule:
     """Minimal cv2 shim for deterministic `_run_opencv_hdr_merge` tests."""
 
@@ -244,6 +283,7 @@ class _FakeOpenCvModule:
         self.merge_robertson = _FakeMergeRobertson()
         self.calibrate_debevec = _FakeCalibrateDebevec()
         self.calibrate_robertson = _FakeCalibrateRobertson()
+        self.xphoto = _FakeXphotoModule()
         self.written_image: np.ndarray | None = None
         self.last_tonemap: _FakeTonemap | None = None
 
@@ -945,6 +985,47 @@ def test_parse_run_options_accepts_auto_adjust_clahe_controls() -> None:
     )
 
 
+def test_parse_run_options_accepts_white_balance_modes_and_defaults_disabled() -> None:
+    """Parser must accept supported white-balance modes and default to disabled."""
+
+    parsed_default = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--ev=1"]
+    )
+    assert parsed_default is not None
+    assert parsed_default[4].white_balance_mode is None
+
+    for white_balance_mode in (
+        "Simple",
+        "GrayworldWB",
+        "IA",
+        "ColorConstancy",
+        "TTL",
+    ):
+        parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+            [
+                "input.dng",
+                "output.jpg",
+                "--ev=1",
+                f"--white-balance={white_balance_mode}",
+            ]
+        )
+        assert parsed is not None
+        assert parsed[4].white_balance_mode == white_balance_mode
+
+
+def test_parse_run_options_rejects_invalid_white_balance_mode() -> None:
+    """Parser must reject unsupported white-balance mode selectors."""
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--ev=1", "--white-balance=invalid-mode"]
+    )
+    assert parsed is None
+    missing = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--ev=1", "--white-balance"]
+    )
+    assert missing is None
+
+
 def test_analyze_luminance_key_uses_original_thresholds_and_auto_boost_rules() -> None:
     """Key analysis must keep the original clipping proxies and boost heuristics."""
 
@@ -1271,9 +1352,9 @@ def test_print_help_orders_sections_by_pipeline_step(capsys) -> None:
     )
     assert output.index(
         "Step 2 - Exposure planning and RAW bracket extraction"
-    ) < output.index("Step 3 - HDR backend selection and backend-local configuration")
+    ) < output.index("Step 3 - Optional white-balance stage and HDR backend selection")
     assert output.index(
-        "Step 3 - HDR backend selection and backend-local configuration"
+        "Step 3 - Optional white-balance stage and HDR backend selection"
     ) < output.index("Step 4 - Auto-brightness stage")
     assert output.index("Step 4 - Auto-brightness stage") < output.index(
         "Step 5 - Auto-levels stage"
@@ -1292,6 +1373,9 @@ def test_print_help_orders_sections_by_pipeline_step(capsys) -> None:
     )
     assert output.index("--auto-levels=<enable|disable>") < output.index(
         "--al-clip-pct=<value>"
+    )
+    assert output.index("--white-balance <mode>") < output.index(
+        "--hdr-merge <Luminace-HDR|OpenCV|HDR-Plus>"
     )
     assert output.index("--hdr-merge <Luminace-HDR|OpenCV|HDR-Plus>") < output.index(
         "--opencv-merge-algorithm=<name>"
@@ -1320,6 +1404,7 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
         "--auto-ev-shadow-clipping=<0..100>",
         "--auto-ev-highlight-clipping=<0..100>",
         "--auto-ev-step=<value>",
+        "--white-balance <mode>",
         "--hdr-merge <Luminace-HDR|OpenCV|HDR-Plus>",
         "--opencv-merge-algorithm=<name>",
         "--opencv-tonemap=<bool>",
@@ -1381,6 +1466,7 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
     assert "Only accepted value: `linear`." in output
     assert "Allowed values: Debevec, Robertson, Mertens." in output
     assert "Allowed values: rggb, bt709, mean." in output
+    assert "Allowed values: Simple, GrayworldWB, IA, ColorConstancy, TTL." in output
     assert "Effective only when `--hdr-merge OpenCV`." in output
     assert "Effective only when `--hdr-merge HDR-Plus`." in output
     assert "Effective only when `--hdr-merge Luminace-HDR`." in output
@@ -1654,7 +1740,7 @@ def test_run_luminance_hdr_cli_prints_full_command_syntax(
     assert "--hdrWeight flat" in captured
     assert "--hdrResponseCurve linear" in captured
     assert "--tmo mantiuk08" in captured
-    assert "--ldrTiff 16b" in captured
+    assert "--ldrTiff 32b" in captured
     assert "--tmoFerRho 0.4" in captured
     assert "-o" in captured
     assert "ev_minus.tif" in captured
@@ -2245,6 +2331,243 @@ def test_parse_run_options_rejects_invalid_gamma_payload() -> None:
     assert invalid_non_positive is None
 
 
+def test_apply_white_balance_to_bracket_triplet_uses_ev_zero_analysis_only(
+    monkeypatch,
+) -> None:
+    """White-balance stage must estimate from EV0 only and apply to all brackets."""
+
+    bracket_images_float = [
+        np.full((2, 2, 3), 0.10, dtype=np.float32),
+        np.full((2, 2, 3), 0.20, dtype=np.float32),
+        np.full((2, 2, 3), 0.30, dtype=np.float32),
+    ]
+    fake_cv2 = _FakeOpenCvModule()
+    analysis_calls: list[np.ndarray] = []
+
+    def _fake_estimate_xphoto(
+        *,
+        cv2_module,
+        np_module,
+        white_balance_mode,
+        analysis_image_rgb_float,
+    ):
+        del cv2_module, np_module, white_balance_mode
+        analysis_calls.append(np.array(analysis_image_rgb_float, copy=True))
+        return np.array([2.0, 3.0, 4.0], dtype=np.float64)
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_estimate_xphoto_white_balance_gains_rgb",
+        _fake_estimate_xphoto,
+    )
+
+    output_triplet = dng2jpg_module._apply_white_balance_to_bracket_triplet(  # pylint: disable=protected-access
+        bracket_images_float=bracket_images_float,
+        white_balance_mode="Simple",
+        auto_adjust_dependencies=(fake_cv2, np),
+    )
+
+    assert len(analysis_calls) == 1
+    np.testing.assert_allclose(analysis_calls[0], bracket_images_float[1], rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(
+        output_triplet[0],
+        bracket_images_float[0] * np.array([2.0, 3.0, 4.0], dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        output_triplet[1],
+        bracket_images_float[1] * np.array([2.0, 3.0, 4.0], dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        output_triplet[2],
+        bracket_images_float[2] * np.array([2.0, 3.0, 4.0], dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+
+
+def test_apply_white_balance_to_bracket_triplet_simple_mode_uses_xphoto_factory(
+    monkeypatch,
+) -> None:
+    """Simple mode must use OpenCV xphoto SimpleWB factory."""
+
+    fake_cv2 = _FakeOpenCvModule()
+    bracket_images_float = [
+        np.full((2, 2, 3), 0.15, dtype=np.float32),
+        np.full((2, 2, 3), 0.25, dtype=np.float32),
+        np.full((2, 2, 3), 0.35, dtype=np.float32),
+    ]
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_extract_white_balance_channel_gains_from_xphoto",
+        lambda **_kwargs: np.array([1.1, 1.0, 0.9], dtype=np.float64),
+    )
+
+    output_triplet = dng2jpg_module._apply_white_balance_to_bracket_triplet(  # pylint: disable=protected-access
+        bracket_images_float=bracket_images_float,
+        white_balance_mode="Simple",
+        auto_adjust_dependencies=(fake_cv2, np),
+    )
+
+    assert fake_cv2.xphoto.simple_calls == 1
+    assert fake_cv2.xphoto.grayworld_calls == 0
+    assert fake_cv2.xphoto.learning_calls == 0
+    np.testing.assert_allclose(
+        output_triplet[1],
+        bracket_images_float[1] * np.array([1.1, 1.0, 0.9], dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+
+
+def test_apply_white_balance_to_bracket_triplet_grayworld_mode_uses_xphoto_factory(
+    monkeypatch,
+) -> None:
+    """Grayworld mode must use OpenCV xphoto GrayworldWB factory."""
+
+    fake_cv2 = _FakeOpenCvModule()
+    bracket_images_float = [
+        np.full((2, 2, 3), 0.15, dtype=np.float32),
+        np.full((2, 2, 3), 0.25, dtype=np.float32),
+        np.full((2, 2, 3), 0.35, dtype=np.float32),
+    ]
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_extract_white_balance_channel_gains_from_xphoto",
+        lambda **_kwargs: np.array([0.9, 1.0, 1.1], dtype=np.float64),
+    )
+
+    output_triplet = dng2jpg_module._apply_white_balance_to_bracket_triplet(  # pylint: disable=protected-access
+        bracket_images_float=bracket_images_float,
+        white_balance_mode="GrayworldWB",
+        auto_adjust_dependencies=(fake_cv2, np),
+    )
+
+    assert fake_cv2.xphoto.simple_calls == 0
+    assert fake_cv2.xphoto.grayworld_calls == 1
+    assert fake_cv2.xphoto.learning_calls == 0
+    np.testing.assert_allclose(
+        output_triplet[1],
+        bracket_images_float[1] * np.array([0.9, 1.0, 1.1], dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+
+
+def test_apply_white_balance_to_bracket_triplet_ia_mode_sets_hist_bins(
+    monkeypatch,
+) -> None:
+    """IA mode must configure `setHistBinNum(256)` on LearningBasedWB."""
+
+    fake_cv2 = _FakeOpenCvModule()
+    bracket_images_float = [
+        np.full((2, 2, 3), 0.15, dtype=np.float32),
+        np.full((2, 2, 3), 0.25, dtype=np.float32),
+        np.full((2, 2, 3), 0.35, dtype=np.float32),
+    ]
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_extract_white_balance_channel_gains_from_xphoto",
+        lambda **_kwargs: np.array([1.0, 1.0, 1.0], dtype=np.float64),
+    )
+
+    dng2jpg_module._apply_white_balance_to_bracket_triplet(  # pylint: disable=protected-access
+        bracket_images_float=bracket_images_float,
+        white_balance_mode="IA",
+        auto_adjust_dependencies=(fake_cv2, np),
+    )
+
+    assert fake_cv2.xphoto.learning_calls == 1
+    assert fake_cv2.xphoto.learning_wb.hist_bin_num == 256
+
+
+def test_apply_white_balance_to_bracket_triplet_color_constancy_mode_uses_skimage_luminance(
+    monkeypatch,
+) -> None:
+    """ColorConstancy mode must derive gains from scikit-image luminance path."""
+
+    bracket_images_float = [
+        np.full((2, 2, 3), 0.15, dtype=np.float32),
+        np.full((2, 2, 3), 0.25, dtype=np.float32),
+        np.full((2, 2, 3), 0.35, dtype=np.float32),
+    ]
+    analysis_calls: list[np.ndarray] = []
+
+    def _fake_estimate_color_constancy(
+        *,
+        np_module,
+        skimage_color_module,
+        analysis_image_rgb_float,
+    ):
+        del np_module
+        assert skimage_color_module is not None
+        analysis_calls.append(np.array(analysis_image_rgb_float, copy=True))
+        return np.array([1.2, 1.0, 0.8], dtype=np.float64)
+
+    class _FakeSkimageColorModule:
+        @staticmethod
+        def rgb2gray(image_rgb: np.ndarray) -> np.ndarray:
+            return np.mean(image_rgb, axis=2)
+
+    class _FakeSkimagePackage:
+        color = _FakeSkimageColorModule()
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_estimate_color_constancy_white_balance_gains_rgb",
+        _fake_estimate_color_constancy,
+    )
+    monkeypatch.setitem(sys.modules, "skimage", _FakeSkimagePackage())
+
+    output_triplet = dng2jpg_module._apply_white_balance_to_bracket_triplet(  # pylint: disable=protected-access
+        bracket_images_float=bracket_images_float,
+        white_balance_mode="ColorConstancy",
+        auto_adjust_dependencies=(None, np),
+    )
+
+    assert len(analysis_calls) == 1
+    np.testing.assert_allclose(analysis_calls[0], bracket_images_float[1], rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(
+        output_triplet[2],
+        bracket_images_float[2] * np.array([1.2, 1.0, 0.8], dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    sys.modules.pop("skimage", None)
+
+
+def test_apply_white_balance_to_bracket_triplet_ttl_mode_applies_unclipped_gains() -> None:
+    """TTL mode must apply un-clipped EV0-derived gains to all brackets."""
+
+    bracket_images_float = [
+        np.full((2, 2, 3), [0.10, 0.20, 0.30], dtype=np.float32),
+        np.full((2, 2, 3), [0.80, 0.40, 0.20], dtype=np.float32),
+        np.full((2, 2, 3), [0.90, 0.60, 0.50], dtype=np.float32),
+    ]
+
+    output_triplet = dng2jpg_module._apply_white_balance_to_bracket_triplet(  # pylint: disable=protected-access
+        bracket_images_float=bracket_images_float,
+        white_balance_mode="TTL",
+        auto_adjust_dependencies=(None, np),
+    )
+
+    channel_means = np.mean(bracket_images_float[1], axis=(0, 1))
+    expected_gains = float(np.mean(channel_means)) / channel_means
+    np.testing.assert_allclose(
+        output_triplet[0],
+        bracket_images_float[0] * expected_gains.astype(np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    assert float(np.max(output_triplet[2])) > 1.0
+
+
 def test_apply_auto_post_gamma_float_uses_mean_luminance_anchor_and_guards() -> None:
     """Auto-gamma must use mean-luminance anchoring and guard-path identity behavior."""
 
@@ -2653,7 +2976,7 @@ def test_apply_auto_levels_clip_out_of_gamut_matches_rawtherapee_filmlike_clip(
 
     np.testing.assert_allclose(
         disabled,
-        np.array([[[65535, 60000, 40000]]], dtype=np.float32) / 65535.0,
+        np.array([[[80000, 60000, 40000]]], dtype=np.float32) / 65535.0,
         rtol=1e-6,
         atol=1e-6,
     )
@@ -3620,6 +3943,125 @@ def test_run_static_ev_uses_manual_center_and_reports_static_mode(
     assert "Exposure Misure EV ev_best:" in output
     assert "Exposure Misure EV ev_ettr:" in output
     assert "Exposure Misure EV ev_detail:" in output
+
+
+def test_run_skips_white_balance_when_mode_not_specified(monkeypatch, tmp_path) -> None:
+    """Runtime must skip white-balance stage when `--white-balance` is omitted."""
+
+    input_dng = tmp_path / "scene.dng"
+    input_dng.write_bytes(b"fake-dng")
+    output_jpg = tmp_path / "scene.jpg"
+
+    class _FakeRawHandle:
+        output_color = "sRGB"
+        tone_curve = [0, 128, 255]
+        rgb_xyz_matrix = [[1.0, 0.0, 0.0]]
+        color_matrix = [[1.0, 0.0, 0.0]]
+        color_desc = b"RGBG"
+        raw_image_visible = np.zeros((2, 2), dtype=np.uint16)
+        white_level = int(16383)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            del exc_type, exc, tb
+
+    class _FakeRawPyModule:
+        LibRawError = RuntimeError
+
+        @staticmethod
+        def imread(_path: str) -> _FakeRawHandle:
+            return _FakeRawHandle()
+
+    fake_imageio_module = _FakeImageIoModule(
+        merged_rgb_u16=np.full((2, 2, 3), 32768, dtype=np.uint16)
+    )
+    fake_pil_module = _FakePilModule()
+    white_balance_calls: list[str] = []
+    captured_brackets: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_load_image_dependencies",
+        lambda: (_FakeRawPyModule(), fake_imageio_module, fake_pil_module),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_extract_dng_exif_payload_and_timestamp",
+        lambda **_kwargs: (None, None, 1, 0.125),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_extract_exif_gamma_tags",
+        lambda **_kwargs: dng2jpg_module.ExifGammaTags(
+            color_space="1",
+            interoperability_index=None,
+        ),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_resolve_auto_adjust_dependencies",
+        lambda: (_FakeOpenCvModule(), np),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_extract_base_rgb_linear_float",
+        lambda **_kwargs: np.full((2, 2, 3), 0.25, dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_extract_bracket_images_float",
+        lambda **_kwargs: (
+            np.full((2, 2, 3), 0.125, dtype=np.float32),
+            np.full((2, 2, 3), 0.25, dtype=np.float32),
+            np.full((2, 2, 3), 0.5, dtype=np.float32),
+        ),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_apply_white_balance_to_bracket_triplet",
+        lambda **_kwargs: white_balance_calls.append("called"),
+    )
+
+    def _fake_run_opencv_hdr_merge(**kwargs):
+        bracket_images_float = kwargs["bracket_images_float"]
+        captured_brackets.append(
+            (
+                np.array(bracket_images_float[0], copy=True),
+                np.array(bracket_images_float[1], copy=True),
+                np.array(bracket_images_float[2], copy=True),
+            )
+        )
+        return np.full((2, 2, 3), 0.5, dtype=np.float32)
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_run_opencv_hdr_merge",
+        _fake_run_opencv_hdr_merge,
+    )
+    monkeypatch.setattr(dng2jpg_module, "_encode_jpg", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_sync_output_file_timestamps_from_exif",
+        lambda **_kwargs: None,
+    )
+
+    exit_code = dng2jpg_module.run(
+        [
+            str(input_dng),
+            str(output_jpg),
+            "--ev=1",
+            "--hdr-merge=OpenCV",
+        ]
+    )
+
+    assert exit_code == 0
+    assert white_balance_calls == []
+    assert len(captured_brackets) == 1
+    np.testing.assert_allclose(captured_brackets[0][0], 0.125, rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(captured_brackets[0][1], 0.25, rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(captured_brackets[0][2], 0.5, rtol=0.0, atol=0.0)
 
 
 def test_run_prints_source_gamma_diagnostics(monkeypatch, tmp_path, capsys) -> None:

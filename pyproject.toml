@@ -28,9 +28,10 @@ dependencies = [
   "imageio",
   "pillow",
   "numpy",
-  "opencv-python-headless",
+  "opencv-contrib-python-headless",
   "piexif",
   "exifread",
+  "scikit-image",
 ]
 
 [dependency-groups]
