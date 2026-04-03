@@ -120,6 +120,8 @@ WHITE_BALANCE_MODE_GRAYWORLD = "GrayworldWB"
 WHITE_BALANCE_MODE_IA = "IA"
 WHITE_BALANCE_MODE_COLOR_CONSTANCY = "ColorConstancy"
 WHITE_BALANCE_MODE_TTL = "TTL"
+WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO = "ev-zero"
+WHITE_BALANCE_ANALYSIS_SOURCE_LINEAR_BASE = "linear-base"
 OPENCV_TONEMAP_MAP_DRAGO = "drago"
 OPENCV_TONEMAP_MAP_REINHARD = "reinhard"
 OPENCV_TONEMAP_MAP_MANTIUK = "mantiuk"
@@ -267,6 +269,10 @@ _WHITE_BALANCE_MODES = (
     WHITE_BALANCE_MODE_IA,
     WHITE_BALANCE_MODE_COLOR_CONSTANCY,
     WHITE_BALANCE_MODE_TTL,
+)
+_WHITE_BALANCE_ANALYSIS_SOURCES = (
+    WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO,
+    WHITE_BALANCE_ANALYSIS_SOURCE_LINEAR_BASE,
 )
 _OPENCV_MERGE_ALGORITHMS = (
     OPENCV_MERGE_ALGORITHM_DEBEVEC,
@@ -665,9 +671,10 @@ class PostprocessOptions:
     @param debug_enabled {bool} `True` when persistent debug TIFF checkpoints are enabled.
     @param merge_gamma_option {MergeGammaOption} Parsed merge-gamma request applied only by OpenCV and HDR+ backends.
     @param white_balance_mode {str|None} Optional white-balance mode applied to bracket triplet before HDR merge backend execution.
+    @param white_balance_analysis_source {str} White-balance analysis image selector in `{"ev-zero","linear-base"}`.
     @param opencv_tonemap_options {OpenCvTonemapOptions|None} Optional OpenCV-Tonemap backend selector and knob payload.
     @return {None} Immutable dataclass container.
-    @satisfies REQ-020, REQ-050, REQ-065, REQ-066, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-088, REQ-089, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-146, REQ-176, REQ-179, REQ-181, REQ-182, REQ-190, REQ-194, REQ-195, REQ-196
+    @satisfies REQ-020, REQ-050, REQ-065, REQ-066, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-088, REQ-089, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-146, REQ-176, REQ-179, REQ-181, REQ-182, REQ-190, REQ-194, REQ-195, REQ-196, REQ-199
     """
 
     post_gamma: float
@@ -690,6 +697,7 @@ class PostprocessOptions:
     debug_enabled: bool = False
     merge_gamma_option: MergeGammaOption = field(default_factory=MergeGammaOption)
     white_balance_mode: str | None = None
+    white_balance_analysis_source: str = WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO
     opencv_tonemap_options: OpenCvTonemapOptions | None = None
 
 
@@ -1136,6 +1144,16 @@ def print_help(version):
             + ", ".join(_WHITE_BALANCE_MODES)
             + ".",
             "Default: disabled (stage skipped when omitted).",
+        ),
+    )
+    _print_help_option(
+        "--white-balance-analysis-source <source>",
+        "Optional white-balance analysis payload selector used when white-balance stage is enabled.",
+        (
+            "Allowed values: "
+            + ", ".join(_WHITE_BALANCE_ANALYSIS_SOURCES)
+            + ".",
+            f"Default: `{WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO}`.",
         ),
     )
     _print_help_option(
@@ -3862,6 +3880,36 @@ def _parse_white_balance_mode_option(white_balance_raw):
     return None
 
 
+def _parse_white_balance_analysis_source_option(analysis_source_raw):
+    """@brief Parse white-balance analysis source selector option value.
+
+    @details Accepts case-insensitive white-balance analysis-source selector
+    names and normalizes them to canonical runtime selector names.
+    @param analysis_source_raw {str} Raw `--white-balance-analysis-source` selector token.
+    @return {str|None} Canonical analysis-source selector or `None` on parse failure.
+    @satisfies REQ-199
+    """
+
+    analysis_source_text = str(analysis_source_raw).strip()
+    if not analysis_source_text:
+        print_error("Invalid --white-balance-analysis-source value: empty value")
+        return None
+    mapping = {
+        WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO.lower(): WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO,
+        WHITE_BALANCE_ANALYSIS_SOURCE_LINEAR_BASE.lower(): WHITE_BALANCE_ANALYSIS_SOURCE_LINEAR_BASE,
+    }
+    resolved_source = mapping.get(analysis_source_text.lower())
+    if resolved_source is not None:
+        return resolved_source
+    print_error(
+        f"Invalid --white-balance-analysis-source value: {analysis_source_raw}"
+    )
+    print_error(
+        "Allowed values: " + ", ".join(_WHITE_BALANCE_ANALYSIS_SOURCES)
+    )
+    return None
+
+
 def _parse_hdr_merge_option(hdr_merge_raw):
     """@brief Parse HDR backend selector option value.
 
@@ -4475,6 +4523,7 @@ def _parse_run_options(args):
     post_gamma_auto_raw_values = {}
     debug_enabled = False
     white_balance_mode = None
+    white_balance_analysis_source = WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO
     hdr_merge_mode = HDR_MERGE_MODE_OPENCV_MERGE
     opencv_raw_values = {}
     opencv_tonemap_selector_options = []
@@ -4766,6 +4815,34 @@ def _parse_run_options(args):
             if parsed_white_balance_mode is None:
                 return None
             white_balance_mode = parsed_white_balance_mode
+            idx += 1
+            continue
+
+        if token == "--white-balance-analysis-source":
+            if idx + 1 >= len(args):
+                print_error("Missing value for --white-balance-analysis-source")
+                return None
+            if args[idx + 1].startswith("--"):
+                print_error("Missing value for --white-balance-analysis-source")
+                return None
+            parsed_white_balance_analysis_source = (
+                _parse_white_balance_analysis_source_option(args[idx + 1])
+            )
+            if parsed_white_balance_analysis_source is None:
+                return None
+            white_balance_analysis_source = parsed_white_balance_analysis_source
+            idx += 2
+            continue
+
+        if token.startswith("--white-balance-analysis-source="):
+            parsed_white_balance_analysis_source = (
+                _parse_white_balance_analysis_source_option(
+                    token.split("=", 1)[1]
+                )
+            )
+            if parsed_white_balance_analysis_source is None:
+                return None
+            white_balance_analysis_source = parsed_white_balance_analysis_source
             idx += 1
             continue
 
@@ -5380,6 +5457,7 @@ def _parse_run_options(args):
             debug_enabled=debug_enabled,
             merge_gamma_option=merge_gamma_option,
             white_balance_mode=white_balance_mode,
+            white_balance_analysis_source=white_balance_analysis_source,
             opencv_tonemap_options=opencv_tonemap_options,
         ),
         enable_luminance,
@@ -6029,6 +6107,31 @@ def _build_bracket_images_from_linear_base_float(np_module, base_rgb_float, mult
     return bracket_images_float
 
 
+def _build_white_balance_analysis_image_from_linear_base_float(
+    np_module,
+    base_rgb_float,
+    ev_zero,
+):
+    """@brief Build unclipped white-balance analysis image from linear base and EV center.
+
+    @details Converts the shared linear base tensor to RGB float without range
+    clipping and multiplies it by `2^ev_zero` to produce one unclipped analysis
+    payload independent from bracket clipping side effects.
+    @param np_module {ModuleType} Imported numpy module.
+    @param base_rgb_float {object} Shared linear base RGB tensor.
+    @param ev_zero {float} Resolved center EV.
+    @return {object} RGB float32 analysis image without stage-local clipping.
+    @satisfies REQ-183, REQ-200
+    """
+
+    normalized_base = _ensure_three_channel_float_array_no_range_adjust(
+        np_module=np_module,
+        image_data=base_rgb_float,
+    ).astype(np_module.float64, copy=False)
+    center_multiplier = float(2 ** float(ev_zero))
+    return (normalized_base * center_multiplier).astype(np_module.float32, copy=False)
+
+
 def _validate_white_balance_triplet_shape(np_module, bracket_images_float):
     """@brief Validate white-balance bracket triplet shape contract.
 
@@ -6057,44 +6160,63 @@ def _validate_white_balance_triplet_shape(np_module, bracket_images_float):
     return normalized_triplet
 
 
-def _build_xphoto_analysis_proxy_rgb_float(np_module, analysis_image_rgb_float):
-    """@brief Build compact EV0 float proxy for xphoto parameter evaluation.
+def _build_xphoto_analysis_image_rgb_float(np_module, analysis_image_rgb_float):
+    """@brief Build deterministic real-image xphoto analysis payload.
 
-    @details Computes deterministic per-channel percentile anchors from EV0
-    normalized RGB float payload, then packs a compact synthetic RGB strip used
-    only to evaluate xphoto white-balance parameter curves. This keeps canonical
-    bracket processing in normalized float space and avoids full-image
-    discretization for xphoto-based modes.
+    @details Converts one analysis image to RGB float, preserves values above
+    `1.0`, replaces non-finite values with `0`, removes negatives, and applies
+    deterministic pyramid downsampling (`::2`) until maximum side is `<=1024`.
+    This removes fixed proxy-size assumptions while keeping xphoto estimation
+    stable and bounded in memory.
     @param np_module {ModuleType} Imported numpy module.
-    @param analysis_image_rgb_float {object} EV0 RGB float tensor.
-    @return {object} Compact RGB float32 proxy tensor with shape `(1,N,3)`.
+    @param analysis_image_rgb_float {object} Analysis RGB float tensor.
+    @return {object} Downsampled RGB float32 analysis payload.
     @satisfies REQ-183, REQ-184, REQ-185, REQ-186
     """
 
-    analysis_rgb = _normalize_float_rgb_image(
+    analysis_rgb = _ensure_three_channel_float_array_no_range_adjust(
         np_module=np_module,
         image_data=analysis_image_rgb_float,
-    ).astype(np_module.float32, copy=False)
-    flat_rgb = analysis_rgb.reshape((-1, 3)).astype(np_module.float64, copy=False)
-    percentile_levels = (2.0, 10.0, 25.0, 50.0, 75.0, 90.0, 98.0)
-    percentile_samples = []
-    for percentile_level in percentile_levels:
-        percentile_samples.append(
-            np_module.percentile(flat_rgb, percentile_level, axis=0).astype(
-                np_module.float64, copy=False
-            )
-        )
-    channel_means = np_module.mean(flat_rgb, axis=0).astype(np_module.float64, copy=False)
-    neutral_mean = float(np_module.mean(channel_means))
-    neutral_sample = np_module.array(
-        [neutral_mean, neutral_mean, neutral_mean],
-        dtype=np_module.float64,
+    ).astype(np_module.float64, copy=False)
+    finite_mask = np_module.isfinite(analysis_rgb)
+    analysis_rgb = np_module.where(finite_mask, analysis_rgb, 0.0)
+    analysis_rgb = np_module.maximum(analysis_rgb, 0.0)
+    while max(analysis_rgb.shape[0], analysis_rgb.shape[1]) > 1024:
+        analysis_rgb = analysis_rgb[::2, ::2, :]
+    return analysis_rgb.astype(np_module.float32, copy=False)
+
+
+def _build_white_balance_robust_analysis_mask(np_module, analysis_rgb_float):
+    """@brief Build robust white-balance mask excluding near-black and near-saturated pixels.
+
+    @details Builds a deterministic per-pixel mask using finite and non-negative
+    RGB values, excludes near-black pixels (`max_channel<=1e-3`), excludes
+    near-saturated pixels (`max_channel>=0.995`), and applies fallback tiers to
+    guarantee at least one valid pixel for downstream statistics.
+    @param np_module {ModuleType} Imported numpy module.
+    @param analysis_rgb_float {object} Analysis RGB float tensor.
+    @return {object} Boolean mask with shape `(H,W)`.
+    @satisfies REQ-187, REQ-188
+    """
+
+    analysis_rgb = _ensure_three_channel_float_array_no_range_adjust(
+        np_module=np_module,
+        image_data=analysis_rgb_float,
+    ).astype(np_module.float64, copy=False)
+    finite_mask = np_module.all(np_module.isfinite(analysis_rgb), axis=2)
+    non_negative_mask = np_module.all(analysis_rgb >= 0.0, axis=2)
+    channel_max = np_module.max(analysis_rgb, axis=2)
+    robust_mask = (
+        finite_mask
+        & non_negative_mask
+        & (channel_max > 1e-3)
+        & (channel_max < 0.995)
     )
-    proxy_samples = np_module.vstack(percentile_samples + [channel_means, neutral_sample])
-    proxy_samples = np_module.clip(proxy_samples, 0.0, 1.0).astype(
-        np_module.float32, copy=False
-    )
-    return proxy_samples.reshape((1, proxy_samples.shape[0], 3))
+    if not bool(np_module.any(robust_mask)):
+        robust_mask = finite_mask & non_negative_mask & (channel_max > 1e-3)
+    if not bool(np_module.any(robust_mask)):
+        robust_mask = finite_mask & non_negative_mask
+    return robust_mask
 
 
 def _extract_white_balance_channel_gains_from_xphoto(
@@ -6105,42 +6227,50 @@ def _extract_white_balance_channel_gains_from_xphoto(
 ):
     """@brief Derive per-channel white-balance gains from one OpenCV xphoto algorithm.
 
-    @details Builds a compact EV0 float proxy strip for tangential xphoto
-    parameter probing, converts only that proxy to backend-local uint8 BGR,
-    executes xphoto `balanceWhite(...)`, converts balanced proxy back to RGB
-    float, and derives one gain vector from channel means `balanced/original`.
-    Gains are finite positive float64 values.
+    @details Builds one real-image analysis payload with deterministic pyramid
+    downsampling, performs one backend-local normalization to `[0,1]` for xphoto
+    quantization only, executes xphoto `balanceWhite(...)`, and derives one gain
+    vector from channel means `balanced/original`. Gains are finite positive
+    float64 values.
     @param cv2_module {ModuleType} Imported OpenCV module.
     @param np_module {ModuleType} Imported numpy module.
     @param wb_algorithm {object} OpenCV xphoto white-balance instance.
     @param analysis_image_rgb_float {object} EV0 RGB float tensor.
     @return {object} Channel gains vector with shape `(3,)`.
     @exception RuntimeError Raised when xphoto result shape is invalid.
-    @satisfies REQ-183, REQ-184, REQ-185, REQ-186
+    @satisfies REQ-183, REQ-184, REQ-185, REQ-186, REQ-201
     """
 
-    analysis_proxy_rgb = _build_xphoto_analysis_proxy_rgb_float(
+    analysis_payload_rgb = _build_xphoto_analysis_image_rgb_float(
         np_module=np_module,
         analysis_image_rgb_float=analysis_image_rgb_float,
     )
-    analysis_proxy_bgr_uint8 = cv2_module.cvtColor(
+    payload_scale = float(np_module.percentile(analysis_payload_rgb, 99.5))
+    if not math.isfinite(payload_scale) or payload_scale <= 1e-12:
+        payload_scale = 1.0
+    scaled_payload_rgb = np_module.clip(
+        analysis_payload_rgb.astype(np_module.float64, copy=False) / payload_scale,
+        0.0,
+        1.0,
+    ).astype(np_module.float32, copy=False)
+    analysis_payload_bgr_uint8 = cv2_module.cvtColor(
         _to_uint8_image_array(
             np_module=np_module,
-            image_data=analysis_proxy_rgb,
+            image_data=scaled_payload_rgb,
         ),
         cv2_module.COLOR_RGB2BGR,
     )
-    balanced_proxy_bgr_uint8 = wb_algorithm.balanceWhite(analysis_proxy_bgr_uint8)
-    source_proxy_rgb_float = _normalize_float_rgb_image(
+    balanced_payload_bgr_uint8 = wb_algorithm.balanceWhite(analysis_payload_bgr_uint8)
+    source_payload_rgb_float = _normalize_float_rgb_image(
         np_module=np_module,
-        image_data=cv2_module.cvtColor(analysis_proxy_bgr_uint8, cv2_module.COLOR_BGR2RGB),
+        image_data=cv2_module.cvtColor(analysis_payload_bgr_uint8, cv2_module.COLOR_BGR2RGB),
     ).astype(np_module.float64, copy=False)
-    balanced_proxy_rgb_float = _normalize_float_rgb_image(
+    balanced_payload_rgb_float = _normalize_float_rgb_image(
         np_module=np_module,
-        image_data=cv2_module.cvtColor(balanced_proxy_bgr_uint8, cv2_module.COLOR_BGR2RGB),
+        image_data=cv2_module.cvtColor(balanced_payload_bgr_uint8, cv2_module.COLOR_BGR2RGB),
     ).astype(np_module.float64, copy=False)
-    source_mean = np_module.mean(source_proxy_rgb_float, axis=(0, 1))
-    balanced_mean = np_module.mean(balanced_proxy_rgb_float, axis=(0, 1))
+    source_mean = np_module.mean(source_payload_rgb_float, axis=(0, 1))
+    balanced_mean = np_module.mean(balanced_payload_rgb_float, axis=(0, 1))
     source_mean = np_module.maximum(source_mean, 1e-12)
     gains = balanced_mean / source_mean
     gains = np_module.where(np_module.isfinite(gains), gains, 1.0)
@@ -6209,9 +6339,11 @@ def _estimate_color_constancy_white_balance_gains_rgb(
 ):
     """@brief Estimate EV0-derived white-balance gains using scikit-image color constancy.
 
-    @details Converts EV0 RGB float to one scalar luminance map via
-    `skimage.color.rgb2gray(...)`, computes channel means and luminance mean, and
-    derives one Von-Kries-like gain vector `luma_mean/channel_mean`.
+    @details Normalizes the analysis image to RGB float, builds one robust mask
+    excluding near-black and near-saturated pixels, converts masked RGB data to
+    one scalar luminance map via `skimage.color.rgb2gray(...)`, computes masked
+    channel and luminance means, and derives one Von-Kries-like gain vector
+    `luma_mean/channel_mean`.
     @param np_module {ModuleType} Imported numpy module.
     @param skimage_color_module {ModuleType} Imported scikit-image color module.
     @param analysis_image_rgb_float {object} EV0 RGB float tensor.
@@ -6219,13 +6351,18 @@ def _estimate_color_constancy_white_balance_gains_rgb(
     @satisfies REQ-183, REQ-187
     """
 
-    analysis_rgb = _normalize_float_rgb_image(
+    analysis_rgb = _ensure_three_channel_float_array_no_range_adjust(
         np_module=np_module,
         image_data=analysis_image_rgb_float,
     ).astype(np_module.float64, copy=False)
-    luminance = skimage_color_module.rgb2gray(analysis_rgb)
+    robust_mask = _build_white_balance_robust_analysis_mask(
+        np_module=np_module,
+        analysis_rgb_float=analysis_rgb,
+    )
+    masked_rgb = analysis_rgb[robust_mask]
+    luminance = skimage_color_module.rgb2gray(masked_rgb.reshape((-1, 1, 3)))
     luminance_mean = float(np_module.mean(luminance))
-    channel_means = np_module.mean(analysis_rgb, axis=(0, 1))
+    channel_means = np_module.mean(masked_rgb, axis=0)
     channel_means = np_module.maximum(channel_means, 1e-12)
     gains = luminance_mean / channel_means
     gains = np_module.where(np_module.isfinite(gains), gains, 1.0)
@@ -6236,20 +6373,27 @@ def _estimate_color_constancy_white_balance_gains_rgb(
 def _estimate_ttl_white_balance_gains_rgb(np_module, analysis_image_rgb_float):
     """@brief Estimate EV0-derived TTL white-balance gains using channel averages.
 
-    @details Computes EV0 channel means `(R,G,B)`, computes global gray average
-    as `(R+G+B)/3`, and derives channel gains as `gray/channel_mean` without
-    clipping for downstream float-domain application.
+    @details Normalizes the analysis image to RGB float, builds one robust mask
+    excluding near-black and near-saturated pixels, computes masked channel
+    means `(R,G,B)`, computes global gray average as `(R+G+B)/3`, and derives
+    channel gains as `gray/channel_mean` without clipping for downstream
+    float-domain application.
     @param np_module {ModuleType} Imported numpy module.
     @param analysis_image_rgb_float {object} EV0 RGB float tensor.
     @return {object} Channel gains vector with shape `(3,)`.
     @satisfies REQ-183, REQ-188
     """
 
-    analysis_rgb = _normalize_float_rgb_image(
+    analysis_rgb = _ensure_three_channel_float_array_no_range_adjust(
         np_module=np_module,
         image_data=analysis_image_rgb_float,
     ).astype(np_module.float64, copy=False)
-    channel_means = np_module.mean(analysis_rgb, axis=(0, 1))
+    robust_mask = _build_white_balance_robust_analysis_mask(
+        np_module=np_module,
+        analysis_rgb_float=analysis_rgb,
+    )
+    masked_rgb = analysis_rgb[robust_mask]
+    channel_means = np_module.mean(masked_rgb, axis=0)
     channel_means = np_module.maximum(channel_means, 1e-12)
     gray_mean = float(np_module.mean(channel_means))
     gains = gray_mean / channel_means
@@ -6290,20 +6434,23 @@ def _apply_channel_gains_to_white_balance_triplet(
 def _apply_white_balance_to_bracket_triplet(
     bracket_images_float,
     white_balance_mode,
+    white_balance_analysis_image_float,
     auto_adjust_dependencies,
 ):
-    """@brief Apply optional EV0-derived white-balance correction to bracket triplet.
+    """@brief Apply optional analysis-image-derived white-balance correction to bracket triplet.
 
     @details Keeps the stage disabled when `white_balance_mode` is `None`. When
-    enabled, analyzes EV0 only, derives one correction payload by selected mode,
-    and applies identical correction to all three brackets before HDR merge.
+    enabled, analyzes one configured analysis image, derives one correction
+    payload by selected mode, and applies identical correction to all three
+    brackets before HDR merge.
     @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors `(ev_minus, ev_zero, ev_plus)`.
     @param white_balance_mode {str|None} Optional canonical white-balance mode selector.
+    @param white_balance_analysis_image_float {object} Selected white-balance analysis RGB float tensor.
     @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
     @return {list[object]} Ordered bracket tensors after optional white-balance stage.
     @exception RuntimeError Raised when required dependencies are missing.
     @exception ValueError Raised when mode is unsupported or bracket contract is invalid.
-    @satisfies REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188
+    @satisfies REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188, REQ-200
     """
 
     if white_balance_mode is None:
@@ -6320,7 +6467,10 @@ def _apply_white_balance_to_bracket_triplet(
         np_module=np_module,
         bracket_images_float=bracket_images_float,
     )
-    _ev_minus_rgb, ev_zero_rgb, _ev_plus_rgb = normalized_triplet
+    analysis_rgb = _ensure_three_channel_float_array_no_range_adjust(
+        np_module=np_module,
+        image_data=white_balance_analysis_image_float,
+    ).astype(np_module.float32, copy=False)
     if white_balance_mode in (
         WHITE_BALANCE_MODE_SIMPLE,
         WHITE_BALANCE_MODE_GRAYWORLD,
@@ -6337,7 +6487,7 @@ def _apply_white_balance_to_bracket_triplet(
             cv2_module=cv2_module,
             np_module=np_module,
             white_balance_mode=white_balance_mode,
-            analysis_image_rgb_float=ev_zero_rgb,
+            analysis_image_rgb_float=analysis_rgb,
         )
     elif white_balance_mode == WHITE_BALANCE_MODE_COLOR_CONSTANCY:
         try:
@@ -6349,12 +6499,12 @@ def _apply_white_balance_to_bracket_triplet(
         channel_gains = _estimate_color_constancy_white_balance_gains_rgb(
             np_module=np_module,
             skimage_color_module=skimage_color_module,
-            analysis_image_rgb_float=ev_zero_rgb,
+            analysis_image_rgb_float=analysis_rgb,
         )
     elif white_balance_mode == WHITE_BALANCE_MODE_TTL:
         channel_gains = _estimate_ttl_white_balance_gains_rgb(
             np_module=np_module,
-            analysis_image_rgb_float=ev_zero_rgb,
+            analysis_image_rgb_float=analysis_rgb,
         )
     else:
         raise ValueError(f"Unsupported --white-balance mode: {white_balance_mode}")
@@ -12052,7 +12202,11 @@ def run(args):
     if postprocess_options.white_balance_mode is None:
         print_info("White-balance stage: disabled")
     else:
-        print_info(f"White-balance stage: mode={postprocess_options.white_balance_mode}")
+        print_info(
+            "White-balance stage: "
+            f"mode={postprocess_options.white_balance_mode}, "
+            f"analysis-source={postprocess_options.white_balance_analysis_source}"
+        )
     if postprocess_options.post_gamma_mode == "auto":
         print_info(
             "Post-gamma auto knobs: "
@@ -12324,9 +12478,35 @@ def run(args):
                     base_rgb_float=base_rgb_float,
                 )
                 if postprocess_options.white_balance_mode is not None:
+                    if (
+                        postprocess_options.white_balance_analysis_source
+                        == WHITE_BALANCE_ANALYSIS_SOURCE_LINEAR_BASE
+                    ):
+                        if base_rgb_float is None:
+                            raise RuntimeError(
+                                "White-balance linear-base analysis requires extracted linear base"
+                            )
+                        white_balance_analysis_image_float = (
+                            _build_white_balance_analysis_image_from_linear_base_float(
+                                np_module=numpy_module,
+                                base_rgb_float=base_rgb_float,
+                                ev_zero=resolved_ev_zero,
+                            )
+                        )
+                    elif (
+                        postprocess_options.white_balance_analysis_source
+                        == WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO
+                    ):
+                        white_balance_analysis_image_float = bracket_images_float[1]
+                    else:
+                        raise ValueError(
+                            "Unsupported --white-balance-analysis-source value: "
+                            f"{postprocess_options.white_balance_analysis_source}"
+                        )
                     bracket_images_float = _apply_white_balance_to_bracket_triplet(
                         bracket_images_float=bracket_images_float,
                         white_balance_mode=postprocess_options.white_balance_mode,
+                        white_balance_analysis_image_float=white_balance_analysis_image_float,
                         auto_adjust_dependencies=auto_adjust_dependencies,
                     )
                 if debug_context is not None:
