@@ -194,7 +194,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-136**: MUST implement CLAHE-luma directly on RGB float `[0,1]` by adjusting luminance only, reconstructing RGB with preserved chroma, and blending with the original image via configurable strength.
 - **REQ-137**: MUST keep auto-adjust CLAHE-luma functionally equivalent to the former auto-brightness CLAHE-luma stage except for differences attributable only to removed float-uint16 quantization.
 - **REQ-107**: MUST accept `--hdr-merge OpenCV` as HDR backend selector and execute OpenCV backend behavior when selected or by default.
-- **REQ-108**: MUST execute OpenCV backend from three in-memory RGB float brackets ordered as `ev_minus`, `ev_zero`, `ev_plus` using selectable algorithm `Debevec`, `Robertson`, or `Mertens`, defaulting to `Robertson`.
+- **REQ-108**: MUST execute OpenCV backend from three in-memory RGB float brackets ordered as `ev_minus`, `ev_zero`, `ev_plus` using selectable algorithm `Debevec`, `Robertson`, or `Mertens`, defaulting to `Robertson`, and MUST pass brackets without entry re-normalization or clipping.
 - **REQ-109**: MUST derive OpenCV Debevec/Robertson exposure times in seconds from source EXIF `ExposureTime`, preserve bracket order, and map the sequence to extracted `(ev_zero-ev_delta, ev_zero, ev_zero+ev_delta)`.
 - **REQ-110**: MUST preserve RGB float input/output interfaces for OpenCV merge and MUST keep the full OpenCV HDR path in RGB float `[0,1]` without backend-local `uint8` or `uint16` conversions.
 - **REQ-141**: MUST expose OpenCV controls `--opencv-merge-algorithm`, `--opencv-tonemap`, and `--opencv-tonemap-gamma`, defaulting to `Robertson`, `enable`, and `2.2`.

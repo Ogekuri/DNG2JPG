@@ -221,7 +221,7 @@
         - `_format_external_command_for_log(...)`: render the executed luminance argv as one deterministic shell-like runtime diagnostic string [`src/dng2jpg/dng2jpg.py`]
         - `_normalize_float_rgb_image(...)`: normalize luminance backend output to RGB float `[0,1]` [`src/dng2jpg/dng2jpg.py`]
       - `_run_opencv_hdr_merge(...)`: merge in-memory float brackets through selected OpenCV `Debevec`, `Robertson`, or `Mertens` path and return normalized RGB float output without source-gamma inputs [`src/dng2jpg/dng2jpg.py`]
-        - `_normalize_float_rgb_image(...)`: normalize merge-step bracket payloads to RGB float `[0,1]` [`src/dng2jpg/dng2jpg.py`]
+        - `float32 pass-through`: preserve incoming bracket payloads at OpenCV entry without re-normalization or clipping [`src/dng2jpg/dng2jpg.py`]
         - `_build_opencv_radiance_exposure_times(...)`: derive Debevec/Robertson exposure-time vector in seconds from EXIF `ExposureTime`, `ev_zero`, and bracket span [`src/dng2jpg/dng2jpg.py`]
         - `_run_opencv_merge_mertens(...)`: execute OpenCV exposure fusion path on normalized float brackets [`src/dng2jpg/dng2jpg.py`]
           - `cv2.createMergeMertens().process(...)`: run Mertens fusion on normalized RGB float bracket tensors (external boundary)

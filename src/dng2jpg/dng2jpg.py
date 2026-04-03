@@ -5519,13 +5519,14 @@ def _run_opencv_hdr_merge(
 ):
     """@brief Merge bracket float images into one RGB float image via OpenCV.
 
-    @details Accepts three normalized RGB float bracket tensors ordered as
-    `(ev_minus, ev_zero, ev_plus)`, derives OpenCV radiance exposure times in
+    @details Accepts three RGB float bracket tensors ordered as `(ev_minus,
+    ev_zero, ev_plus)`, forwards them to backend dispatch without entry
+    re-normalization or clipping, derives OpenCV radiance exposure times in
     seconds from EXIF `ExposureTime` for Debevec/Robertson or dispatches
     Mertens directly, and returns one congruent normalized RGB float image.
     Debevec and Robertson consume the shared linear HDR bracket contract
     directly with calibrated inverse response, while Mertens consumes the same
-    normalized float brackets and compensates OpenCV float-path scaling.
+    float brackets and compensates OpenCV float-path scaling.
     @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors.
     @param ev_value {float} EV bracket delta used to generate exposure files.
     @param ev_zero {float} Central EV used to generate exposure files.
@@ -5556,14 +5557,10 @@ def _run_opencv_hdr_merge(
             raise RuntimeError("Missing required dependencies: opencv-python and numpy")
         cv2_module, np_module = resolved_dependencies
 
-    exposures_float = []
-    for image_rgb_float in bracket_images_float:
-        exposures_float.append(
-            _normalize_float_rgb_image(
-                np_module=np_module,
-                image_data=image_rgb_float,
-            )
-        )
+    exposures_float = [
+        image_rgb_float.astype(np_module.float32, copy=False)
+        for image_rgb_float in bracket_images_float
+    ]
 
     if opencv_merge_options.merge_algorithm == OPENCV_MERGE_ALGORITHM_MERTENS:
         merged_rgb_float = _run_opencv_merge_mertens(
