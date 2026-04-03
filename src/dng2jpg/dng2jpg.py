@@ -110,7 +110,7 @@ DEFAULT_LUMINANCE_HDR_RESPONSE_CURVE = "linear"
 DEFAULT_LUMINANCE_TMO = "mantiuk08"
 DEFAULT_AUTO_ADJUST_ENABLED = True
 HDR_MERGE_MODE_LUMINANCE = "Luminace-HDR"
-HDR_MERGE_MODE_OPENCV = "OpenCV"
+HDR_MERGE_MODE_OPENCV_MERGE = "OpenCV-Merge"
 HDR_MERGE_MODE_HDR_PLUS = "HDR-Plus"
 WHITE_BALANCE_MODE_SIMPLE = "Simple"
 WHITE_BALANCE_MODE_GRAYWORLD = "GrayworldWB"
@@ -202,7 +202,7 @@ _OPENCV_KNOB_OPTIONS = (
 )
 _HDR_MERGE_MODES = (
     HDR_MERGE_MODE_LUMINANCE,
-    HDR_MERGE_MODE_OPENCV,
+    HDR_MERGE_MODE_OPENCV_MERGE,
     HDR_MERGE_MODE_HDR_PLUS,
 )
 _WHITE_BALANCE_MODES = (
@@ -670,7 +670,7 @@ class OpenCvMergeOptions:
     """@brief Hold deterministic OpenCV HDR merge option values.
 
     @details Encapsulates OpenCV merge controls used by the
-    `--hdr-merge=OpenCV` backend. Debevec and Robertson linearize the extracted
+    `--hdr-merge=OpenCV-Merge` backend. Debevec and Robertson linearize the extracted
     float brackets and execute `Merge* -> Tonemap` directly on float inputs,
     Mertens executes exposure fusion directly on float brackets with
     OpenCV-equivalent output rescaling, and all external interfaces stay RGB
@@ -955,17 +955,17 @@ def print_help(version):
             f"{DEFAULT_POST_GAMMA:g} / {DEFAULT_BRIGHTNESS:g} / {DEFAULT_MANTIUK08_CONTRAST:g} / {DEFAULT_SATURATION:g}",
         ),
         (
-            HDR_MERGE_MODE_OPENCV,
+            HDR_MERGE_MODE_OPENCV_MERGE,
             OPENCV_MERGE_ALGORITHM_DEBEVEC,
             f"{DEFAULT_OPENCV_POST_GAMMA:g} / {DEFAULT_OPENCV_BRIGHTNESS:g} / {DEFAULT_OPENCV_CONTRAST:g} / {DEFAULT_OPENCV_SATURATION:g}",
         ),
         (
-            HDR_MERGE_MODE_OPENCV,
+            HDR_MERGE_MODE_OPENCV_MERGE,
             OPENCV_MERGE_ALGORITHM_ROBERTSON,
             f"{DEFAULT_OPENCV_POST_GAMMA:g} / {DEFAULT_OPENCV_BRIGHTNESS:g} / {DEFAULT_OPENCV_CONTRAST:g} / {DEFAULT_OPENCV_SATURATION:g}",
         ),
         (
-            HDR_MERGE_MODE_OPENCV,
+            HDR_MERGE_MODE_OPENCV_MERGE,
             OPENCV_MERGE_ALGORITHM_MERTENS,
             f"{DEFAULT_OPENCV_POST_GAMMA:g} / {DEFAULT_OPENCV_BRIGHTNESS:g} / {DEFAULT_OPENCV_CONTRAST:g} / {DEFAULT_OPENCV_SATURATION:g}",
         ),
@@ -1050,12 +1050,12 @@ def print_help(version):
         ),
     )
     _print_help_option(
-        "--hdr-merge <Luminace-HDR|OpenCV|HDR-Plus>",
-        f"Select HDR merge backend. Default: `{HDR_MERGE_MODE_OPENCV}`.",
+        f"--hdr-merge <{HDR_MERGE_MODE_LUMINANCE}|{HDR_MERGE_MODE_OPENCV_MERGE}|{HDR_MERGE_MODE_HDR_PLUS}>",
+        f"Select HDR merge backend. Default: `{HDR_MERGE_MODE_OPENCV_MERGE}`.",
     )
     _print_help_option(
         "--gamma=<auto|a,b>",
-        "HDR merge-output transfer selector for `OpenCV` and `HDR-Plus` final backend-local output stage.",
+        f"HDR merge-output transfer selector for `{HDR_MERGE_MODE_OPENCV_MERGE}` and `{HDR_MERGE_MODE_HDR_PLUS}` final backend-local output stage.",
         (
             "Default: `auto`.",
             "Use `--gamma=auto` to resolve source transfer from RAW/DNG EXIF evidence.",
@@ -1064,7 +1064,7 @@ def print_help(version):
     )
     _print_help_option(
         "--opencv-merge-algorithm=<name>",
-        "OpenCV merge algorithm. Effective only when `--hdr-merge OpenCV`.",
+        f"OpenCV merge algorithm. Effective only when `--hdr-merge {HDR_MERGE_MODE_OPENCV_MERGE}`.",
         (
             f"Allowed values: {', '.join(_OPENCV_MERGE_ALGORITHMS)}.",
             f"Default: `{DEFAULT_OPENCV_MERGE_ALGORITHM}`.",
@@ -1630,7 +1630,7 @@ def _parse_opencv_merge_algorithm_option(algorithm_raw):
     return None
 
 
-def _parse_opencv_options(opencv_raw_values):
+def _parse_opencv_merge_backend_options(opencv_raw_values):
     """@brief Parse and validate OpenCV HDR merge knob values.
 
     @details Applies OpenCV defaults for algorithm selector, tone-map toggle,
@@ -3315,7 +3315,7 @@ def _parse_hdr_merge_option(hdr_merge_raw):
     normalized = hdr_merge_text.lower()
     mapping = {
         HDR_MERGE_MODE_LUMINANCE.lower(): HDR_MERGE_MODE_LUMINANCE,
-        HDR_MERGE_MODE_OPENCV.lower(): HDR_MERGE_MODE_OPENCV,
+        HDR_MERGE_MODE_OPENCV_MERGE.lower(): HDR_MERGE_MODE_OPENCV_MERGE,
         HDR_MERGE_MODE_HDR_PLUS.lower(): HDR_MERGE_MODE_HDR_PLUS,
     }
     resolved = mapping.get(normalized)
@@ -3323,7 +3323,7 @@ def _parse_hdr_merge_option(hdr_merge_raw):
         return resolved
     print_error(f"Invalid --hdr-merge value: {hdr_merge_raw}")
     print_error(
-        f"Allowed values: {HDR_MERGE_MODE_LUMINANCE}, {HDR_MERGE_MODE_OPENCV}, {HDR_MERGE_MODE_HDR_PLUS}"
+        f"Allowed values: {HDR_MERGE_MODE_LUMINANCE}, {HDR_MERGE_MODE_OPENCV_MERGE}, {HDR_MERGE_MODE_HDR_PLUS}"
     )
     return None
 
@@ -3346,7 +3346,7 @@ def _resolve_default_postprocess(
     @satisfies DES-006, DES-008, REQ-145
     """
 
-    if hdr_merge_mode == HDR_MERGE_MODE_OPENCV:
+    if hdr_merge_mode == HDR_MERGE_MODE_OPENCV_MERGE:
         opencv_defaults = {
             OPENCV_MERGE_ALGORITHM_DEBEVEC: (
                 DEFAULT_OPENCV_POST_GAMMA,
@@ -3833,7 +3833,7 @@ def _parse_run_options(args):
     optional auto-brightness stage and
     `--ab-*` knobs, optional auto-levels stage and `--al-*` knobs,
     optional shared auto-adjust knobs, optional backend selector
-    (`--hdr-merge=<Luminace-HDR|OpenCV|HDR-Plus>` default `OpenCV`),
+    (`--hdr-merge=<Luminace-HDR|OpenCV-Merge|HDR-Plus>` default `OpenCV-Merge`),
     OpenCV backend controls, HDR+ backend controls, and luminance backend controls
     including explicit `--tmo*` passthrough options and optional
     auto-adjust enable selector (`--auto-adjust <enable|disable>`), plus
@@ -3871,7 +3871,7 @@ def _parse_run_options(args):
     post_gamma_auto_raw_values = {}
     debug_enabled = False
     white_balance_mode = None
-    hdr_merge_mode = HDR_MERGE_MODE_OPENCV
+    hdr_merge_mode = HDR_MERGE_MODE_OPENCV_MERGE
     opencv_raw_values = {}
     merge_gamma_option = MergeGammaOption(mode="auto")
     hdrplus_raw_values = {}
@@ -4647,14 +4647,14 @@ def _parse_run_options(args):
         invalid_knob = next(iter(hdrplus_raw_values))
         print_error(f"HDR+ knob {invalid_knob} requires --hdr-merge {HDR_MERGE_MODE_HDR_PLUS}")
         return None
-    if hdr_merge_mode != HDR_MERGE_MODE_OPENCV and opencv_raw_values:
+    if hdr_merge_mode != HDR_MERGE_MODE_OPENCV_MERGE and opencv_raw_values:
         invalid_knob = next(iter(opencv_raw_values))
         print_error(
-            f"OpenCV knob {invalid_knob} requires --hdr-merge {HDR_MERGE_MODE_OPENCV}"
+            f"OpenCV knob {invalid_knob} requires --hdr-merge {HDR_MERGE_MODE_OPENCV_MERGE}"
         )
         return None
 
-    opencv_merge_options = _parse_opencv_options(opencv_raw_values)
+    opencv_merge_options = _parse_opencv_merge_backend_options(opencv_raw_values)
     if opencv_merge_options is None:
         return None
     (
@@ -4699,7 +4699,7 @@ def _parse_run_options(args):
         return None
 
     enable_luminance = hdr_merge_mode == HDR_MERGE_MODE_LUMINANCE
-    enable_opencv = hdr_merge_mode == HDR_MERGE_MODE_OPENCV
+    enable_opencv = hdr_merge_mode == HDR_MERGE_MODE_OPENCV_MERGE
     enable_hdr_plus = hdr_merge_mode == HDR_MERGE_MODE_HDR_PLUS
 
     return (
@@ -6072,7 +6072,7 @@ def _normalize_debevec_hdr_to_unit_range(np_module, hdr_rgb_float32, white_point
     )
 
 
-def _run_opencv_hdr_merge(
+def _run_opencv_merge_backend(
     bracket_images_float,
     ev_value,
     ev_zero,
@@ -11312,7 +11312,7 @@ def run(args):
         )
     elif enable_opencv:
         print_info(
-            "HDR backend: OpenCV "
+            f"HDR backend: {HDR_MERGE_MODE_OPENCV_MERGE} "
             f"(algorithm={opencv_merge_options.merge_algorithm}, "
             f"tonemap={'enabled' if opencv_merge_options.tonemap_enabled else 'disabled'}, "
             f"tonemapGamma={opencv_merge_options.tonemap_gamma:g})"
@@ -11529,7 +11529,7 @@ def run(args):
                     luminance_options=luminance_options,
                 )
             elif enable_opencv:
-                merged_image_float = _run_opencv_hdr_merge(
+                merged_image_float = _run_opencv_merge_backend(
                     bracket_images_float=bracket_images_float,
                     ev_value=effective_ev_value,
                     ev_zero=resolved_ev_zero,

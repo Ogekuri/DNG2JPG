@@ -269,7 +269,7 @@ class _FakeXphotoModule:
 
 
 class _FakeOpenCvModule:
-    """Minimal cv2 shim for deterministic `_run_opencv_hdr_merge` tests."""
+    """Minimal cv2 shim for deterministic `_run_opencv_merge_backend` tests."""
 
     IMREAD_UNCHANGED = -1
     COLOR_BGR2RGB = 1
@@ -939,7 +939,7 @@ def test_parse_run_options_accepts_remaining_auto_brightness_controls() -> None:
             "--ab-max-auto-boost=1.1",
             "--ab-enable-luminance-preserving-desat=false",
             "--ab-eps=1e-5",
-            "--hdr-merge=OpenCV",
+            "--hdr-merge=OpenCV-Merge",
         ]
     )
 
@@ -970,7 +970,7 @@ def test_parse_run_options_accepts_auto_adjust_clahe_controls() -> None:
             "--aa-local-contrast-strength=0.35",
             "--aa-clahe-clip-limit=1.7",
             "--aa-clahe-tile-grid-size=6x10",
-            "--hdr-merge=OpenCV",
+            "--hdr-merge=OpenCV-Merge",
         ]
     )
 
@@ -1286,10 +1286,10 @@ def test_apply_clahe_luma_rgb_float_matches_uint16_reference_within_quantization
 
 
 def test_parse_run_options_accepts_hdr_merge_opencv_backend() -> None:
-    """Parser must accept `--hdr-merge=OpenCV` as backend selector."""
+    """Parser must accept `--hdr-merge=OpenCV-Merge` as backend selector."""
 
     parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--ev=1", "--hdr-merge=OpenCV"]
+        ["input.dng", "output.jpg", "--ev=1", "--hdr-merge=OpenCV-Merge"]
     )
     assert parsed is not None
     _input_path = parsed[0]
@@ -1334,7 +1334,7 @@ def test_resolve_default_postprocess_opencv_uses_updated_static_defaults() -> No
 
     for algorithm in dng2jpg_module._OPENCV_MERGE_ALGORITHMS:  # pylint: disable=protected-access
         defaults = dng2jpg_module._resolve_default_postprocess(  # pylint: disable=protected-access
-            dng2jpg_module.HDR_MERGE_MODE_OPENCV,
+            dng2jpg_module.HDR_MERGE_MODE_OPENCV_MERGE,
             dng2jpg_module.DEFAULT_LUMINANCE_TMO,
             opencv_merge_algorithm=algorithm,
         )
@@ -1375,15 +1375,15 @@ def test_print_help_orders_sections_by_pipeline_step(capsys) -> None:
         "--al-clip-pct=<value>"
     )
     assert output.index("--white-balance <mode>") < output.index(
-        "--hdr-merge <Luminace-HDR|OpenCV|HDR-Plus>"
+        "--hdr-merge <Luminace-HDR|OpenCV-Merge|HDR-Plus>"
     )
-    assert output.index("--hdr-merge <Luminace-HDR|OpenCV|HDR-Plus>") < output.index(
+    assert output.index("--hdr-merge <Luminace-HDR|OpenCV-Merge|HDR-Plus>") < output.index(
         "--opencv-merge-algorithm=<name>"
     )
-    assert output.index("--hdr-merge <Luminace-HDR|OpenCV|HDR-Plus>") < output.index(
+    assert output.index("--hdr-merge <Luminace-HDR|OpenCV-Merge|HDR-Plus>") < output.index(
         "--hdrplus-proxy-mode=<name>"
     )
-    assert output.index("--hdr-merge <Luminace-HDR|OpenCV|HDR-Plus>") < output.index(
+    assert output.index("--hdr-merge <Luminace-HDR|OpenCV-Merge|HDR-Plus>") < output.index(
         "--luminance-hdr-model=<name>"
     )
 
@@ -1405,7 +1405,7 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
         "--auto-ev-highlight-clipping=<0..100>",
         "--auto-ev-step=<value>",
         "--white-balance <mode>",
-        "--hdr-merge <Luminace-HDR|OpenCV|HDR-Plus>",
+        "--hdr-merge <Luminace-HDR|OpenCV-Merge|HDR-Plus>",
         "--opencv-merge-algorithm=<name>",
         "--opencv-tonemap=<bool>",
         "--opencv-tonemap-gamma=<value>",
@@ -1467,10 +1467,10 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
     assert "Allowed values: Debevec, Robertson, Mertens." in output
     assert "Allowed values: rggb, bt709, mean." in output
     assert "Allowed values: Simple, GrayworldWB, IA, ColorConstancy, TTL." in output
-    assert "Effective only when `--hdr-merge OpenCV`." in output
+    assert "Effective only when `--hdr-merge OpenCV-Merge`." in output
     assert "Effective only when `--hdr-merge HDR-Plus`." in output
     assert "Effective only when `--hdr-merge Luminace-HDR`." in output
-    assert "Default: `OpenCV`." in output
+    assert "Default: `OpenCV-Merge`." in output
     assert output.count("Default:\n                                    `20`.") >= 2
     assert "Default: `Robertson`." in output
     assert "Default: `enable`." in output
@@ -1649,7 +1649,7 @@ def test_parse_run_options_enables_debug_flag() -> None:
             "input.dng",
             "output.jpg",
             "--ev=1",
-            "--hdr-merge=OpenCV",
+            "--hdr-merge=OpenCV-Merge",
             "--debug",
         ]
     )
@@ -1921,7 +1921,7 @@ def test_measure_any_channel_clipping_percentages() -> None:
 
 
 
-def test_run_opencv_hdr_merge_keeps_mertens_inputs_as_float32() -> None:
+def test_run_opencv_merge_backend_keeps_mertens_inputs_as_float32() -> None:
     """OpenCV merge must feed Mertens with backend-local float32 images."""
 
     fake_cv2 = _FakeOpenCvModule()
@@ -1933,7 +1933,7 @@ def test_run_opencv_hdr_merge_keeps_mertens_inputs_as_float32() -> None:
         / 65535.0,
     ]
 
-    output = dng2jpg_module._run_opencv_hdr_merge(  # pylint: disable=protected-access
+    output = dng2jpg_module._run_opencv_merge_backend(  # pylint: disable=protected-access
         bracket_images_float=bracket_images_float,
         ev_value=1.0,
         ev_zero=0.0,
@@ -1983,7 +1983,7 @@ def test_parse_run_options_accepts_opencv_controls_and_defaults() -> None:
     """Parser must expose OpenCV algorithm and tone-map controls with defaults."""
 
     parsed_default = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--ev=1", "--hdr-merge=OpenCV"]
+        ["input.dng", "output.jpg", "--ev=1", "--hdr-merge=OpenCV-Merge"]
     )
     assert parsed_default is not None
     default_options = parsed_default[8]
@@ -1998,7 +1998,7 @@ def test_parse_run_options_accepts_opencv_controls_and_defaults() -> None:
             "input.dng",
             "output.jpg",
             "--ev=1",
-            "--hdr-merge=OpenCV",
+            "--hdr-merge=OpenCV-Merge",
             "--opencv-merge-algorithm=Debevec",
             "--opencv-tonemap=off",
             "--opencv-tonemap-gamma=2.2",
@@ -2021,7 +2021,7 @@ def test_parse_run_options_rejects_invalid_opencv_controls() -> None:
             "input.dng",
             "output.jpg",
             "--ev=1",
-            "--hdr-merge=OpenCV",
+            "--hdr-merge=OpenCV-Merge",
             "--opencv-merge-algorithm=unknown",
         ]
     )
@@ -2032,7 +2032,7 @@ def test_parse_run_options_rejects_invalid_opencv_controls() -> None:
             "input.dng",
             "output.jpg",
             "--ev=1",
-            "--hdr-merge=OpenCV",
+            "--hdr-merge=OpenCV-Merge",
             "--opencv-tonemap=maybe",
         ]
     )
@@ -2091,7 +2091,7 @@ def test_parse_run_options_rejects_post_gamma_auto_knobs_without_auto() -> None:
     assert parsed is None
 
 
-def test_run_opencv_hdr_merge_dispatches_debevec_uint8_radiance_path_with_tonemap() -> None:
+def test_run_opencv_merge_backend_dispatches_debevec_uint8_radiance_path_with_tonemap() -> None:
     """OpenCV Debevec radiance path must quantize locally and return float output."""
 
     fake_cv2 = _FakeOpenCvModule()
@@ -2101,7 +2101,7 @@ def test_run_opencv_hdr_merge_dispatches_debevec_uint8_radiance_path_with_tonema
         np.full((1, 2, 3), 0.875, dtype=np.float32),
     ]
 
-    output = dng2jpg_module._run_opencv_hdr_merge(  # pylint: disable=protected-access
+    output = dng2jpg_module._run_opencv_merge_backend(  # pylint: disable=protected-access
         bracket_images_float=bracket_images_float,
         ev_value=1.0,
         ev_zero=1.5,
@@ -2144,7 +2144,7 @@ def test_run_opencv_hdr_merge_dispatches_debevec_uint8_radiance_path_with_tonema
     assert float(np.max(output)) <= 1.0
 
 
-def test_run_opencv_hdr_merge_dispatches_robertson_uint8_radiance_path() -> None:
+def test_run_opencv_merge_backend_dispatches_robertson_uint8_radiance_path() -> None:
     """OpenCV Robertson radiance path must quantize locally and return float output."""
 
     fake_cv2 = _FakeOpenCvModule()
@@ -2154,7 +2154,7 @@ def test_run_opencv_hdr_merge_dispatches_robertson_uint8_radiance_path() -> None
         np.full((1, 1, 3), 0.8, dtype=np.float32),
     ]
 
-    output = dng2jpg_module._run_opencv_hdr_merge(  # pylint: disable=protected-access
+    output = dng2jpg_module._run_opencv_merge_backend(  # pylint: disable=protected-access
         bracket_images_float=bracket_images_float,
         ev_value=0.5,
         ev_zero=-0.5,
@@ -2197,7 +2197,7 @@ def test_run_opencv_hdr_merge_dispatches_robertson_uint8_radiance_path() -> None
     assert float(np.max(output)) <= 1.0
 
 
-def test_run_opencv_hdr_merge_skips_tonemap_for_mertens() -> None:
+def test_run_opencv_merge_backend_skips_tonemap_for_mertens() -> None:
     """Mertens path must not instantiate the OpenCV tonemap stage."""
 
     fake_cv2 = _FakeOpenCvModule()
@@ -2207,7 +2207,7 @@ def test_run_opencv_hdr_merge_skips_tonemap_for_mertens() -> None:
         np.full((1, 1, 3), 0.6, dtype=np.float32),
     ]
 
-    _ = dng2jpg_module._run_opencv_hdr_merge(  # pylint: disable=protected-access
+    _ = dng2jpg_module._run_opencv_merge_backend(  # pylint: disable=protected-access
         bracket_images_float=bracket_images_float,
         ev_value=1.0,
         ev_zero=0.0,
@@ -2789,7 +2789,7 @@ def test_run_opencv_merge_mertens_applies_float_path_brightness_rescaling() -> N
     )
 
 
-def test_run_opencv_hdr_merge_applies_resolved_merge_gamma_last() -> None:
+def test_run_opencv_merge_backend_applies_resolved_merge_gamma_last() -> None:
     """OpenCV merge must apply resolved merge gamma after backend normalization."""
 
     fake_cv2 = _FakeOpenCvModule()
@@ -2799,7 +2799,7 @@ def test_run_opencv_hdr_merge_applies_resolved_merge_gamma_last() -> None:
         np.full((1, 1, 3), 0.6, dtype=np.float32),
     ]
 
-    output = dng2jpg_module._run_opencv_hdr_merge(  # pylint: disable=protected-access
+    output = dng2jpg_module._run_opencv_merge_backend(  # pylint: disable=protected-access
         bracket_images_float=bracket_images_float,
         ev_value=1.0,
         ev_zero=0.0,
@@ -2855,7 +2855,7 @@ def test_parse_run_options_accepts_extended_auto_levels_knobs() -> None:
             "--al-highlight-reconstruction-method",
             "Inpaint Opposed",
             "--al-gain-threshold=1.25",
-            "--hdr-merge=OpenCV",
+            "--hdr-merge=OpenCV-Merge",
         ]
     )
     assert parsed is not None
@@ -2881,7 +2881,7 @@ def test_parse_run_options_method_does_not_enable_highlight_reconstruction() -> 
             "--ev=1",
             "--auto-levels=enable",
             "--al-highlight-reconstruction-method=Color Propagation",
-            "--hdr-merge=OpenCV",
+            "--hdr-merge=OpenCV-Merge",
         ]
     )
     assert parsed is not None
@@ -3738,7 +3738,7 @@ def test_run_debug_writes_extraction_and_merge_checkpoints(monkeypatch, tmp_path
             str(input_dng),
             str(output_jpg),
             "--ev=1",
-            "--hdr-merge=OpenCV",
+            "--hdr-merge=OpenCV-Merge",
             "--debug",
         ]
     )
@@ -3831,7 +3831,7 @@ def test_run_auto_ev_prints_joint_candidate_diagnostics(monkeypatch, tmp_path, c
             str(input_dng),
             str(output_jpg),
             "--auto-ev=enable",
-            "--hdr-merge=OpenCV",
+            "--hdr-merge=OpenCV-Merge",
         ]
     )
 
@@ -3931,7 +3931,7 @@ def test_run_static_ev_uses_manual_center_and_reports_static_mode(
             str(output_jpg),
             "--ev=1",
             "--ev-zero=0.5",
-            "--hdr-merge=OpenCV",
+            "--hdr-merge=OpenCV-Merge",
         ]
     )
 
@@ -4024,7 +4024,7 @@ def test_run_skips_white_balance_when_mode_not_specified(monkeypatch, tmp_path) 
         lambda **_kwargs: white_balance_calls.append("called"),
     )
 
-    def _fake_run_opencv_hdr_merge(**kwargs):
+    def _fake_run_opencv_merge_backend(**kwargs):
         bracket_images_float = kwargs["bracket_images_float"]
         captured_brackets.append(
             (
@@ -4037,8 +4037,8 @@ def test_run_skips_white_balance_when_mode_not_specified(monkeypatch, tmp_path) 
 
     monkeypatch.setattr(
         dng2jpg_module,
-        "_run_opencv_hdr_merge",
-        _fake_run_opencv_hdr_merge,
+        "_run_opencv_merge_backend",
+        _fake_run_opencv_merge_backend,
     )
     monkeypatch.setattr(dng2jpg_module, "_encode_jpg", lambda **_kwargs: None)
     monkeypatch.setattr(
@@ -4052,7 +4052,7 @@ def test_run_skips_white_balance_when_mode_not_specified(monkeypatch, tmp_path) 
             str(input_dng),
             str(output_jpg),
             "--ev=1",
-            "--hdr-merge=OpenCV",
+            "--hdr-merge=OpenCV-Merge",
         ]
     )
 
@@ -4139,7 +4139,7 @@ def test_run_prints_source_gamma_diagnostics(monkeypatch, tmp_path, capsys) -> N
             str(input_dng),
             str(output_jpg),
             "--ev=1",
-            "--hdr-merge=OpenCV",
+            "--hdr-merge=OpenCV-Merge",
         ]
     )
 
@@ -4224,7 +4224,7 @@ def test_run_prints_merge_gamma_diagnostics(monkeypatch, tmp_path, capsys) -> No
     )
     monkeypatch.setattr(
         dng2jpg_module,
-        "_run_opencv_hdr_merge",
+        "_run_opencv_merge_backend",
         lambda **_kwargs: np.full((2, 2, 3), 0.5, dtype=np.float32),
     )
     monkeypatch.setattr(dng2jpg_module, "_encode_jpg", lambda **_kwargs: None)
@@ -4235,7 +4235,7 @@ def test_run_prints_merge_gamma_diagnostics(monkeypatch, tmp_path, capsys) -> No
     )
 
     exit_code = dng2jpg_module.run(
-        [str(input_dng), str(output_jpg), "--ev=1", "--hdr-merge=OpenCV"]
+        [str(input_dng), str(output_jpg), "--ev=1", "--hdr-merge=OpenCV-Merge"]
     )
 
     assert exit_code == 0
@@ -4249,7 +4249,7 @@ def test_run_prints_merge_gamma_diagnostics(monkeypatch, tmp_path, capsys) -> No
         "evidence=exif-colorspace=1"
         in output
     )
-def test_run_opencv_hdr_merge_requires_exif_exposure_time_for_radiance_modes() -> None:
+def test_run_opencv_merge_backend_requires_exif_exposure_time_for_radiance_modes() -> None:
     """OpenCV radiance modes must reject missing EXIF exposure time."""
 
     fake_cv2 = _FakeOpenCvModule()
@@ -4260,7 +4260,7 @@ def test_run_opencv_hdr_merge_requires_exif_exposure_time_for_radiance_modes() -
     ]
 
     with np.testing.assert_raises(ValueError):
-        dng2jpg_module._run_opencv_hdr_merge(  # pylint: disable=protected-access
+        dng2jpg_module._run_opencv_merge_backend(  # pylint: disable=protected-access
             bracket_images_float=bracket_images_float,
             ev_value=1.0,
             ev_zero=0.0,

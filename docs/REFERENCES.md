@@ -222,7 +222,7 @@ import numpy as np_module  # type: ignore
 - var `DEFAULT_LUMINANCE_TMO = "mantiuk08"` (L110)
 - var `DEFAULT_AUTO_ADJUST_ENABLED = True` (L111)
 - var `HDR_MERGE_MODE_LUMINANCE = "Luminace-HDR"` (L112)
-- var `HDR_MERGE_MODE_OPENCV = "OpenCV"` (L113)
+- var `HDR_MERGE_MODE_OPENCV_MERGE = "OpenCV-Merge"` (L113)
 - var `HDR_MERGE_MODE_HDR_PLUS = "HDR-Plus"` (L114)
 - var `WHITE_BALANCE_MODE_SIMPLE = "Simple"` (L115)
 - var `WHITE_BALANCE_MODE_GRAYWORLD = "GrayworldWB"` (L116)
@@ -393,7 +393,7 @@ import numpy as np_module  # type: ignore
 
 ### class `class OpenCvMergeOptions` `@dataclass(frozen=True)` (L669-689)
 - @brief Hold deterministic OpenCV HDR merge option values.
-- @details Encapsulates OpenCV merge controls used by the `--hdr-merge=OpenCV` backend. Debevec and Robertson linearize the extracted float brackets and execute `Merge* -> Tonemap` directly on float inputs, Mertens executes exposure fusion directly on float brackets with OpenCV-equivalent output rescaling, and all external interfaces stay RGB float `[0,1]`.
+- @details Encapsulates OpenCV merge controls used by the `--hdr-merge=OpenCV-Merge` backend. Debevec and Robertson linearize the extracted float brackets and execute `Merge* -> Tonemap` directly on float inputs, Mertens executes exposure fusion directly on float brackets with OpenCV-equivalent output rescaling, and all external interfaces stay RGB float `[0,1]`.
 - @param merge_algorithm {str} Canonical OpenCV merge algorithm in `{"Debevec","Robertson","Mertens"}`.
 - @param tonemap_enabled {bool} `True` enables simple OpenCV gamma tone mapping for Debevec/Robertson outputs.
 - @param tonemap_gamma {float} Positive gamma value passed to `cv2.createTonemap`; `2.2` matches standard display brightness.
@@ -607,7 +607,7 @@ quantization or histogram-derived contraction.
 - @return {str|None} Canonical OpenCV merge algorithm token or `None` on parse failure.
 - @satisfies REQ-108, REQ-141
 
-### fn `def _parse_opencv_options(opencv_raw_values)` `priv` (L1633-1679)
+### fn `def _parse_opencv_merge_backend_options(opencv_raw_values)` `priv` (L1633-1679)
 - @brief Parse and validate OpenCV HDR merge knob values.
 - @details Applies OpenCV defaults for algorithm selector, tone-map toggle, and tone-map gamma, validates allowed values, and returns one immutable backend option container for downstream merge dispatch.
 - @param opencv_raw_values {dict[str, str]} Raw `--opencv-*` option values keyed by long option name.
@@ -1065,7 +1065,7 @@ explicit curve-segment parameters, and evidence token.
 
 ### fn `def _parse_run_options(args)` `priv` (L3821-4020)
 - @brief Parse CLI args into input, output, and EV parameters.
-- @details Supports positional file arguments, static exposure selectors (`--ev=<value>`/`--ev <value>` plus optional `--ev-zero=<value>`), automatic exposure selector (`--auto-ev[=<enable|disable>]`) with explicit mutual exclusion against `--ev`, optional automatic exposure clipping and step controls, optional white-balance selector (`--white-balance=<mode>`) applied to bracket triplet before backend merge when enabled, optional postprocess controls including `--post-gamma=<value|auto>` and optional `--post-gamma-auto-*` knobs, optional auto-brightness stage and `--ab-*` knobs, optional auto-levels stage and `--al-*` knobs, optional shared auto-adjust knobs, optional backend selector (`--hdr-merge=<Luminace-HDR|OpenCV|HDR-Plus>` default `OpenCV`), OpenCV backend controls, HDR+ backend controls, and luminance backend controls including explicit `--tmo*` passthrough options and optional auto-adjust enable selector (`--auto-adjust <enable|disable>`), plus optional `--debug` persistent checkpoint emission; parses `--gamma=<auto|linear_coeff,exponent>` merge-output transfer selector defaulting to `auto` when omitted, rejects unknown options, and rejects invalid arity.
+- @details Supports positional file arguments, static exposure selectors (`--ev=<value>`/`--ev <value>` plus optional `--ev-zero=<value>`), automatic exposure selector (`--auto-ev[=<enable|disable>]`) with explicit mutual exclusion against `--ev`, optional automatic exposure clipping and step controls, optional white-balance selector (`--white-balance=<mode>`) applied to bracket triplet before backend merge when enabled, optional postprocess controls including `--post-gamma=<value|auto>` and optional `--post-gamma-auto-*` knobs, optional auto-brightness stage and `--ab-*` knobs, optional auto-levels stage and `--al-*` knobs, optional shared auto-adjust knobs, optional backend selector (`--hdr-merge=<Luminace-HDR|OpenCV-Merge|HDR-Plus>` default `OpenCV-Merge`), OpenCV backend controls, HDR+ backend controls, and luminance backend controls including explicit `--tmo*` passthrough options and optional auto-adjust enable selector (`--auto-adjust <enable|disable>`), plus optional `--debug` persistent checkpoint emission; parses `--gamma=<auto|linear_coeff,exponent>` merge-output transfer selector defaulting to `auto` when omitted, rejects unknown options, and rejects invalid arity.
 - @param args {list[str]} Raw command argument vector.
 - @return {tuple[Path, Path, float|None, bool, PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, bool, AutoEvOptions]|None} Parsed `(input, output, ev, auto_ev, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, ev_zero_specified, auto_ev_options)` tuple; `None` on parse failure.
 - @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-020, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146, REQ-176, REQ-179, REQ-180, REQ-181, REQ-183
@@ -1417,7 +1417,7 @@ Side effects: none.
 - @satisfies REQ-108, REQ-109, REQ-110, REQ-143, REQ-144, REQ-152, REQ-153, REQ-162
 - @satisfies REQ-144
 
-### fn `def _run_opencv_hdr_merge(` `priv` (L6075-6082)
+### fn `def _run_opencv_merge_backend(` `priv` (L6075-6082)
 
 ### fn `def _hdrplus_box_down2_float32(np_module, frames_float32)` `priv` (L6167-6195)
 - @brief Merge bracket float images into one RGB float image via OpenCV.
@@ -2645,7 +2645,7 @@ RGB float output without any file round-trip.
 |`DEFAULT_LUMINANCE_TMO`|var|pub|110||
 |`DEFAULT_AUTO_ADJUST_ENABLED`|var|pub|111||
 |`HDR_MERGE_MODE_LUMINANCE`|var|pub|112||
-|`HDR_MERGE_MODE_OPENCV`|var|pub|113||
+|`HDR_MERGE_MODE_OPENCV_MERGE`|var|pub|113||
 |`HDR_MERGE_MODE_HDR_PLUS`|var|pub|114||
 |`WHITE_BALANCE_MODE_SIMPLE`|var|pub|115||
 |`WHITE_BALANCE_MODE_GRAYWORLD`|var|pub|116||
@@ -2718,7 +2718,7 @@ RGB float output without any file round-trip.
 |`_parse_auto_levels_option`|fn|priv|1567-1586|def _parse_auto_levels_option(auto_levels_raw)|
 |`_parse_explicit_boolean_option`|fn|priv|1587-1607|def _parse_explicit_boolean_option(option_name, option_raw)|
 |`_parse_opencv_merge_algorithm_option`|fn|priv|1608-1632|def _parse_opencv_merge_algorithm_option(algorithm_raw)|
-|`_parse_opencv_options`|fn|priv|1633-1679|def _parse_opencv_options(opencv_raw_values)|
+|`_parse_opencv_merge_backend_options`|fn|priv|1633-1679|def _parse_opencv_merge_backend_options(opencv_raw_values)|
 |`_extract_normalized_preview_luminance_stats`|fn|priv|1680-1739|def _extract_normalized_preview_luminance_stats(raw_handle)|
 |`_percentile`|fn|priv|1714-1724|def _percentile(percentile_value)|
 |`_extract_base_rgb_linear_float`|fn|priv|1740-1768|def _extract_base_rgb_linear_float(raw_handle, np_module)|
@@ -2809,7 +2809,7 @@ RGB float output without any file round-trip.
 |`_estimate_opencv_camera_response`|fn|priv|5951-5955|def _estimate_opencv_camera_response(|
 |`_run_opencv_merge_radiance`|fn|priv|5984-5991|def _run_opencv_merge_radiance(|
 |`_normalize_debevec_hdr_to_unit_range`|fn|priv|6055-6074|def _normalize_debevec_hdr_to_unit_range(np_module, hdr_r...|
-|`_run_opencv_hdr_merge`|fn|priv|6075-6082|def _run_opencv_hdr_merge(|
+|`_run_opencv_merge_backend`|fn|priv|6075-6082|def _run_opencv_merge_backend(|
 |`_hdrplus_box_down2_float32`|fn|priv|6167-6195|def _hdrplus_box_down2_float32(np_module, frames_float32)|
 |`_hdrplus_gauss_down4_float32`|fn|priv|6196-6242|def _hdrplus_gauss_down4_float32(np_module, frames_float32)|
 |`_hdrplus_build_scalar_proxy_float32`|fn|priv|6243-6276|def _hdrplus_build_scalar_proxy_float32(np_module, frames...|
