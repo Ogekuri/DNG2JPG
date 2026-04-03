@@ -120,17 +120,40 @@ WHITE_BALANCE_MODE_TTL = "TTL"
 OPENCV_MERGE_ALGORITHM_DEBEVEC = "Debevec"
 OPENCV_MERGE_ALGORITHM_ROBERTSON = "Robertson"
 OPENCV_MERGE_ALGORITHM_MERTENS = "Mertens"
-DEFAULT_REINHARD02_BRIGHTNESS = 1.25
-DEFAULT_REINHARD02_CONTRAST = 0.85
-DEFAULT_REINHARD02_SATURATION = 0.55
-DEFAULT_MANTIUK08_CONTRAST = 1.2
-DEFAULT_OPENCV_POST_GAMMA = 1.0
-DEFAULT_OPENCV_BRIGHTNESS = 1.0
-DEFAULT_OPENCV_CONTRAST = 1.0
-DEFAULT_OPENCV_SATURATION = 1.0
+DEFAULT_REINHARD02_POST_GAMMA = 0.9
+DEFAULT_REINHARD02_BRIGHTNESS = 1.3
+DEFAULT_REINHARD02_CONTRAST = 0.75
+DEFAULT_REINHARD02_SATURATION = 0.7
+DEFAULT_MANTIUK08_POST_GAMMA = 0.8
+DEFAULT_MANTIUK08_BRIGHTNESS = 0.8
+DEFAULT_MANTIUK08_CONTRAST = 1.1
+DEFAULT_MANTIUK08_SATURATION = 1.05
+DEFAULT_HDRPLUS_POST_GAMMA = 0.8
+DEFAULT_HDRPLUS_BRIGHTNESS = 0.9
+DEFAULT_HDRPLUS_CONTRAST = 1.0
+DEFAULT_HDRPLUS_SATURATION = 1.0
+DEFAULT_OPENCV_DEBEVEC_POST_GAMMA = 1.0
+DEFAULT_OPENCV_DEBEVEC_BRIGHTNESS = 1.0
+DEFAULT_OPENCV_DEBEVEC_CONTRAST = 1.5
+DEFAULT_OPENCV_DEBEVEC_SATURATION = 1.05
+DEFAULT_OPENCV_DEBEVEC_TONEMAP_GAMMA = 1.0
+DEFAULT_OPENCV_ROBERTSON_POST_GAMMA = 1.0
+DEFAULT_OPENCV_ROBERTSON_BRIGHTNESS = 1.0
+DEFAULT_OPENCV_ROBERTSON_CONTRAST = 1.4
+DEFAULT_OPENCV_ROBERTSON_SATURATION = 1.05
+DEFAULT_OPENCV_ROBERTSON_TONEMAP_GAMMA = 0.9
+DEFAULT_OPENCV_MERTENS_POST_GAMMA = 1.0
+DEFAULT_OPENCV_MERTENS_BRIGHTNESS = 0.9
+DEFAULT_OPENCV_MERTENS_CONTRAST = 1.3
+DEFAULT_OPENCV_MERTENS_SATURATION = 1.1
+DEFAULT_OPENCV_MERTENS_TONEMAP_GAMMA = 0.8
+DEFAULT_OPENCV_POST_GAMMA = DEFAULT_OPENCV_ROBERTSON_POST_GAMMA
+DEFAULT_OPENCV_BRIGHTNESS = DEFAULT_OPENCV_ROBERTSON_BRIGHTNESS
+DEFAULT_OPENCV_CONTRAST = DEFAULT_OPENCV_ROBERTSON_CONTRAST
+DEFAULT_OPENCV_SATURATION = DEFAULT_OPENCV_ROBERTSON_SATURATION
 DEFAULT_OPENCV_MERGE_ALGORITHM = OPENCV_MERGE_ALGORITHM_ROBERTSON
 DEFAULT_OPENCV_TONEMAP_ENABLED = True
-DEFAULT_OPENCV_TONEMAP_GAMMA = 2.2
+DEFAULT_OPENCV_TONEMAP_GAMMA = DEFAULT_OPENCV_ROBERTSON_TONEMAP_GAMMA
 DEFAULT_HDRPLUS_PROXY_MODE = "rggb"
 DEFAULT_HDRPLUS_SEARCH_RADIUS = 4
 DEFAULT_HDRPLUS_TEMPORAL_FACTOR = 8.0
@@ -677,7 +700,7 @@ class OpenCvMergeOptions:
     external interfaces stay RGB float `[0,1]`.
     @param merge_algorithm {str} Canonical OpenCV merge algorithm in `{"Debevec","Robertson","Mertens"}`.
     @param tonemap_enabled {bool} `True` enables simple OpenCV gamma tone mapping for Debevec/Robertson/Mertens outputs.
-    @param tonemap_gamma {float} Positive gamma value passed to `cv2.createTonemap`; `2.2` matches standard display brightness.
+    @param tonemap_gamma {float} Positive gamma value passed to `cv2.createTonemap`; parser defaults are algorithm-specific (`Debevec=1.0`, `Robertson=0.9`, `Mertens=0.8`).
     @return {None} Immutable dataclass container.
     @satisfies REQ-108, REQ-109, REQ-110, REQ-141, REQ-142, REQ-143, REQ-144, REQ-152, REQ-153, REQ-154
     """
@@ -947,32 +970,32 @@ def print_help(version):
         (
             HDR_MERGE_MODE_LUMINANCE,
             "reinhard02",
-            f"{DEFAULT_POST_GAMMA:g} / {DEFAULT_REINHARD02_BRIGHTNESS:g} / {DEFAULT_REINHARD02_CONTRAST:g} / {DEFAULT_REINHARD02_SATURATION:g}",
+            f"{DEFAULT_REINHARD02_POST_GAMMA:g} / {DEFAULT_REINHARD02_BRIGHTNESS:g} / {DEFAULT_REINHARD02_CONTRAST:g} / {DEFAULT_REINHARD02_SATURATION:g}",
         ),
         (
             HDR_MERGE_MODE_LUMINANCE,
             "mantiuk08",
-            f"{DEFAULT_POST_GAMMA:g} / {DEFAULT_BRIGHTNESS:g} / {DEFAULT_MANTIUK08_CONTRAST:g} / {DEFAULT_SATURATION:g}",
+            f"{DEFAULT_MANTIUK08_POST_GAMMA:g} / {DEFAULT_MANTIUK08_BRIGHTNESS:g} / {DEFAULT_MANTIUK08_CONTRAST:g} / {DEFAULT_MANTIUK08_SATURATION:g}",
         ),
         (
             HDR_MERGE_MODE_OPENCV_MERGE,
             OPENCV_MERGE_ALGORITHM_DEBEVEC,
-            f"{DEFAULT_OPENCV_POST_GAMMA:g} / {DEFAULT_OPENCV_BRIGHTNESS:g} / {DEFAULT_OPENCV_CONTRAST:g} / {DEFAULT_OPENCV_SATURATION:g}",
+            f"{DEFAULT_OPENCV_DEBEVEC_POST_GAMMA:g} / {DEFAULT_OPENCV_DEBEVEC_BRIGHTNESS:g} / {DEFAULT_OPENCV_DEBEVEC_CONTRAST:g} / {DEFAULT_OPENCV_DEBEVEC_SATURATION:g}",
         ),
         (
             HDR_MERGE_MODE_OPENCV_MERGE,
             OPENCV_MERGE_ALGORITHM_ROBERTSON,
-            f"{DEFAULT_OPENCV_POST_GAMMA:g} / {DEFAULT_OPENCV_BRIGHTNESS:g} / {DEFAULT_OPENCV_CONTRAST:g} / {DEFAULT_OPENCV_SATURATION:g}",
+            f"{DEFAULT_OPENCV_ROBERTSON_POST_GAMMA:g} / {DEFAULT_OPENCV_ROBERTSON_BRIGHTNESS:g} / {DEFAULT_OPENCV_ROBERTSON_CONTRAST:g} / {DEFAULT_OPENCV_ROBERTSON_SATURATION:g}",
         ),
         (
             HDR_MERGE_MODE_OPENCV_MERGE,
             OPENCV_MERGE_ALGORITHM_MERTENS,
-            f"{DEFAULT_OPENCV_POST_GAMMA:g} / {DEFAULT_OPENCV_BRIGHTNESS:g} / {DEFAULT_OPENCV_CONTRAST:g} / {DEFAULT_OPENCV_SATURATION:g}",
+            f"{DEFAULT_OPENCV_MERTENS_POST_GAMMA:g} / {DEFAULT_OPENCV_MERTENS_BRIGHTNESS:g} / {DEFAULT_OPENCV_MERTENS_CONTRAST:g} / {DEFAULT_OPENCV_MERTENS_SATURATION:g}",
         ),
         (
             HDR_MERGE_MODE_HDR_PLUS,
             "generic",
-            f"{DEFAULT_POST_GAMMA:g} / {DEFAULT_BRIGHTNESS:g} / {DEFAULT_CONTRAST:g} / {DEFAULT_SATURATION:g}",
+            f"{DEFAULT_HDRPLUS_POST_GAMMA:g} / {DEFAULT_HDRPLUS_BRIGHTNESS:g} / {DEFAULT_HDRPLUS_CONTRAST:g} / {DEFAULT_HDRPLUS_SATURATION:g}",
         ),
     )
 
@@ -1077,7 +1100,12 @@ def print_help(version):
     )
     _print_help_option(
         "--opencv-tonemap-gamma=<value>",
-        f"Positive gamma used by OpenCV simple tone mapping. Effective only when OpenCV tone mapping is enabled. Default: `{DEFAULT_OPENCV_TONEMAP_GAMMA:g}`.",
+        "Positive gamma used by OpenCV simple tone mapping. Effective only when OpenCV tone mapping is enabled.",
+        (
+            f"Default by algorithm: `{OPENCV_MERGE_ALGORITHM_DEBEVEC}={DEFAULT_OPENCV_DEBEVEC_TONEMAP_GAMMA:g}`, "
+            f"`{OPENCV_MERGE_ALGORITHM_ROBERTSON}={DEFAULT_OPENCV_ROBERTSON_TONEMAP_GAMMA:g}`, "
+            f"`{OPENCV_MERGE_ALGORITHM_MERTENS}={DEFAULT_OPENCV_MERTENS_TONEMAP_GAMMA:g}`.",
+        ),
     )
     _print_help_option(
         "--hdrplus-proxy-mode=<name>",
@@ -1627,6 +1655,28 @@ def _parse_opencv_merge_algorithm_option(algorithm_raw):
     return None
 
 
+def _resolve_default_opencv_tonemap_gamma(merge_algorithm):
+    """@brief Resolve OpenCV tone-map gamma default from merge algorithm.
+
+    @details Maps `Debevec`, `Robertson`, and `Mertens` to deterministic
+    default gamma values used when `--opencv-tonemap-gamma` is omitted.
+    Unknown values fall back to the repository default merge algorithm profile.
+    @param merge_algorithm {str} Resolved OpenCV merge algorithm selector.
+    @return {float} Default OpenCV tone-map gamma for the selected algorithm.
+    @satisfies REQ-141, REQ-143
+    """
+
+    defaults = {
+        OPENCV_MERGE_ALGORITHM_DEBEVEC: DEFAULT_OPENCV_DEBEVEC_TONEMAP_GAMMA,
+        OPENCV_MERGE_ALGORITHM_ROBERTSON: DEFAULT_OPENCV_ROBERTSON_TONEMAP_GAMMA,
+        OPENCV_MERGE_ALGORITHM_MERTENS: DEFAULT_OPENCV_MERTENS_TONEMAP_GAMMA,
+    }
+    return defaults.get(
+        merge_algorithm,
+        defaults[DEFAULT_OPENCV_MERGE_ALGORITHM],
+    )
+
+
 def _parse_opencv_merge_backend_options(opencv_raw_values):
     """@brief Parse and validate OpenCV HDR merge knob values.
 
@@ -1642,6 +1692,7 @@ def _parse_opencv_merge_backend_options(opencv_raw_values):
     merge_algorithm = options.merge_algorithm
     tonemap_enabled = options.tonemap_enabled
     tonemap_gamma = options.tonemap_gamma
+    tonemap_gamma_set = False
 
     if "--opencv-merge-algorithm" in opencv_raw_values:
         parsed = _parse_opencv_merge_algorithm_option(
@@ -1666,6 +1717,10 @@ def _parse_opencv_merge_backend_options(opencv_raw_values):
         if parsed is None:
             return None
         tonemap_gamma = parsed
+        tonemap_gamma_set = True
+
+    if not tonemap_gamma_set:
+        tonemap_gamma = _resolve_default_opencv_tonemap_gamma(merge_algorithm)
 
     return OpenCvMergeOptions(
         merge_algorithm=merge_algorithm,
@@ -3334,8 +3389,9 @@ def _resolve_default_postprocess(
 
     @details Selects backend-specific defaults. Uses algorithm-specific OpenCV
     defaults keyed by resolved `Debevec|Robertson|Mertens`, luminance-operator-
-    specific defaults for `Luminace-HDR`, and neutral defaults for `HDR-Plus`
-    and untuned luminance operators. Complexity: O(1). Side effects: none.
+    specific defaults for `Luminace-HDR` (`mantiuk08`, `reinhard02`),
+    configured defaults for `HDR-Plus`, and generic fallback defaults for
+    untuned luminance operators. Complexity: O(1). Side effects: none.
     @param hdr_merge_mode {str} Canonical HDR merge mode selector.
     @param luminance_tmo {str} Selected luminance tone-mapping operator.
     @param opencv_merge_algorithm {str} Resolved OpenCV merge algorithm selector.
@@ -3346,27 +3402,35 @@ def _resolve_default_postprocess(
     if hdr_merge_mode == HDR_MERGE_MODE_OPENCV_MERGE:
         opencv_defaults = {
             OPENCV_MERGE_ALGORITHM_DEBEVEC: (
-                DEFAULT_OPENCV_POST_GAMMA,
-                DEFAULT_OPENCV_BRIGHTNESS,
-                DEFAULT_OPENCV_CONTRAST,
-                DEFAULT_OPENCV_SATURATION,
+                DEFAULT_OPENCV_DEBEVEC_POST_GAMMA,
+                DEFAULT_OPENCV_DEBEVEC_BRIGHTNESS,
+                DEFAULT_OPENCV_DEBEVEC_CONTRAST,
+                DEFAULT_OPENCV_DEBEVEC_SATURATION,
             ),
             OPENCV_MERGE_ALGORITHM_ROBERTSON: (
-                DEFAULT_OPENCV_POST_GAMMA,
-                DEFAULT_OPENCV_BRIGHTNESS,
-                DEFAULT_OPENCV_CONTRAST,
-                DEFAULT_OPENCV_SATURATION,
+                DEFAULT_OPENCV_ROBERTSON_POST_GAMMA,
+                DEFAULT_OPENCV_ROBERTSON_BRIGHTNESS,
+                DEFAULT_OPENCV_ROBERTSON_CONTRAST,
+                DEFAULT_OPENCV_ROBERTSON_SATURATION,
             ),
             OPENCV_MERGE_ALGORITHM_MERTENS: (
-                DEFAULT_OPENCV_POST_GAMMA,
-                DEFAULT_OPENCV_BRIGHTNESS,
-                DEFAULT_OPENCV_CONTRAST,
-                DEFAULT_OPENCV_SATURATION,
+                DEFAULT_OPENCV_MERTENS_POST_GAMMA,
+                DEFAULT_OPENCV_MERTENS_BRIGHTNESS,
+                DEFAULT_OPENCV_MERTENS_CONTRAST,
+                DEFAULT_OPENCV_MERTENS_SATURATION,
             ),
         }
         return opencv_defaults.get(
             opencv_merge_algorithm,
             opencv_defaults[DEFAULT_OPENCV_MERGE_ALGORITHM],
+        )
+
+    if hdr_merge_mode == HDR_MERGE_MODE_HDR_PLUS:
+        return (
+            DEFAULT_HDRPLUS_POST_GAMMA,
+            DEFAULT_HDRPLUS_BRIGHTNESS,
+            DEFAULT_HDRPLUS_CONTRAST,
+            DEFAULT_HDRPLUS_SATURATION,
         )
 
     if hdr_merge_mode != HDR_MERGE_MODE_LUMINANCE:
@@ -3379,17 +3443,17 @@ def _resolve_default_postprocess(
 
     if luminance_tmo == "reinhard02":
         return (
-            DEFAULT_POST_GAMMA,
+            DEFAULT_REINHARD02_POST_GAMMA,
             DEFAULT_REINHARD02_BRIGHTNESS,
             DEFAULT_REINHARD02_CONTRAST,
             DEFAULT_REINHARD02_SATURATION,
         )
     if luminance_tmo == "mantiuk08":
         return (
-            DEFAULT_POST_GAMMA,
-            DEFAULT_BRIGHTNESS,
+            DEFAULT_MANTIUK08_POST_GAMMA,
+            DEFAULT_MANTIUK08_BRIGHTNESS,
             DEFAULT_MANTIUK08_CONTRAST,
-            DEFAULT_SATURATION,
+            DEFAULT_MANTIUK08_SATURATION,
         )
 
     return (

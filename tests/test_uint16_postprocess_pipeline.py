@@ -1376,7 +1376,7 @@ def test_parse_run_options_accepts_hdr_merge_opencv_backend() -> None:
         == dng2jpg_module.DEFAULT_OPENCV_MERGE_ALGORITHM
     )
     assert opencv_merge_options.tonemap_enabled is True
-    assert opencv_merge_options.tonemap_gamma == 2.2
+    assert opencv_merge_options.tonemap_gamma == 0.9
 
 
 def test_parse_run_options_defaults_hdr_merge_to_opencv() -> None:
@@ -1394,13 +1394,43 @@ def test_parse_run_options_defaults_hdr_merge_to_opencv() -> None:
 def test_resolve_default_postprocess_opencv_uses_updated_static_defaults() -> None:
     """OpenCV backend defaults must resolve to the updated static factors."""
 
-    for algorithm in dng2jpg_module._OPENCV_MERGE_ALGORITHMS:  # pylint: disable=protected-access
+    expected_defaults = {
+        dng2jpg_module.OPENCV_MERGE_ALGORITHM_DEBEVEC: (1.0, 1.0, 1.5, 1.05),
+        dng2jpg_module.OPENCV_MERGE_ALGORITHM_ROBERTSON: (1.0, 1.0, 1.4, 1.05),
+        dng2jpg_module.OPENCV_MERGE_ALGORITHM_MERTENS: (1.0, 0.9, 1.3, 1.1),
+    }
+    for algorithm, expected in expected_defaults.items():
         defaults = dng2jpg_module._resolve_default_postprocess(  # pylint: disable=protected-access
             dng2jpg_module.HDR_MERGE_MODE_OPENCV_MERGE,
             dng2jpg_module.DEFAULT_LUMINANCE_TMO,
             opencv_merge_algorithm=algorithm,
         )
-        assert defaults == (1.0, 1.0, 1.0, 1.0)
+        assert defaults == expected
+
+
+def test_resolve_default_postprocess_hdrplus_uses_updated_static_defaults() -> None:
+    """HDR+ backend defaults must resolve to the updated static factors."""
+
+    defaults = dng2jpg_module._resolve_default_postprocess(  # pylint: disable=protected-access
+        dng2jpg_module.HDR_MERGE_MODE_HDR_PLUS,
+        dng2jpg_module.DEFAULT_LUMINANCE_TMO,
+    )
+    assert defaults == (0.8, 0.9, 1.0, 1.0)
+
+
+def test_resolve_default_postprocess_luminance_uses_updated_tmo_defaults() -> None:
+    """Luminance backend defaults must resolve the updated TMO-specific factors."""
+
+    mantiuk_defaults = dng2jpg_module._resolve_default_postprocess(  # pylint: disable=protected-access
+        dng2jpg_module.HDR_MERGE_MODE_LUMINANCE,
+        "mantiuk08",
+    )
+    reinhard_defaults = dng2jpg_module._resolve_default_postprocess(  # pylint: disable=protected-access
+        dng2jpg_module.HDR_MERGE_MODE_LUMINANCE,
+        "reinhard02",
+    )
+    assert mantiuk_defaults == (0.8, 0.8, 1.1, 1.05)
+    assert reinhard_defaults == (0.9, 1.3, 0.75, 0.7)
 
 
 def test_print_help_orders_sections_by_pipeline_step(capsys) -> None:
@@ -1536,6 +1566,7 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
     assert output.count("Default:\n                                    `20`.") >= 2
     assert "Default: `Robertson`." in output
     assert "Default: `enable`." in output
+    assert "Default by algorithm: `Debevec=1`, `Robertson=0.9`, `Mertens=0.8`." in output
     assert "Static postprocess defaults when omitted:" in output
 
 
@@ -2052,7 +2083,7 @@ def test_parse_run_options_accepts_opencv_controls_and_defaults() -> None:
     assert default_options == dng2jpg_module.OpenCvMergeOptions(
         merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_ROBERTSON,
         tonemap_enabled=True,
-        tonemap_gamma=2.2,
+        tonemap_gamma=0.9,
     )
 
     parsed_override = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
@@ -2171,6 +2202,7 @@ def test_run_opencv_merge_backend_dispatches_debevec_uint8_radiance_path_with_to
         opencv_merge_options=dng2jpg_module.OpenCvMergeOptions(
             merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_DEBEVEC,
             tonemap_enabled=True,
+            tonemap_gamma=1.0,
         ),
         auto_adjust_dependencies=(fake_cv2, np),
     )
@@ -2200,7 +2232,7 @@ def test_run_opencv_merge_backend_dispatches_debevec_uint8_radiance_path_with_to
         fake_cv2.merge_debevec.last_inputs[1],
         np.full((1, 2, 3), 128, dtype=np.uint8),
     )
-    assert fake_cv2.last_tonemap.gamma == 2.2
+    assert fake_cv2.last_tonemap.gamma == 1.0
     assert output.dtype == np.float32
     assert float(np.min(output)) >= 0.0
     assert float(np.max(output)) <= 1.0
@@ -2277,13 +2309,13 @@ def test_run_opencv_merge_backend_applies_tonemap_for_mertens_when_enabled() -> 
         opencv_merge_options=dng2jpg_module.OpenCvMergeOptions(
             merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_MERTENS,
             tonemap_enabled=True,
-            tonemap_gamma=2.2,
+            tonemap_gamma=0.8,
         ),
         auto_adjust_dependencies=(fake_cv2, np),
     )
 
     assert fake_cv2.last_tonemap is not None
-    assert fake_cv2.last_tonemap.gamma == 2.2
+    assert fake_cv2.last_tonemap.gamma == 0.8
     assert fake_cv2.merge_mertens.last_inputs is not None
     assert fake_cv2.merge_debevec.last_inputs is None
     assert fake_cv2.merge_robertson.last_inputs is None
