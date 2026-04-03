@@ -670,13 +670,13 @@ class OpenCvMergeOptions:
     """@brief Hold deterministic OpenCV HDR merge option values.
 
     @details Encapsulates OpenCV merge controls used by the
-    `--hdr-merge=OpenCV-Merge` backend. Debevec and Robertson linearize the extracted
-    float brackets and execute `Merge* -> Tonemap` directly on float inputs,
-    Mertens executes exposure fusion directly on float brackets with
-    OpenCV-equivalent output rescaling, and all external interfaces stay RGB
-    float `[0,1]`.
+    `--hdr-merge=OpenCV-Merge` backend. Debevec and Robertson linearize the
+    extracted float brackets and execute `Merge* -> Tonemap` on backend-local
+    radiance payloads, Mertens executes exposure fusion on float brackets with
+    OpenCV-equivalent output rescaling plus optional simple tonemap, and all
+    external interfaces stay RGB float `[0,1]`.
     @param merge_algorithm {str} Canonical OpenCV merge algorithm in `{"Debevec","Robertson","Mertens"}`.
-    @param tonemap_enabled {bool} `True` enables simple OpenCV gamma tone mapping for Debevec/Robertson outputs.
+    @param tonemap_enabled {bool} `True` enables simple OpenCV gamma tone mapping for Debevec/Robertson/Mertens outputs.
     @param tonemap_gamma {float} Positive gamma value passed to `cv2.createTonemap`; `2.2` matches standard display brightness.
     @return {None} Immutable dataclass container.
     @satisfies REQ-108, REQ-109, REQ-110, REQ-141, REQ-142, REQ-143, REQ-144, REQ-152, REQ-153, REQ-154
@@ -1072,11 +1072,8 @@ def print_help(version):
     )
     _print_help_option(
         "--opencv-tonemap=<bool>",
-        f"Enable simple OpenCV gamma tone mapping for `{OPENCV_MERGE_ALGORITHM_DEBEVEC}` and `{OPENCV_MERGE_ALGORITHM_ROBERTSON}` outputs.",
-        (
-            f"Default: `{'true' if DEFAULT_OPENCV_TONEMAP_ENABLED else 'false'}`.",
-            f"Ignored by `{OPENCV_MERGE_ALGORITHM_MERTENS}`.",
-        ),
+        "Enable simple OpenCV gamma tone mapping for OpenCV merge outputs.",
+        (f"Default: `{'true' if DEFAULT_OPENCV_TONEMAP_ENABLED else 'false'}`.",),
     )
     _print_help_option(
         "--opencv-tonemap-gamma=<value>",
@@ -5969,23 +5966,35 @@ def _normalize_opencv_hdr_to_unit_range(np_module, hdr_rgb_float32):
     return normalized.astype(np_module.float32)
 
 
-def _run_opencv_merge_mertens(cv2_module, np_module, exposures_float):
+def _run_opencv_merge_mertens(
+    cv2_module,
+    np_module,
+    exposures_float,
+    tonemap_enabled,
+    tonemap_gamma,
+):
     """@brief Execute OpenCV Mertens exposure fusion path.
 
     @details Runs `cv2.createMergeMertens().process(...)` on RGB float
     brackets that already share one identical merge-gamma transfer curve,
     rescales the float result by `255` to match OpenCV exposure-fusion
-    brightness semantics observed on `uint8` inputs, and then normalizes the
+    brightness semantics observed on `uint8` inputs, optionally applies OpenCV
+    simple gamma tonemap with user-configured gamma, and then normalizes the
     result to the repository RGB float contract.
     @param cv2_module {ModuleType} Imported OpenCV module.
     @param np_module {ModuleType} Imported numpy module.
     @param exposures_float {list[object]} Ordered RGB float bracket tensors preconditioned with one identical merge-gamma transfer.
+    @param tonemap_enabled {bool} `True` enables simple OpenCV tone mapping.
+    @param tonemap_gamma {float} Positive gamma passed to `createTonemap`.
     @return {object} Normalized RGB float tensor.
-    @satisfies REQ-108, REQ-110, REQ-144, REQ-154
+    @satisfies REQ-108, REQ-110, REQ-143, REQ-144, REQ-154
     """
 
     fusion_rgb = cv2_module.createMergeMertens().process(exposures_float)
     fusion_rgb = np_module.array(fusion_rgb, dtype=np_module.float32) * 255.0
+    if tonemap_enabled:
+        tonemap = cv2_module.createTonemap(float(tonemap_gamma))
+        fusion_rgb = tonemap.process(fusion_rgb)
     return _normalize_opencv_hdr_to_unit_range(
         np_module=np_module,
         hdr_rgb_float32=fusion_rgb,
@@ -6135,8 +6144,9 @@ def _run_opencv_merge_backend(
     Debevec and Robertson consume the shared linear HDR bracket contract
     directly with calibrated inverse response and apply resolved merge gamma
     as one backend-final output step, while Mertens first applies one
-    identical resolved merge-gamma transfer to each bracket input and does not
-    apply merge gamma on fused output.
+    identical resolved merge-gamma transfer to each bracket input, executes
+    exposure fusion, and optionally applies OpenCV simple tonemap on fused
+    output before final normalization.
     @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors.
     @param ev_value {float} EV bracket delta used to generate exposure files.
     @param ev_zero {float} Central EV used to generate exposure files.
@@ -6185,6 +6195,8 @@ def _run_opencv_merge_backend(
             cv2_module=cv2_module,
             np_module=np_module,
             exposures_float=exposures_mertens_gamma,
+            tonemap_enabled=opencv_merge_options.tonemap_enabled,
+            tonemap_gamma=opencv_merge_options.tonemap_gamma,
         )
         return merged_rgb_float
     exposure_times = _build_opencv_radiance_exposure_times(

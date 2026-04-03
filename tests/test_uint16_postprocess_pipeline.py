@@ -2197,8 +2197,8 @@ def test_run_opencv_merge_backend_dispatches_robertson_uint8_radiance_path() -> 
     assert float(np.max(output)) <= 1.0
 
 
-def test_run_opencv_merge_backend_skips_tonemap_for_mertens() -> None:
-    """Mertens path must not instantiate the OpenCV tonemap stage."""
+def test_run_opencv_merge_backend_applies_tonemap_for_mertens_when_enabled() -> None:
+    """Mertens path must instantiate OpenCV tonemap when explicitly enabled."""
 
     fake_cv2 = _FakeOpenCvModule()
     bracket_images_float = [
@@ -2215,6 +2215,36 @@ def test_run_opencv_merge_backend_skips_tonemap_for_mertens() -> None:
         opencv_merge_options=dng2jpg_module.OpenCvMergeOptions(
             merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_MERTENS,
             tonemap_enabled=True,
+            tonemap_gamma=2.2,
+        ),
+        auto_adjust_dependencies=(fake_cv2, np),
+    )
+
+    assert fake_cv2.last_tonemap is not None
+    assert fake_cv2.last_tonemap.gamma == 2.2
+    assert fake_cv2.merge_mertens.last_inputs is not None
+    assert fake_cv2.merge_debevec.last_inputs is None
+    assert fake_cv2.merge_robertson.last_inputs is None
+
+
+def test_run_opencv_merge_backend_skips_tonemap_for_mertens_when_disabled() -> None:
+    """Mertens path must skip OpenCV tonemap when explicitly disabled."""
+
+    fake_cv2 = _FakeOpenCvModule()
+    bracket_images_float = [
+        np.full((1, 1, 3), 0.1, dtype=np.float32),
+        np.full((1, 1, 3), 0.3, dtype=np.float32),
+        np.full((1, 1, 3), 0.6, dtype=np.float32),
+    ]
+
+    _ = dng2jpg_module._run_opencv_merge_backend(  # pylint: disable=protected-access
+        bracket_images_float=bracket_images_float,
+        ev_value=1.0,
+        ev_zero=0.0,
+        source_exposure_time_seconds=0.125,
+        opencv_merge_options=dng2jpg_module.OpenCvMergeOptions(
+            merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_MERTENS,
+            tonemap_enabled=False,
             tonemap_gamma=2.2,
         ),
         auto_adjust_dependencies=(fake_cv2, np),
@@ -2819,14 +2849,22 @@ def test_run_opencv_merge_mertens_applies_float_path_brightness_rescaling() -> N
     class _ScalingCv2:
         def __init__(self) -> None:
             self.merge_mertens = _ScalingMergeMertens()
+            self.last_tonemap: _FakeTonemap | None = None
 
         def createMergeMertens(self) -> _ScalingMergeMertens:
             return self.merge_mertens
 
+        def createTonemap(self, gamma: float) -> _FakeTonemap:
+            self.last_tonemap = _FakeTonemap(gamma=gamma)
+            return self.last_tonemap
+
+    scaling_cv2 = _ScalingCv2()
     scaled = dng2jpg_module._run_opencv_merge_mertens(  # pylint: disable=protected-access
-        cv2_module=_ScalingCv2(),
+        cv2_module=scaling_cv2,
         np_module=np,
         exposures_float=[np.full((1, 1, 3), 0.5, dtype=np.float32) for _ in range(3)],
+        tonemap_enabled=False,
+        tonemap_gamma=2.2,
     )
 
     np.testing.assert_allclose(
@@ -2835,6 +2873,7 @@ def test_run_opencv_merge_mertens_applies_float_path_brightness_rescaling() -> N
         rtol=1e-6,
         atol=1e-6,
     )
+    assert scaling_cv2.last_tonemap is None
 
 
 def test_run_opencv_merge_backend_applies_resolved_merge_gamma_last() -> None:
