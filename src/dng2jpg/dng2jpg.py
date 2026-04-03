@@ -1854,9 +1854,10 @@ def _normalize_white_balance_gains_rgb(np_module, camera_wb_rgb):
 def _apply_normalized_white_balance_to_rgb_float(np_module, image_rgb_float, normalized_gains_rgb):
     """@brief Apply normalized RGB white-balance gains to one RGB float tensor.
 
-    @details Broadcast-multiplies normalized RGB gains over one normalized RGB
-    float image in float64 precision and returns float32 without explicit
-    clipping, preserving headroom for downstream EV scaling and clipping stages.
+    @details Broadcast-multiplies normalized RGB gains over one RGB float image
+    in float64 precision and returns float32 without explicit clipping or
+    range normalization, preserving headroom for downstream EV scaling and
+    clipping stages.
     Complexity: O(H*W). Side effects: none.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} RGB float tensor.
@@ -1865,10 +1866,10 @@ def _apply_normalized_white_balance_to_rgb_float(np_module, image_rgb_float, nor
     @satisfies REQ-031, REQ-158, REQ-183
     """
 
-    normalized_rgb = _normalize_float_rgb_image(
+    normalized_rgb = _ensure_three_channel_float_array_no_range_adjust(
         np_module=np_module,
         image_data=image_rgb_float,
-    ).astype(np_module.float64, copy=False)
+    )
     gains = np_module.asarray(normalized_gains_rgb, dtype=np_module.float64).reshape((1, 1, 3))
     balanced = normalized_rgb * gains
     return balanced.astype(np_module.float32, copy=False)
@@ -1915,15 +1916,73 @@ def _build_rawpy_neutral_postprocess_kwargs(raw_handle):
     return postprocess_kwargs
 
 
+def _extract_sensor_dynamic_range_max(raw_handle, np_module):
+    """@brief Compute one sensor dynamic-range normalization denominator.
+
+    @details Reads RAW metadata `white_level` and `black_level_per_channel`,
+    computes `dynamic_range_max = white_level - mean(black_level_per_channel)`,
+    and validates a finite positive result for neutral RAW-base normalization.
+    Falls back to `white_level` when black-level payload is unavailable or
+    invalid. Complexity: O(C) where C is black-level channel count. Side
+    effects: none.
+    @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
+    @param np_module {ModuleType} Imported numpy module.
+    @return {float} Positive finite dynamic-range denominator.
+    @exception ValueError Raised when `white_level` metadata is missing or non-positive.
+    @satisfies REQ-158
+    """
+
+    white_level_raw = getattr(raw_handle, "white_level", None)
+    if white_level_raw is None:
+        raise ValueError("RAW metadata does not expose white_level")
+    if isinstance(white_level_raw, (tuple, list)):
+        if not white_level_raw:
+            raise ValueError("RAW metadata white_level sequence is empty")
+        white_level_value = max(white_level_raw)
+    else:
+        white_level_value = white_level_raw
+    try:
+        white_level_float = float(white_level_value)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"RAW metadata white_level is non-numeric: {white_level_value!r}"
+        ) from None
+    if not math.isfinite(white_level_float) or white_level_float <= 0.0:
+        raise ValueError(
+            f"RAW metadata white_level must be finite and positive: {white_level_float!r}"
+        )
+
+    black_levels_raw = getattr(raw_handle, "black_level_per_channel", None)
+    if black_levels_raw is None:
+        black_level_mean = 0.0
+    else:
+        try:
+            black_levels_vector = np_module.asarray(black_levels_raw, dtype=np_module.float64)
+        except (TypeError, ValueError):
+            black_levels_vector = np_module.asarray([], dtype=np_module.float64)
+        if black_levels_vector.size == 0:
+            black_level_mean = 0.0
+        else:
+            black_level_mean = float(np_module.mean(black_levels_vector))
+            if not math.isfinite(black_level_mean):
+                black_level_mean = 0.0
+    dynamic_range_max = white_level_float - black_level_mean
+    if not math.isfinite(dynamic_range_max) or dynamic_range_max <= 0.0:
+        dynamic_range_max = white_level_float
+    if not math.isfinite(dynamic_range_max) or dynamic_range_max <= 0.0:
+        raise ValueError("RAW metadata dynamic range is non-positive")
+    return float(dynamic_range_max)
+
+
 def _extract_base_rgb_linear_float(raw_handle, np_module):
     """@brief Extract one linear normalized RGB base image from one RAW handle.
 
     @details Executes exactly one neutral linear `rawpy.postprocess` call with
-    deterministic no-auto/no-camera-WB parameters, normalizes demosaiced
-    maximum-resolution RGB output to float `[0,1]`, extracts camera WB metadata
-    gains, normalizes gains to RGB mean `1.0`, and applies those gains in float
-    domain without explicit clipping. Complexity: O(H*W). Side effects: one RAW
-    postprocess invocation.
+    deterministic no-auto/no-camera-WB parameters, converts output to float,
+    normalizes by sensor dynamic range `white_level - mean(black_level_per_channel)`,
+    extracts camera WB metadata gains, normalizes gains to RGB mean `1.0`, and
+    applies those gains in float domain without explicit clipping. Complexity:
+    O(H*W). Side effects: one RAW postprocess invocation.
     @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
     @param np_module {ModuleType} Imported numpy module.
     @return {object} White-balanced RGB float tensor derived from neutral extraction.
@@ -1933,10 +1992,12 @@ def _extract_base_rgb_linear_float(raw_handle, np_module):
 
     postprocess_kwargs = _build_rawpy_neutral_postprocess_kwargs(raw_handle=raw_handle)
     base_rgb = raw_handle.postprocess(**postprocess_kwargs)
-    normalized_base_rgb = _normalize_float_rgb_image(
+    dynamic_range_max = _extract_sensor_dynamic_range_max(
+        raw_handle=raw_handle,
         np_module=np_module,
-        image_data=base_rgb,
     )
+    base_rgb_float = np_module.asarray(base_rgb, dtype=np_module.float32)
+    normalized_base_rgb = base_rgb_float / np_module.float32(dynamic_range_max)
     camera_wb_rgb = _extract_camera_whitebalance_rgb_triplet(raw_handle=raw_handle)
     normalized_gains_rgb = _normalize_white_balance_gains_rgb(
         np_module=np_module,
@@ -5537,21 +5598,22 @@ def _build_exposure_multipliers(ev_value, ev_zero=0.0):
 def _build_bracket_images_from_linear_base_float(np_module, base_rgb_float, multipliers):
     """@brief Build normalized HDR brackets from one linear RGB base tensor.
 
-    @details Broadcast-multiplies one normalized linear RGB base tensor by the
-    ordered EV multiplier triplet `(ev_minus, ev_zero, ev_plus)`, clamps each
-    result into `[0,1]`, and returns float32 bracket tensors in canonical
-    downstream order. Complexity: O(3*H*W). Side effects: none.
+    @details Broadcast-multiplies one linear RGB base tensor by the ordered EV
+    multiplier triplet `(ev_minus, ev_zero, ev_plus)`, clamps each result into
+    `[0,1]`, and returns float32 bracket tensors in canonical downstream order.
+    The input base tensor range is preserved before EV scaling to avoid
+    stage-local pre-clipping. Complexity: O(3*H*W). Side effects: none.
     @param np_module {ModuleType} Imported numpy module.
-    @param base_rgb_float {object} Linear normalized RGB float tensor in `[0,1]`.
+    @param base_rgb_float {object} Linear RGB float tensor.
     @param multipliers {tuple[float, float, float]} Ordered EV multipliers.
     @return {list[object]} Ordered RGB float32 bracket tensors.
     @satisfies REQ-159, REQ-160
     """
 
-    linear_base = _normalize_float_rgb_image(
+    linear_base = _ensure_three_channel_float_array_no_range_adjust(
         np_module=np_module,
         image_data=base_rgb_float,
-    ).astype(np_module.float32)
+    ).astype(np_module.float32, copy=False)
     bracket_images_float = []
     for multiplier in multipliers:
         scaled = np_module.clip(

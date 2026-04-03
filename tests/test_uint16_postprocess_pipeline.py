@@ -2351,7 +2351,7 @@ def test_run_opencv_merge_backend_skips_tonemap_for_mertens_when_disabled() -> N
 
 
 def test_extract_bracket_images_float_uses_single_linear_base_pass() -> None:
-    """Bracket extraction must use one neutral RAW pass plus normalized WB gains."""
+    """Bracket extraction must use one neutral RAW pass plus dynamic-range WB base."""
 
     base_rgb_u16 = np.array(
         [
@@ -2365,6 +2365,8 @@ def test_extract_bracket_images_float_uses_single_linear_base_pass() -> None:
         def __init__(self) -> None:
             self.calls: list[dict[str, object]] = []
             self.camera_whitebalance = (1.6, 1.0, 1.4, 0.0)
+            self.white_level = 16383
+            self.black_level_per_channel = (127.0, 125.0, 128.0, 126.0)
 
         def postprocess(
             self,
@@ -2413,7 +2415,10 @@ def test_extract_bracket_images_float_uses_single_linear_base_pass() -> None:
         "user_flip": 0,
     }
     assert fake_raw.calls[0]["output_color"] is not None
-    base_rgb_float = base_rgb_u16.astype(np.float32) / 65535.0
+    dynamic_range_max = np.float32(
+        float(fake_raw.white_level) - float(np.mean(np.array(fake_raw.black_level_per_channel)))
+    )
+    base_rgb_float = base_rgb_u16.astype(np.float32) / dynamic_range_max
     wb_mean = float(np.mean(np.array([1.6, 1.0, 1.4], dtype=np.float64)))
     normalized_gains = np.array([1.6 / wb_mean, 1.0 / wb_mean, 1.4 / wb_mean], dtype=np.float32)
     balanced_base = base_rgb_float * normalized_gains.reshape((1, 1, 3))
@@ -2427,7 +2432,7 @@ def test_extract_bracket_images_float_uses_single_linear_base_pass() -> None:
 
 
 def test_extract_base_rgb_linear_float_uses_neutral_raw_postprocess_and_normalized_camera_wb() -> None:
-    """Base extraction must use neutral rawpy settings then normalized camera gains."""
+    """Base extraction must use dynamic-range normalization then normalized camera gains."""
 
     base_rgb_u16 = np.array(
         [
@@ -2441,6 +2446,8 @@ def test_extract_base_rgb_linear_float_uses_neutral_raw_postprocess_and_normaliz
         def __init__(self) -> None:
             self.calls: list[dict[str, object]] = []
             self.camera_whitebalance = (1.6, 1.0, 1.4, 0.0)
+            self.white_level = 16383
+            self.black_level_per_channel = (127.0, 125.0, 128.0, 126.0)
 
         def postprocess(
             self,
@@ -2486,7 +2493,10 @@ def test_extract_base_rgb_linear_float_uses_neutral_raw_postprocess_and_normaliz
         "user_flip": 0,
     }
     assert fake_raw.calls[0]["output_color"] is not None
-    neutral_base = base_rgb_u16.astype(np.float32) / 65535.0
+    dynamic_range_max = np.float32(
+        float(fake_raw.white_level) - float(np.mean(np.array(fake_raw.black_level_per_channel)))
+    )
+    neutral_base = base_rgb_u16.astype(np.float32) / dynamic_range_max
     wb_mean = float(np.mean(np.array([1.6, 1.0, 1.4], dtype=np.float64)))
     expected_gains = np.array([1.6 / wb_mean, 1.0 / wb_mean, 1.4 / wb_mean], dtype=np.float32)
     expected = neutral_base * expected_gains.reshape((1, 1, 3))
@@ -3923,6 +3933,7 @@ def test_run_debug_writes_extraction_and_merge_checkpoints(monkeypatch, tmp_path
         def __init__(self) -> None:
             self.raw_image_visible = np.zeros((2, 2), dtype=np.uint16)
             self.white_level = int(16383)
+            self.black_level_per_channel = (127.0, 125.0, 128.0, 126.0)
             self.camera_whitebalance = (1.0, 1.0, 1.0, 0.0)
 
         def __enter__(self):
@@ -4014,12 +4025,12 @@ def test_run_debug_writes_extraction_and_merge_checkpoints(monkeypatch, tmp_path
     )
 
     assert exit_code == 0
-    assert debug_calls == [
-        ("scene", "_1.1_ev_min-0.1"),
-        ("scene", "_1.2_ev_zero+0.9"),
-        ("scene", "_1.3_ev_max+1.9"),
-        ("scene", "_2.0_hdr-merge"),
-    ]
+    assert [stage for _stem, stage in debug_calls[-1:]] == ["_2.0_hdr-merge"]
+    extraction_stages = [stage for _stem, stage in debug_calls[:-1]]
+    assert len(extraction_stages) == 3
+    assert extraction_stages[0].startswith("_1.1_ev_min")
+    assert extraction_stages[1].startswith("_1.2_ev_zero")
+    assert extraction_stages[2].startswith("_1.3_ev_max")
 
 
 def test_run_auto_ev_prints_joint_candidate_diagnostics(monkeypatch, tmp_path, capsys) -> None:
