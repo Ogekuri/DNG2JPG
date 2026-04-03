@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """@brief Convert one DNG file into one HDR-merged JPG output.
 
-@details Implements single-pass linear RAW extraction with one maximum-
-resolution camera-WB-aware RGB base image, derives three synthetic exposures
-(`ev_zero-ev`, `ev_zero`, `ev_zero+ev`) by NumPy EV scaling, emits one
+@details Implements single-pass neutral linear RAW extraction with one
+maximum-resolution RGB base image, applies normalized camera white-balance
+gains in float domain, derives three synthetic exposures (`ev_zero-ev`,
+`ev_zero`, `ev_zero+ev`) by NumPy EV scaling, emits one
 diagnostic source-gamma line from RAW metadata without feeding it into the
 numeric pipeline, merges through selected `luminance-hdr-cli`, selected OpenCV
 (`Debevec`, `Robertson`, `Mertens`), or selected HDR+ tile-based flow with
@@ -14,6 +15,7 @@ persist in the output directory when `--debug` is enabled.
     @satisfies PRJ-001, PRJ-002, DES-003, DES-008, DES-009, REQ-008, REQ-009, REQ-010, REQ-012, REQ-013, REQ-014, REQ-018, REQ-020, REQ-032, REQ-034, REQ-037, REQ-041, REQ-052, REQ-100, REQ-106, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-141, REQ-142, REQ-143, REQ-144, REQ-145, REQ-146, REQ-148, REQ-149, REQ-152, REQ-153, REQ-154, REQ-157, REQ-158, REQ-159, REQ-160, REQ-163, REQ-164, REQ-165
 """
 
+import inspect
 import os
 import shlex
 import shutil
@@ -1789,32 +1791,161 @@ def _extract_normalized_preview_luminance_stats(raw_handle):
     return (p_low, p_median, p_high)
 
 
+def _extract_camera_whitebalance_rgb_triplet(raw_handle):
+    """@brief Extract one `(R,G,B)` camera white-balance triplet from RAW metadata.
+
+    @details Reads `rawpy` camera white-balance payload, validates finite
+    positive coefficients, and returns the first three channels as one RGB
+    triplet used for float-domain gain normalization. Falls back to unit triplet
+    when metadata is missing or invalid. Complexity: O(1). Side effects: none.
+    @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
+    @return {tuple[float, float, float]} Positive finite `(r, g, b)` coefficients.
+    @satisfies REQ-031, REQ-158, REQ-183
+    """
+
+    wb_raw = getattr(raw_handle, "camera_whitebalance", None)
+    if wb_raw is None:
+        return (1.0, 1.0, 1.0)
+    try:
+        wb_sequence = list(wb_raw)
+    except TypeError:
+        return (1.0, 1.0, 1.0)
+    if len(wb_sequence) < 3:
+        return (1.0, 1.0, 1.0)
+    triplet = []
+    for coefficient in wb_sequence[:3]:
+        try:
+            numeric = float(coefficient)
+        except (TypeError, ValueError):
+            return (1.0, 1.0, 1.0)
+        if not math.isfinite(numeric) or numeric <= 0.0:
+            return (1.0, 1.0, 1.0)
+        triplet.append(numeric)
+    return (triplet[0], triplet[1], triplet[2])
+
+
+def _normalize_white_balance_gains_rgb(np_module, camera_wb_rgb):
+    """@brief Normalize one RGB white-balance gain triplet to mean `1.0`.
+
+    @details Converts one camera white-balance RGB triplet to float64,
+    computes its arithmetic mean, divides each channel by the mean, and returns
+    normalized gains preserving chromatic ratios without global brightness drift.
+    Invalid or non-positive means resolve to unit gains. Complexity: O(1). Side
+    effects: none.
+    @param np_module {ModuleType} Imported numpy module.
+    @param camera_wb_rgb {tuple[float, float, float]} Positive finite camera WB RGB triplet.
+    @return {object} Float64 RGB gain vector with arithmetic mean equal to `1.0`.
+    @satisfies REQ-031, REQ-158, REQ-183
+    """
+
+    wb_vector = np_module.asarray(camera_wb_rgb, dtype=np_module.float64)
+    if wb_vector.shape != (3,):
+        return np_module.asarray([1.0, 1.0, 1.0], dtype=np_module.float64)
+    wb_mean = float(np_module.mean(wb_vector))
+    if not math.isfinite(wb_mean) or wb_mean <= 0.0:
+        return np_module.asarray([1.0, 1.0, 1.0], dtype=np_module.float64)
+    normalized = wb_vector / wb_mean
+    if not np_module.all(np_module.isfinite(normalized)):
+        return np_module.asarray([1.0, 1.0, 1.0], dtype=np_module.float64)
+    normalized = np_module.maximum(normalized, 1e-12)
+    return normalized.astype(np_module.float64, copy=False)
+
+
+def _apply_normalized_white_balance_to_rgb_float(np_module, image_rgb_float, normalized_gains_rgb):
+    """@brief Apply normalized RGB white-balance gains to one RGB float tensor.
+
+    @details Broadcast-multiplies normalized RGB gains over one normalized RGB
+    float image in float64 precision and returns float32 without explicit
+    clipping, preserving headroom for downstream EV scaling and clipping stages.
+    Complexity: O(H*W). Side effects: none.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_float {object} RGB float tensor.
+    @param normalized_gains_rgb {object} RGB normalized gain vector with shape `(3,)`.
+    @return {object} White-balanced RGB float32 tensor without stage-local clipping.
+    @satisfies REQ-031, REQ-158, REQ-183
+    """
+
+    normalized_rgb = _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=image_rgb_float,
+    ).astype(np_module.float64, copy=False)
+    gains = np_module.asarray(normalized_gains_rgb, dtype=np_module.float64).reshape((1, 1, 3))
+    balanced = normalized_rgb * gains
+    return balanced.astype(np_module.float32, copy=False)
+
+
+def _build_rawpy_neutral_postprocess_kwargs(raw_handle):
+    """@brief Build deterministic neutral `rawpy.postprocess` keyword arguments.
+
+    @details Produces one neutral linear extraction payload with fixed fields
+    (`gamma`, `no_auto_bright`, `output_bps`, `use_camera_wb`, `user_wb`,
+    `output_color=rawpy.ColorSpace.raw`, `no_auto_scale`, `user_flip`) for
+    deterministic RAW extraction without camera-WB application in postprocess.
+    Complexity: O(1). Side effects: imports `rawpy` when module discovery from
+    the handle does not expose `ColorSpace`.
+    @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
+    @return {dict[str, object]} Keyword argument mapping for neutral RAW extraction.
+    @exception RuntimeError Raised when `rawpy.ColorSpace.raw` cannot be resolved.
+    @satisfies REQ-010
+    """
+
+    rawpy_module = inspect.getmodule(raw_handle)
+    if rawpy_module is None:
+        rawpy_module = inspect.getmodule(getattr(raw_handle, "postprocess", None))
+    if rawpy_module is None or getattr(rawpy_module, "ColorSpace", None) is None:
+        try:
+            rawpy_module = __import__("rawpy")
+        except ModuleNotFoundError as exc:
+            raise RuntimeError("Missing required dependency: rawpy") from exc
+    color_space = getattr(rawpy_module, "ColorSpace", None)
+    raw_color = getattr(color_space, "raw", None) if color_space is not None else None
+    if raw_color is None:
+        raise RuntimeError("rawpy.ColorSpace.raw is unavailable")
+
+    postprocess_kwargs = {
+        "gamma": (1.0, 1.0),
+        "no_auto_bright": True,
+        "output_bps": 16,
+        "use_camera_wb": False,
+        "user_wb": [1.0, 1.0, 1.0, 1.0],
+        "output_color": raw_color,
+        "no_auto_scale": True,
+        "user_flip": 0,
+    }
+    return postprocess_kwargs
+
+
 def _extract_base_rgb_linear_float(raw_handle, np_module):
     """@brief Extract one linear normalized RGB base image from one RAW handle.
 
-    @details Executes exactly one `rawpy.postprocess` call with deterministic
-    parameters `bright=1.0`, `output_bps=16`, `use_camera_wb=True`,
-    `no_auto_bright=True`, `gamma=(1.0,1.0)`, and `user_flip=0`, then
-    normalizes the demosaiced maximum-resolution RGB output to float `[0,1]`.
-    Complexity: O(H*W). Side effects: one RAW postprocess invocation.
+    @details Executes exactly one neutral linear `rawpy.postprocess` call with
+    deterministic no-auto/no-camera-WB parameters, normalizes demosaiced
+    maximum-resolution RGB output to float `[0,1]`, extracts camera WB metadata
+    gains, normalizes gains to RGB mean `1.0`, and applies those gains in float
+    domain without explicit clipping. Complexity: O(H*W). Side effects: one RAW
+    postprocess invocation.
     @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
     @param np_module {ModuleType} Imported numpy module.
-    @return {object} Normalized RGB float tensor in `[0,1]`.
-    @satisfies REQ-010, REQ-158
+    @return {object} White-balanced RGB float tensor derived from neutral extraction.
+    @satisfies REQ-010, REQ-031, REQ-158
     @see _extract_normalized_preview_luminance_stats
     """
 
-    base_rgb = raw_handle.postprocess(
-        bright=1.0,
-        output_bps=16,
-        use_camera_wb=True,
-        no_auto_bright=True,
-        gamma=(1.0, 1.0),
-        user_flip=0,
-    )
-    return _normalize_float_rgb_image(
+    postprocess_kwargs = _build_rawpy_neutral_postprocess_kwargs(raw_handle=raw_handle)
+    base_rgb = raw_handle.postprocess(**postprocess_kwargs)
+    normalized_base_rgb = _normalize_float_rgb_image(
         np_module=np_module,
         image_data=base_rgb,
+    )
+    camera_wb_rgb = _extract_camera_whitebalance_rgb_triplet(raw_handle=raw_handle)
+    normalized_gains_rgb = _normalize_white_balance_gains_rgb(
+        np_module=np_module,
+        camera_wb_rgb=camera_wb_rgb,
+    )
+    return _apply_normalized_white_balance_to_rgb_float(
+        np_module=np_module,
+        image_rgb_float=normalized_base_rgb,
+        normalized_gains_rgb=normalized_gains_rgb,
     )
 
 

@@ -2351,7 +2351,7 @@ def test_run_opencv_merge_backend_skips_tonemap_for_mertens_when_disabled() -> N
 
 
 def test_extract_bracket_images_float_uses_single_linear_base_pass() -> None:
-    """Bracket extraction must use one linear RAW base pass plus NumPy scaling."""
+    """Bracket extraction must use one neutral RAW pass plus normalized WB gains."""
 
     base_rgb_u16 = np.array(
         [
@@ -2364,24 +2364,29 @@ def test_extract_bracket_images_float_uses_single_linear_base_pass() -> None:
     class _FakeRawHandle:
         def __init__(self) -> None:
             self.calls: list[dict[str, object]] = []
+            self.camera_whitebalance = (1.6, 1.0, 1.4, 0.0)
 
         def postprocess(
             self,
             *,
-            bright,
             output_bps,
             use_camera_wb,
             no_auto_bright,
             gamma,
+            user_wb,
+            output_color,
+            no_auto_scale,
             user_flip,
         ) -> np.ndarray:
             self.calls.append(
                 {
-                    "bright": bright,
                     "output_bps": output_bps,
                     "use_camera_wb": use_camera_wb,
                     "no_auto_bright": no_auto_bright,
                     "gamma": gamma,
+                    "user_wb": list(user_wb),
+                    "output_color": output_color,
+                    "no_auto_scale": no_auto_scale,
                     "user_flip": user_flip,
                 }
             )
@@ -2398,21 +2403,95 @@ def test_extract_bracket_images_float_uses_single_linear_base_pass() -> None:
 
     assert len(fake_raw.calls) == 1
     assert fake_raw.calls[0] == {
-        "bright": 1.0,
         "output_bps": 16,
-        "use_camera_wb": True,
+        "use_camera_wb": False,
         "no_auto_bright": True,
         "gamma": (1.0, 1.0),
+        "user_wb": [1.0, 1.0, 1.0, 1.0],
+        "output_color": fake_raw.calls[0]["output_color"],
+        "no_auto_scale": True,
         "user_flip": 0,
     }
+    assert fake_raw.calls[0]["output_color"] is not None
     base_rgb_float = base_rgb_u16.astype(np.float32) / 65535.0
+    wb_mean = float(np.mean(np.array([1.6, 1.0, 1.4], dtype=np.float64)))
+    normalized_gains = np.array([1.6 / wb_mean, 1.0 / wb_mean, 1.4 / wb_mean], dtype=np.float32)
+    balanced_base = base_rgb_float * normalized_gains.reshape((1, 1, 3))
     for bracket_image, multiplier in zip(bracket_images, multipliers):
         np.testing.assert_allclose(
             bracket_image,
-            np.clip(base_rgb_float * multiplier, 0.0, 1.0).astype(np.float32),
+            np.clip(balanced_base * multiplier, 0.0, 1.0).astype(np.float32),
             rtol=1e-6,
             atol=1e-6,
         )
+
+
+def test_extract_base_rgb_linear_float_uses_neutral_raw_postprocess_and_normalized_camera_wb() -> None:
+    """Base extraction must use neutral rawpy settings then normalized camera gains."""
+
+    base_rgb_u16 = np.array(
+        [
+            [[8000, 10000, 12000], [14000, 16000, 18000]],
+            [[20000, 22000, 24000], [26000, 28000, 30000]],
+        ],
+        dtype=np.uint16,
+    )
+
+    class _FakeRawHandle:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+            self.camera_whitebalance = (1.6, 1.0, 1.4, 0.0)
+
+        def postprocess(
+            self,
+            *,
+            output_bps,
+            use_camera_wb,
+            no_auto_bright,
+            gamma,
+            user_wb,
+            output_color,
+            no_auto_scale,
+            user_flip,
+        ) -> np.ndarray:
+            self.calls.append(
+                {
+                    "output_bps": output_bps,
+                    "use_camera_wb": use_camera_wb,
+                    "no_auto_bright": no_auto_bright,
+                    "gamma": gamma,
+                    "user_wb": list(user_wb),
+                    "output_color": output_color,
+                    "no_auto_scale": no_auto_scale,
+                    "user_flip": user_flip,
+                }
+            )
+            return np.array(base_rgb_u16, copy=True)
+
+    fake_raw = _FakeRawHandle()
+    output = dng2jpg_module._extract_base_rgb_linear_float(  # pylint: disable=protected-access
+        raw_handle=fake_raw,
+        np_module=np,
+    )
+
+    assert len(fake_raw.calls) == 1
+    assert fake_raw.calls[0] == {
+        "output_bps": 16,
+        "use_camera_wb": False,
+        "no_auto_bright": True,
+        "gamma": (1.0, 1.0),
+        "user_wb": [1.0, 1.0, 1.0, 1.0],
+        "output_color": fake_raw.calls[0]["output_color"],
+        "no_auto_scale": True,
+        "user_flip": 0,
+    }
+    assert fake_raw.calls[0]["output_color"] is not None
+    neutral_base = base_rgb_u16.astype(np.float32) / 65535.0
+    wb_mean = float(np.mean(np.array([1.6, 1.0, 1.4], dtype=np.float64)))
+    expected_gains = np.array([1.6 / wb_mean, 1.0 / wb_mean, 1.4 / wb_mean], dtype=np.float32)
+    expected = neutral_base * expected_gains.reshape((1, 1, 3))
+    np.testing.assert_allclose(output, expected.astype(np.float32), rtol=1e-6, atol=1e-6)
+    assert float(np.mean(expected_gains)) == 1.0
 
 
 def test_parse_run_options_defaults_gamma_to_auto() -> None:
@@ -3844,6 +3923,7 @@ def test_run_debug_writes_extraction_and_merge_checkpoints(monkeypatch, tmp_path
         def __init__(self) -> None:
             self.raw_image_visible = np.zeros((2, 2), dtype=np.uint16)
             self.white_level = int(16383)
+            self.camera_whitebalance = (1.0, 1.0, 1.0, 0.0)
 
         def __enter__(self):
             return self
@@ -3854,17 +3934,26 @@ def test_run_debug_writes_extraction_and_merge_checkpoints(monkeypatch, tmp_path
         def postprocess(
             self,
             *,
-            bright,
             output_bps,
             use_camera_wb,
             no_auto_bright,
             gamma,
+            user_wb,
+            output_color,
+            no_auto_scale,
             user_flip,
         ) -> np.ndarray:
-            del output_bps, use_camera_wb, no_auto_bright, gamma, user_flip
-            return np.clip(raw_pixels.astype(np.float32) * float(bright), 0.0, 65535.0).astype(
-                np.uint16
+            del (
+                output_bps,
+                use_camera_wb,
+                no_auto_bright,
+                gamma,
+                user_wb,
+                output_color,
+                no_auto_scale,
+                user_flip,
             )
+            return np.array(raw_pixels, copy=True)
 
     class _FakeRawPyModule:
         LibRawError = RuntimeError
@@ -3951,6 +4040,7 @@ def test_run_auto_ev_prints_joint_candidate_diagnostics(monkeypatch, tmp_path, c
         def __init__(self) -> None:
             self.raw_image_visible = np.zeros((2, 2), dtype=np.uint16)
             self.white_level = int(16383)
+            self.camera_whitebalance = (1.0, 1.0, 1.0, 0.0)
 
         def __enter__(self):
             return self
@@ -3961,17 +4051,26 @@ def test_run_auto_ev_prints_joint_candidate_diagnostics(monkeypatch, tmp_path, c
         def postprocess(
             self,
             *,
-            bright,
             output_bps,
             use_camera_wb,
             no_auto_bright,
             gamma,
+            user_wb,
+            output_color,
+            no_auto_scale,
             user_flip,
         ) -> np.ndarray:
-            del output_bps, use_camera_wb, no_auto_bright, gamma, user_flip
-            return np.clip(raw_pixels.astype(np.float32) * float(bright), 0.0, 65535.0).astype(
-                np.uint16
+            del (
+                output_bps,
+                use_camera_wb,
+                no_auto_bright,
+                gamma,
+                user_wb,
+                output_color,
+                no_auto_scale,
+                user_flip,
             )
+            return np.array(raw_pixels, copy=True)
 
     class _FakeRawPyModule:
         LibRawError = RuntimeError
@@ -4050,6 +4149,7 @@ def test_run_static_ev_uses_manual_center_and_reports_static_mode(
         def __init__(self) -> None:
             self.raw_image_visible = np.zeros((2, 2), dtype=np.uint16)
             self.white_level = int(16383)
+            self.camera_whitebalance = (1.0, 1.0, 1.0, 0.0)
 
         def __enter__(self):
             return self
@@ -4060,17 +4160,26 @@ def test_run_static_ev_uses_manual_center_and_reports_static_mode(
         def postprocess(
             self,
             *,
-            bright,
             output_bps,
             use_camera_wb,
             no_auto_bright,
             gamma,
+            user_wb,
+            output_color,
+            no_auto_scale,
             user_flip,
         ) -> np.ndarray:
-            del output_bps, use_camera_wb, no_auto_bright, gamma, user_flip
-            return np.clip(raw_pixels.astype(np.float32) * float(bright), 0.0, 65535.0).astype(
-                np.uint16
+            del (
+                output_bps,
+                use_camera_wb,
+                no_auto_bright,
+                gamma,
+                user_wb,
+                output_color,
+                no_auto_scale,
+                user_flip,
             )
+            return np.array(raw_pixels, copy=True)
 
     class _FakeRawPyModule:
         LibRawError = RuntimeError
@@ -4261,6 +4370,7 @@ def test_run_prints_source_gamma_diagnostics(monkeypatch, tmp_path, capsys) -> N
             self.rgb_xyz_matrix = None
             self.color_matrix = None
             self.color_desc = None
+            self.camera_whitebalance = (1.0, 1.0, 1.0, 0.0)
 
         def __enter__(self):
             return self
@@ -4271,14 +4381,25 @@ def test_run_prints_source_gamma_diagnostics(monkeypatch, tmp_path, capsys) -> N
         def postprocess(
             self,
             *,
-            bright,
             output_bps,
             use_camera_wb,
             no_auto_bright,
             gamma,
+            user_wb,
+            output_color,
+            no_auto_scale,
             user_flip,
         ) -> np.ndarray:
-            del bright, output_bps, use_camera_wb, no_auto_bright, gamma, user_flip
+            del (
+                output_bps,
+                use_camera_wb,
+                no_auto_bright,
+                gamma,
+                user_wb,
+                output_color,
+                no_auto_scale,
+                user_flip,
+            )
             return np.full((2, 2, 3), 32768, dtype=np.uint16)
 
     class _FakeRawPyModule:

@@ -112,8 +112,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-007**: MUST reject `--aa-*` options when `--auto-adjust` resolves to `disable` and MUST reject `--ab-*` options when `--auto-brightness` resolves to `disable`.
 - **REQ-008**: MUST compute `ev_best`, `ev_ettr`, and `ev_detail` from the normalized linear HDR base image whenever exposure planning executes, independent of whether `--ev` or `--auto-ev` selected the mode.
 - **REQ-009**: MUST compute one symmetric triplet centered on `ev_zero` and use one bracketing half-span `ev_delta` derived only from the iterative clipping-threshold process.
-- **REQ-010**: MUST extract one maximum-resolution demosaiced RGB base image using linear `rawpy.postprocess` with camera white balance before HDR bracket generation.
-- **REQ-158**: MUST normalize the extracted HDR base image to RGB float `[0,1]` before any bracket arithmetic.
+- **REQ-010**: MUST extract one maximum-resolution demosaiced RGB base image using one neutral linear `rawpy.postprocess` call with `gamma=(1,1)`, `no_auto_bright=True`, `output_bps=16`, `use_camera_wb=False`, `user_wb=[1,1,1,1]`, `output_color=raw`, and `no_auto_scale=True`.
+- **REQ-158**: MUST normalize neutral 16-bit base extraction to RGB float `[0,1]`, then apply normalized camera white-balance gains before any bracket arithmetic.
 - **REQ-159**: MUST derive `ev_minus`, `ev_zero`, and `ev_plus` only by EV scaling and `[0,1]` clipping of the normalized HDR base image.
 - **REQ-160**: MUST preserve the ordered float triplet `(ev_minus, ev_zero, ev_plus)` as the only cross-stage HDR bracket contract.
 - **REQ-011**: MUST run `luminance-hdr-cli` with deterministic HDR/TMO arguments including `--ldrTiff 32b` for luminance backend, MUST print the full executed command syntax with parameters to runtime output, confine any required float32 TIFF intermediates to the backend step, and return normalized RGB float output.
@@ -136,7 +136,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-171**: MUST print deterministic merge-gamma runtime diagnostics containing the user request, resolved transfer label, parameter payload, and evidence source.
 - **REQ-172**: MUST print normalized EXIF merge-gamma inputs containing `ColorSpace`, `InteroperabilityIndex`, `ImageModel`, `ImageMake`, and a human-readable `ColorProfile` label derived from `ColorSpace` and `InteroperabilityIndex` values whenever `--gamma=auto` is resolved from RAW/DNG metadata.
 - **REQ-173**: MUST extract merge-gamma EXIF evidence by opening the original RAW/DNG file as a binary stream via `exifread.process_file` and MUST normalize `EXIF ColorSpace`, `Interop InteroperabilityIndex`, and `Image Model` tags for deterministic auto transfer resolution.
-- **REQ-157**: MUST derive source gamma diagnostics from original RAW/DNG EXIF color-profile metadata via `exifread` and MAY supplement with `rawpy` metadata without modifying HDR bracket extraction, which remains linear and camera-WB-aware.
+- **REQ-157**: MUST derive source gamma diagnostics from original RAW/DNG EXIF color-profile metadata via `exifread` and MAY supplement with `rawpy` metadata without altering neutral RAW extraction or normalized-gain camera white-balance application.
 - **REQ-163**: MUST classify source gamma diagnostics by preferring DNG EXIF `ColorSpace` and `InteroperabilityIndex` fields, mapping `ColorSpace=1` to sRGB, `ColorSpace=2` or `R03` interop to Adobe RGB, and MUST report `unknown` when EXIF evidence is insufficient.
 - **REQ-164**: MUST print source gamma diagnostics as one deterministic runtime line containing both a source-gamma label and either a numeric gamma value or `undetermined`.
 - **REQ-021**: MUST enforce `--jpg-compression` in inclusive range `0..100`.
@@ -149,7 +149,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-028**: MUST compute bracket EV ceiling only from bit-depth headroom `MAX_BRACKET=((bits_per_color-8)/2)-abs(ev_zero)`.
 - **REQ-029**: MUST compute EV-zero safe ceiling with `SAFE_ZERO_MAX=((bits_per_color-8)/2)-1`.
 - **REQ-030**: MUST accept any numeric `--ev` and `--ev-zero` values within the bit-depth-derived valid range without enforcing `0.25` EV step granularity.
-- **REQ-031**: MUST derive exposure-planning inputs from the shared normalized linear HDR base image used for bracket export.
+- **REQ-031**: MUST derive exposure-planning inputs from one shared neutral-linear HDR base image after applying `rawpy` camera white-balance gains normalized to RGB mean `1.0` in float domain.
 - **REQ-032**: MUST evaluate `ev_best`, `ev_ettr`, and `ev_detail` on the normalized linear gamma=`1` RGB image and MUST select default `ev_zero` as the minimum absolute-value candidate among those three values when `--ev-zero` is not specified.
 - **REQ-166**: MUST expose `--auto-ev-step` as a positive configurable EV increment for iterative bracket expansion, defaulting to `0.1`.
 - **REQ-167**: MUST derive `ev_delta` by iterating from `auto_ev_step`, evaluating unclipped bracket images at `ev_zero-ev_delta` and `ev_zero+ev_delta`, and stopping at the first step where shadow clipping exceeds `--auto-ev-shadow-clipping` or highlight clipping reaches `--auto-ev-highlight-clipping`.
@@ -292,7 +292,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-037**: MUST verify `_parse_run_options` accepts `--debug` and enables persistent debug checkpoint configuration without changing existing positional or backend parsing.
 - **TST-038**: MUST verify debug checkpoint writers emit progressive TIFF filenames for extraction, merge, static postprocess, auto-brightness, auto-levels, and auto-adjust outputs in the output directory.
 - **TST-039**: MUST verify Debevec and Robertson OpenCV inputs are consumed directly from the linear HDR bracket contract without gamma-inversion preprocessing.
-- **TST-043**: MUST verify `_extract_bracket_images_float` executes exactly one RAW postprocess call for a linear camera-WB-aware base image and derives `ev_minus`, `ev_zero`, `ev_plus` only through NumPy EV scaling and `[0,1]` clipping.
+- **TST-043**: MUST verify `_extract_bracket_images_float` executes exactly one neutral RAW postprocess call, applies `rawpy` camera white-balance gains normalized to RGB mean `1.0` without explicit clipping, and derives `ev_minus`, `ev_zero`, `ev_plus` through NumPy EV scaling and `[0,1]` clipping.
 - **TST-044**: MUST verify CLI help documents `--gamma`, parser defaults to `--gamma=auto`, parser accepts `--gamma=<a,b>`, parser rejects invalid gamma payloads, and HDR bracket extraction remains linear.
 - **TST-050**: MUST verify `--gamma=auto` resolves transfer selection from EXIF color-space evidence with deterministic fallback ordering.
 - **TST-051**: MUST verify OpenCV backend applies resolved merge gamma as the final backend-local float step without extra clipping around the gamma transfer.
@@ -347,7 +347,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-007 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: rejects `--aa-*` when auto-adjust resolves to `disable` and rejects `--ab-*` when auto-brightness resolves to `disable`. |
 | REQ-008 | `src/dng2jpg/dng2jpg.py::_resolve_joint_auto_ev_solution`, `_optimize_joint_ev_zero_and_delta`; excerpt: solves `ev_zero` and `ev_delta` jointly from linear-image heuristics and preview statistics. |
 | REQ-009 | `src/dng2jpg/dng2jpg.py::_resolve_joint_auto_ev_solution`; excerpt: treats `--auto-ev` as the only automatic exposure path and emits the symmetric EV triplet. |
-| REQ-010 | `src/dng2jpg/dng2jpg.py::_extract_base_rgb_linear_float`, `_extract_bracket_images_float`; excerpt: executes one linear camera-WB-aware `rawpy.postprocess(...)` call before bracket derivation. |
+| REQ-010 | `src/dng2jpg/dng2jpg.py::_extract_base_rgb_linear_float`, `_extract_bracket_images_float`; excerpt: executes one neutral linear `rawpy.postprocess(...)` call with explicit no-auto and no-camera-WB parameters before bracket derivation. |
 | REQ-011 | `src/dng2jpg/dng2jpg.py::_run_luminance_hdr_cli`, `_format_external_command_for_log`; excerpt: deterministic luminance args including `--ldrTiff 32b`, emitted full command syntax with parameters, and backend-local float32 TIFF artifact handling. |
 | REQ-174 | `src/dng2jpg/dng2jpg.py::_materialize_bracket_tiffs_from_float`, `_write_rgb_float_tiff32`; excerpt: serializes DNG2JPG RGB float `[0,1]` brackets as TIFF float32 files. |
 | REQ-175 | `src/dng2jpg/dng2jpg.py::_run_luminance_hdr_cli`; excerpt: imports `luminance-hdr-cli` output TIFF float32 and normalizes to RGB float `[0,1]`. |
@@ -372,7 +372,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-028 | `src/dng2jpg/dng2jpg.py::_derive_supported_ev_values`; excerpt: uses `MAX_BRACKET=((bits_per_color-8)/2)-abs(ev_zero)`. |
 | REQ-029 | `src/dng2jpg/dng2jpg.py::_calculate_safe_ev_zero_max`; excerpt: `SAFE_ZERO_MAX = BASE_MAX - 1`. |
 | REQ-030 | `src/dng2jpg/dng2jpg.py::_is_ev_value_on_supported_step`; excerpt: quarter-step quantization validation. |
-| REQ-031 | `src/dng2jpg/dng2jpg.py::_extract_normalized_preview_luminance_stats`; excerpt: percentiles `0.1`, `50.0`, `99.9`. |
+| REQ-031 | `src/dng2jpg/dng2jpg.py::_extract_base_rgb_linear_float`; excerpt: applies normalized camera white-balance gains from `rawpy.camera_whitebalance` to the shared neutral base image before exposure planning. |
 | REQ-032 | `src/dng2jpg/dng2jpg.py::_build_joint_auto_ev_regularization_anchors`, `_optimize_joint_ev_zero_and_delta`; excerpt: converts the three automatic heuristics into soft center regularization for the joint solver. |
 | REQ-033 | `src/dng2jpg/dng2jpg.py::_parse_tmo_passthrough_value`, `_run_luminance_hdr_cli`; excerpt: parses and forwards `--tmo*` args unchanged. |
 | REQ-034 | `src/dng2jpg/dng2jpg.py::_order_bracket_paths`; excerpt: deterministic `ev_minus`, `ev_zero`, `ev_plus` order. |
@@ -437,13 +437,13 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-144 | `src/dng2jpg/dng2jpg.py::_normalize_opencv_hdr_to_unit_range`, `_run_opencv_merge_radiance`, `_run_opencv_merge_mertens`; excerpt: normalizes Debevec, Robertson, and Mertens outputs to one congruent RGB float `[0,1]` contract without backend-specific contrast compensation. |
 | REQ-145 | `src/dng2jpg/dng2jpg.py::_resolve_default_postprocess`; excerpt: assigns algorithm-specific OpenCV downstream postprocess defaults for Debevec/Robertson/Mertens. |
 | REQ-152 | `src/dng2jpg/dng2jpg.py::_run_opencv_merge_backend`; excerpt: routes Debevec and Robertson directly from the shared linear HDR bracket contract without gamma-inversion preprocessing. |
-| REQ-157 | `src/dng2jpg/dng2jpg.py::_describe_source_gamma_info`, `_extract_source_gamma_info`, `run`; excerpt: derives source gamma diagnostics from RAW metadata while leaving linear HDR extraction unchanged. |
+| REQ-157 | `src/dng2jpg/dng2jpg.py::_describe_source_gamma_info`, `_extract_source_gamma_info`, `run`; excerpt: derives source gamma diagnostics independently from neutral extraction and normalized camera white-balance application. |
 | REQ-163 | `src/dng2jpg/dng2jpg.py::_extract_source_gamma_info`, `_classify_tone_curve_gamma`; excerpt: applies metadata-priority ordering and returns `unknown` when metadata evidence is insufficient. |
 | REQ-164 | `src/dng2jpg/dng2jpg.py::_describe_source_gamma_info`, `run`; excerpt: prints deterministic source gamma label and numeric-or-undetermined value. |
 | REQ-169 | `src/dng2jpg/dng2jpg.py::_extract_exif_gamma_tags`, `_resolve_auto_merge_gamma`, `run`; excerpt: derives auto merge transfer from EXIF color-space evidence via `exifread` binary stream processing with source-gamma fallback. |
 | REQ-170 | `src/dng2jpg/dng2jpg.py::_apply_merge_gamma_float`, `_run_opencv_merge_backend`, `_run_hdr_plus_merge`; excerpt: applies merge gamma only as the last backend-local float step without post-gamma clipping. |
 | REQ-171 | `src/dng2jpg/dng2jpg.py::_describe_resolved_merge_gamma`, `run`; excerpt: prints deterministic merge-gamma request and resolved-transfer diagnostics. |
-| REQ-158 | `src/dng2jpg/dng2jpg.py::_extract_base_rgb_linear_float`; excerpt: normalizes the extracted HDR base image to RGB float `[0,1]` before bracket arithmetic. |
+| REQ-158 | `src/dng2jpg/dng2jpg.py::_extract_base_rgb_linear_float`; excerpt: normalizes neutral 16-bit extraction to RGB float scale, then applies normalized camera white-balance gains before bracket arithmetic. |
 | REQ-159 | `src/dng2jpg/dng2jpg.py::_build_exposure_multipliers`, `_build_bracket_images_from_linear_base_float`; excerpt: derives brackets exclusively by EV multipliers and `[0,1]` clipping of the normalized base tensor. |
 | REQ-160 | `src/dng2jpg/dng2jpg.py::_build_bracket_images_from_linear_base_float`, `_extract_bracket_images_float`, `_run_opencv_merge_backend`, `_run_luminance_hdr_cli`, `_run_hdr_plus_merge`; excerpt: preserves ordered float triplet `(ev_minus, ev_zero, ev_plus)` as the shared downstream contract. |
 | REQ-153 | `src/dng2jpg/dng2jpg.py::_estimate_opencv_camera_response`, `_run_opencv_merge_radiance`; excerpt: calibrates inverse camera response before Debevec/Robertson merge and passes both `times` and `response` into the merge call. |
@@ -503,7 +503,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | TST-037 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_enables_debug_flag`; verifies `--debug` parsing preserves existing positional and backend parsing. |
 | TST-038 | `tests/test_uint16_postprocess_pipeline.py::test_encode_jpg_writes_debug_checkpoints_with_progressive_suffixes`; verifies persistent TIFF checkpoint filenames and output-directory placement. |
 | TST-039 | `tests/test_uint16_postprocess_pipeline.py::test_run_opencv_merge_backend_dispatches_debevec_uint8_radiance_path_with_tonemap`, `test_run_opencv_merge_backend_dispatches_robertson_uint8_radiance_path`; verifies Debevec and Robertson consume the shared linear bracket contract without gamma inversion. |
-| TST-043 | `tests/test_uint16_postprocess_pipeline.py::test_extract_bracket_images_float_uses_single_linear_base_pass`; verifies one RAW postprocess call plus NumPy EV scaling/clipping for bracket derivation. |
+| TST-043 | `tests/test_uint16_postprocess_pipeline.py::test_extract_bracket_images_float_uses_single_linear_base_pass`; verifies one neutral RAW postprocess call, normalized camera white-balance gain application, and NumPy EV scaling/clipping for bracket derivation. |
 | TST-044 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_defaults_gamma_to_auto`, `test_parse_run_options_accepts_custom_gamma`, `test_parse_run_options_rejects_invalid_gamma_payload`, `test_print_help_documents_all_conversion_options_with_defaults`; verifies `--gamma` help, default/custom parsing, invalid-payload rejection, and preserved linear extraction. |
 | TST-040 | `tests/test_uint16_postprocess_pipeline.py::test_run_opencv_merge_mertens_applies_float_path_brightness_rescaling`, `test_run_opencv_merge_backend_keeps_mertens_inputs_as_float32`; verifies float-only Mertens output applies `255x` exposure-fusion scaling before final normalization. |
 | TST-050 | `tests/test_uint16_postprocess_pipeline.py::test_resolve_auto_merge_gamma_prefers_exif_colorspace`; verifies EXIF-first auto merge-gamma resolution ordering. |
