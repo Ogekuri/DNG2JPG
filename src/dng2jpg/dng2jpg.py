@@ -5928,13 +5928,14 @@ def _normalize_opencv_hdr_to_unit_range(np_module, hdr_rgb_float32):
 def _run_opencv_merge_mertens(cv2_module, np_module, exposures_float):
     """@brief Execute OpenCV Mertens exposure fusion path.
 
-    @details Runs `cv2.createMergeMertens().process(...)` on normalized RGB
-    float brackets, rescales the float result by `255` to match OpenCV
-    exposure-fusion brightness semantics observed on `uint8` inputs, and then
-    normalizes the result to the repository RGB float contract.
+    @details Runs `cv2.createMergeMertens().process(...)` on RGB float
+    brackets that already share one identical merge-gamma transfer curve,
+    rescales the float result by `255` to match OpenCV exposure-fusion
+    brightness semantics observed on `uint8` inputs, and then normalizes the
+    result to the repository RGB float contract.
     @param cv2_module {ModuleType} Imported OpenCV module.
     @param np_module {ModuleType} Imported numpy module.
-    @param exposures_float {list[object]} Ordered normalized RGB float bracket tensors.
+    @param exposures_float {list[object]} Ordered RGB float bracket tensors preconditioned with one identical merge-gamma transfer.
     @return {object} Normalized RGB float tensor.
     @satisfies REQ-108, REQ-110, REQ-144, REQ-154
     """
@@ -6088,8 +6089,10 @@ def _run_opencv_hdr_merge(
     seconds from EXIF `ExposureTime` for Debevec/Robertson or dispatches
     Mertens directly, and returns one congruent normalized RGB float image.
     Debevec and Robertson consume the shared linear HDR bracket contract
-    directly with calibrated inverse response, while Mertens consumes the same
-    float brackets and compensates OpenCV float-path scaling.
+    directly with calibrated inverse response and apply resolved merge gamma
+    as one backend-final output step, while Mertens first applies one
+    identical resolved merge-gamma transfer to each bracket input and does not
+    apply merge gamma on fused output.
     @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors.
     @param ev_value {float} EV bracket delta used to generate exposure files.
     @param ev_zero {float} Central EV used to generate exposure files.
@@ -6126,16 +6129,20 @@ def _run_opencv_hdr_merge(
     ]
 
     if opencv_merge_options.merge_algorithm == OPENCV_MERGE_ALGORITHM_MERTENS:
+        exposures_mertens_gamma = [
+            _apply_merge_gamma_float(
+                np_module=np_module,
+                image_rgb_float=exposure_float,
+                resolved_merge_gamma=resolved_merge_gamma,
+            )
+            for exposure_float in exposures_float
+        ]
         merged_rgb_float = _run_opencv_merge_mertens(
             cv2_module=cv2_module,
             np_module=np_module,
-            exposures_float=exposures_float,
+            exposures_float=exposures_mertens_gamma,
         )
-        return _apply_merge_gamma_float(
-            np_module=np_module,
-            image_rgb_float=merged_rgb_float,
-            resolved_merge_gamma=resolved_merge_gamma,
-        )
+        return merged_rgb_float
     exposure_times = _build_opencv_radiance_exposure_times(
         source_exposure_time_seconds=source_exposure_time_seconds,
         ev_zero=ev_zero,

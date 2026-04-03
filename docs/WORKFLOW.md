@@ -236,11 +236,11 @@
         - `_order_bracket_paths(...)`: enforce deterministic bracket order [`src/dng2jpg/dng2jpg.py`]
         - `_format_external_command_for_log(...)`: render the executed luminance argv as one deterministic shell-like runtime diagnostic string [`src/dng2jpg/dng2jpg.py`]
         - `_normalize_float_rgb_image(...)`: normalize luminance backend output to RGB float `[0,1]` [`src/dng2jpg/dng2jpg.py`]
-      - `_run_opencv_hdr_merge(...)`: merge in-memory float brackets through selected OpenCV `Debevec`, `Robertson`, or `Mertens` path and return normalized RGB float output without source-gamma inputs [`src/dng2jpg/dng2jpg.py`]
+      - `_run_opencv_hdr_merge(...)`: merge in-memory float brackets through selected OpenCV `Debevec`, `Robertson`, or `Mertens` path, applying resolved merge gamma on Mertens inputs only and returning normalized RGB float output without source-gamma inputs [`src/dng2jpg/dng2jpg.py`]
         - `float32 pass-through`: preserve incoming bracket payloads at OpenCV entry without re-normalization or clipping [`src/dng2jpg/dng2jpg.py`]
         - `_build_opencv_radiance_exposure_times(...)`: derive Debevec/Robertson exposure-time vector in seconds from EXIF `ExposureTime`, `ev_zero`, and bracket span [`src/dng2jpg/dng2jpg.py`]
-        - `_run_opencv_merge_mertens(...)`: execute OpenCV exposure fusion path on normalized float brackets [`src/dng2jpg/dng2jpg.py`]
-          - `cv2.createMergeMertens().process(...)`: run Mertens fusion on normalized RGB float bracket tensors (external boundary)
+        - `_run_opencv_merge_mertens(...)`: execute OpenCV exposure fusion path on float brackets preconditioned with one identical resolved merge-gamma transfer [`src/dng2jpg/dng2jpg.py`]
+          - `cv2.createMergeMertens().process(...)`: run Mertens fusion on preconditioned RGB float bracket tensors (external boundary)
           - `_normalize_opencv_hdr_to_unit_range(...)`: normalize OpenCV fusion output to repository RGB float contract [`src/dng2jpg/dng2jpg.py`]
        - `_run_opencv_merge_radiance(...)`: execute Debevec or Robertson radiance path by quantizing the shared linear bracket contract only inside the backend step, then normalize the merged result back to repository RGB float output [`src/dng2jpg/dng2jpg.py`]
           - `_to_uint8_image_array(...)`: derive backend-local `uint8` bracket payloads required by the calibrated OpenCV radiance path [`src/dng2jpg/dng2jpg.py`]
@@ -249,7 +249,7 @@
           - `cv2.createMergeRobertson().process(...)`: merge Robertson HDR radiance from backend-local `uint8` brackets with `times` and calibrated `response` (external boundary)
           - `cv2.createTonemap(...).process(...)`: apply simple gamma tone mapping for radiance paths when enabled (external boundary)
           - `_normalize_opencv_hdr_to_unit_range(...)`: normalize radiance or tone-mapped output to repository RGB float contract [`src/dng2jpg/dng2jpg.py`]
-        - `_apply_merge_gamma_float(...)`: apply resolved merge-output transfer as the final backend-local float step without upper clipping [`src/dng2jpg/dng2jpg.py`]
+        - `_apply_merge_gamma_float(...)`: apply resolved merge-output transfer as the final backend-local float step for OpenCV `Debevec` and `Robertson` without upper clipping [`src/dng2jpg/dng2jpg.py`]
           - `_ensure_three_channel_float_array_no_clip(...)`: normalize positive float RGB payloads without upper clipping [`src/dng2jpg/dng2jpg.py`]
         - `_normalize_debevec_hdr_to_unit_range(...)`: compatibility wrapper preserving legacy helper name while delegating to unified OpenCV normalization [`src/dng2jpg/dng2jpg.py`]
       - `_write_debug_rgb_float_tiff(...)`: persist merged HDR checkpoint as TIFF16 in the output directory when debug mode is enabled [`src/dng2jpg/dng2jpg.py`]
