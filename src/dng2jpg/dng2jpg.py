@@ -7463,7 +7463,7 @@ def _to_uint16_image_array(np_module, image_data):
 def _apply_post_gamma_float(np_module, image_rgb_float, gamma_value):
     """@brief Apply static post-gamma over RGB float tensor.
 
-    @details Executes the legacy static gamma equation on normalized RGB float
+    @details Executes the legacy static gamma equation on RGB float
     data (`output = input^(1/gamma)`) without intermediate stage-local `[0,1]`
     clipping, preserving float headroom for downstream pipeline stages.
     @param np_module {ModuleType} Imported numpy module.
@@ -7473,7 +7473,7 @@ def _apply_post_gamma_float(np_module, image_rgb_float, gamma_value):
     @satisfies REQ-012, REQ-013, REQ-132, REQ-134
     """
 
-    validated_input = _normalize_float_rgb_image(
+    validated_input = _ensure_three_channel_float_array_no_range_adjust(
         np_module=np_module,
         image_data=image_rgb_float,
     )
@@ -7578,7 +7578,7 @@ def _apply_auto_post_gamma_float(np_module, image_rgb_float, post_gamma_auto_opt
 def _apply_brightness_float(np_module, image_rgb_float, brightness_factor):
     """@brief Apply static brightness factor on RGB float tensor.
 
-    @details Executes the legacy brightness equation on normalized RGB float
+    @details Executes the legacy brightness equation on RGB float
     data (`output = factor * input`) without intermediate stage-local `[0,1]`
     clipping, preserving float headroom for downstream pipeline stages.
     @param np_module {ModuleType} Imported numpy module.
@@ -7588,7 +7588,7 @@ def _apply_brightness_float(np_module, image_rgb_float, brightness_factor):
     @satisfies REQ-012, REQ-013, REQ-132, REQ-134
     """
 
-    validated_input = _normalize_float_rgb_image(
+    validated_input = _ensure_three_channel_float_array_no_range_adjust(
         np_module=np_module,
         image_data=image_rgb_float,
     )
@@ -7601,17 +7601,17 @@ def _apply_brightness_float(np_module, image_rgb_float, brightness_factor):
 def _apply_contrast_float(np_module, image_rgb_float, contrast_factor):
     """@brief Apply static contrast factor on RGB float tensor.
 
-    @details Executes the legacy contrast equation on normalized RGB float data
+    @details Executes the legacy contrast equation on RGB float data
     (`output = mean + factor * (input - mean)`), where `mean` remains the
-    per-channel global image average, then applies stage-local clipping.
+    per-channel global image average, without stage-local clipping.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} RGB float image tensor.
     @param contrast_factor {float} Contrast interpolation factor.
-    @return {object} RGB float tensor after contrast stage.
+    @return {object} RGB float tensor after contrast stage without stage-local clipping.
     @satisfies REQ-012, REQ-013, REQ-132, REQ-134
     """
 
-    validated_input = _normalize_float_rgb_image(
+    validated_input = _ensure_three_channel_float_array_no_range_adjust(
         np_module=np_module,
         image_data=image_rgb_float,
     )
@@ -7620,13 +7620,13 @@ def _apply_contrast_float(np_module, image_rgb_float, contrast_factor):
     image_float = validated_input.astype(np_module.float64)
     channel_mean = np_module.mean(image_float, axis=(0, 1), keepdims=True)
     adjusted = channel_mean + float(contrast_factor) * (image_float - channel_mean)
-    return np_module.clip(adjusted, 0.0, 1.0).astype(np_module.float32)
+    return adjusted.astype(np_module.float32)
 
 
 def _apply_saturation_float(np_module, image_rgb_float, saturation_factor):
     """@brief Apply static saturation factor on RGB float tensor.
 
-    @details Executes the legacy saturation equation on normalized RGB float
+    @details Executes the legacy saturation equation on RGB float
     data using BT.709 grayscale (`output = gray + factor * (input - gray)`)
     without intermediate stage-local `[0,1]` clipping, preserving float
     headroom for downstream pipeline stages.
@@ -7637,7 +7637,7 @@ def _apply_saturation_float(np_module, image_rgb_float, saturation_factor):
     @satisfies REQ-012, REQ-013, REQ-132, REQ-134
     """
 
-    validated_input = _normalize_float_rgb_image(
+    validated_input = _ensure_three_channel_float_array_no_range_adjust(
         np_module=np_module,
         image_data=image_rgb_float,
     )
@@ -7682,10 +7682,10 @@ def _apply_static_postprocess_float(
     @satisfies REQ-012, REQ-013, REQ-132, REQ-134, REQ-148, REQ-176, REQ-177, REQ-178
     """
 
-    processed = _normalize_float_rgb_image(
+    processed = _ensure_three_channel_float_array_no_range_adjust(
         np_module=np_module,
         image_data=image_rgb_float,
-    )
+    ).astype(np_module.float32, copy=False)
     gamma_value = float(postprocess_options.post_gamma)
     brightness_factor = float(postprocess_options.brightness)
     contrast_factor = float(postprocess_options.contrast)

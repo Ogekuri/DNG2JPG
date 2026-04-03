@@ -1752,7 +1752,7 @@ backends requiring float32 TIFF inputs.
 
 ### fn `def _apply_post_gamma_float(np_module, image_rgb_float, gamma_value)` `priv` (L7463-7488)
 - @brief Apply static post-gamma over RGB float tensor.
-- @details Executes the legacy static gamma equation on normalized RGB float data (`output = input^(1/gamma)`) without intermediate stage-local `[0,1]` clipping, preserving float headroom for downstream pipeline stages.
+- @details Executes the legacy static gamma equation on RGB float data (`output = input^(1/gamma)`) without intermediate stage-local `[0,1]` clipping, preserving float headroom for downstream pipeline stages.
 - @param np_module {ModuleType} Imported numpy module.
 - @param image_rgb_float {object} RGB float image tensor.
 - @param gamma_value {float} Static post-gamma factor.
@@ -1788,7 +1788,7 @@ backends requiring float32 TIFF inputs.
 
 ### fn `def _apply_brightness_float(np_module, image_rgb_float, brightness_factor)` `priv` (L7578-7600)
 - @brief Apply static brightness factor on RGB float tensor.
-- @details Executes the legacy brightness equation on normalized RGB float data (`output = factor * input`) without intermediate stage-local `[0,1]` clipping, preserving float headroom for downstream pipeline stages.
+- @details Executes the legacy brightness equation on RGB float data (`output = factor * input`) without intermediate stage-local `[0,1]` clipping, preserving float headroom for downstream pipeline stages.
 - @param np_module {ModuleType} Imported numpy module.
 - @param image_rgb_float {object} RGB float image tensor.
 - @param brightness_factor {float} Brightness scale factor.
@@ -1797,16 +1797,16 @@ backends requiring float32 TIFF inputs.
 
 ### fn `def _apply_contrast_float(np_module, image_rgb_float, contrast_factor)` `priv` (L7601-7625)
 - @brief Apply static contrast factor on RGB float tensor.
-- @details Executes the legacy contrast equation on normalized RGB float data (`output = mean + factor * (input - mean)`), where `mean` remains the per-channel global image average, then applies stage-local clipping.
+- @details Executes the legacy contrast equation on RGB float data (`output = mean + factor * (input - mean)`), where `mean` remains the per-channel global image average, without stage-local clipping.
 - @param np_module {ModuleType} Imported numpy module.
 - @param image_rgb_float {object} RGB float image tensor.
 - @param contrast_factor {float} Contrast interpolation factor.
-- @return {object} RGB float tensor after contrast stage.
+- @return {object} RGB float tensor after contrast stage without stage-local clipping.
 - @satisfies REQ-012, REQ-013, REQ-132, REQ-134
 
 ### fn `def _apply_saturation_float(np_module, image_rgb_float, saturation_factor)` `priv` (L7626-7656)
 - @brief Apply static saturation factor on RGB float tensor.
-- @details Executes the legacy saturation equation on normalized RGB float data using BT.709 grayscale (`output = gray + factor * (input - gray)`) without intermediate stage-local `[0,1]` clipping, preserving float headroom for downstream pipeline stages.
+- @details Executes the legacy saturation equation on RGB float data using BT.709 grayscale (`output = gray + factor * (input - gray)`) without intermediate stage-local `[0,1]` clipping, preserving float headroom for downstream pipeline stages.
 - @param np_module {ModuleType} Imported numpy module.
 - @param image_rgb_float {object} RGB float image tensor.
 - @param saturation_factor {float} Saturation interpolation factor.

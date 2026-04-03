@@ -484,7 +484,7 @@ def test_apply_brightness_float_preserves_sub_u16_precision() -> None:
     assert output.shape == image_rgb_float.shape
     np.testing.assert_allclose(
         output,
-        np.clip(image_rgb_float.astype(np.float64) * 1.11, 0.0, 1.0).astype(np.float32),
+        (image_rgb_float.astype(np.float64) * 1.11).astype(np.float32),
         rtol=1e-6,
         atol=1e-6,
     )
@@ -493,6 +493,68 @@ def test_apply_brightness_float_preserves_sub_u16_precision() -> None:
         - np.round(output.astype(np.float64) * 65535.0)
     )
     assert np.any(distance_to_u16_grid > 1e-3)
+
+
+def test_apply_post_gamma_float_preserves_unclipped_float_domain() -> None:
+    """Gamma stage must preserve legacy equation without stage-local clipping."""
+
+    image_rgb_float = np.array(
+        [[[1.21, 0.81, 0.16], [0.49, 1.44, 0.25]]],
+        dtype=np.float32,
+    )
+    output = dng2jpg_module._apply_post_gamma_float(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_float=image_rgb_float,
+        gamma_value=2.0,
+    )
+    expected = np.power(image_rgb_float.astype(np.float64), 0.5).astype(np.float32)
+    np.testing.assert_allclose(output, expected, rtol=1e-6, atol=1e-6)
+    assert np.max(output) > 1.0
+
+
+def test_apply_contrast_float_preserves_unclipped_float_domain() -> None:
+    """Contrast stage must preserve legacy equation without stage-local clipping."""
+
+    image_rgb_float = np.array(
+        [[[0.05, 0.2, 0.95], [0.9, 0.8, 0.1]]],
+        dtype=np.float32,
+    )
+    output = dng2jpg_module._apply_contrast_float(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_float=image_rgb_float,
+        contrast_factor=1.8,
+    )
+    channel_mean = np.mean(image_rgb_float.astype(np.float64), axis=(0, 1), keepdims=True)
+    expected = (
+        channel_mean + 1.8 * (image_rgb_float.astype(np.float64) - channel_mean)
+    ).astype(np.float32)
+    np.testing.assert_allclose(output, expected, rtol=1e-6, atol=1e-6)
+    assert np.min(output) < 0.0
+    assert np.max(output) > 1.0
+
+
+def test_apply_saturation_float_preserves_unclipped_float_domain() -> None:
+    """Saturation stage must preserve legacy equation without stage-local clipping."""
+
+    image_rgb_float = np.array(
+        [[[0.02, 0.9, 0.1], [0.95, 0.05, 0.85]]],
+        dtype=np.float32,
+    )
+    output = dng2jpg_module._apply_saturation_float(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_float=image_rgb_float,
+        saturation_factor=1.8,
+    )
+    image_float = image_rgb_float.astype(np.float64)
+    grayscale = (
+        (0.2126 * image_float[:, :, 0])
+        + (0.7152 * image_float[:, :, 1])
+        + (0.0722 * image_float[:, :, 2])
+    )[:, :, None]
+    expected = (grayscale + 1.8 * (image_float - grayscale)).astype(np.float32)
+    np.testing.assert_allclose(output, expected, rtol=1e-6, atol=1e-6)
+    assert np.min(output) < 0.0
+    assert np.max(output) > 1.0
 
 
 def test_apply_static_postprocess_float_does_not_call_uint16_conversion(

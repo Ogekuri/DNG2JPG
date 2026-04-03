@@ -225,7 +225,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-140**: MUST NOT convert HDR+ RGB frames or HDR+ scalar proxy arrays to `uint16` at any point in the HDR+ backend.
 - **REQ-132**: MUST bypass numeric static postprocess when `post_gamma=1.0`, `brightness=1.0`, `contrast=1.0`, and `saturation=1.0`, and otherwise execute only non-neutral static factors directly on RGB float tensors without quantized intermediates.
 - **REQ-133**: MUST perform exactly one float-to-uint8 quantization immediately before final JPEG save.
-- **REQ-134**: MUST preserve legacy post-gamma, brightness, contrast, and saturation equations for numeric post-gamma mode in float domain without intermediate stage-local `[0,1]` clipping, preserving substage order `gamma->brightness->contrast->saturation`.
+- **REQ-134**: MUST preserve legacy numeric static equations in float domain, execute `gamma->brightness->contrast->saturation`, and MUST NOT apply stage-local `[0,1]` clipping in static substage input adaptation or substage equations.
 - **REQ-176**: MUST parse `--post-gamma=auto` as an alternative to numeric `--post-gamma=<value>` and replace only the static gamma substage, preserving downstream static `brightness->contrast->saturation` execution unchanged.
 - **REQ-177**: MUST compute auto-gamma from grayscale mean luminance `L` using `gamma=log(target_gray)/log(L)` when `luma_min < L < luma_max`, and MUST return input unchanged with resolved gamma `1.0` otherwise.
 - **REQ-178**: MUST apply auto-gamma by LUT-domain mapping in RGB float space using `output=input^gamma` with configurable LUT size, without stage-local clipping or quantized intermediates.
