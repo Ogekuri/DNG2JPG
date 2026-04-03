@@ -2351,7 +2351,7 @@ def test_run_opencv_merge_backend_skips_tonemap_for_mertens_when_disabled() -> N
 
 
 def test_extract_bracket_images_float_uses_single_linear_base_pass() -> None:
-    """Bracket extraction must use one neutral RAW pass plus dynamic-range WB base."""
+    """Bracket extraction must use one neutral RAW pass plus green-anchored WB base."""
 
     base_rgb_u16 = np.array(
         [
@@ -2419,8 +2419,11 @@ def test_extract_bracket_images_float_uses_single_linear_base_pass() -> None:
         float(fake_raw.white_level) - float(np.mean(np.array(fake_raw.black_level_per_channel)))
     )
     base_rgb_float = base_rgb_u16.astype(np.float32) / dynamic_range_max
-    wb_mean = float(np.mean(np.array([1.6, 1.0, 1.4], dtype=np.float64)))
-    normalized_gains = np.array([1.6 / wb_mean, 1.0 / wb_mean, 1.4 / wb_mean], dtype=np.float32)
+    green_coefficient = np.float32(1.0)
+    normalized_gains = np.array(
+        [1.6 / green_coefficient, 1.0 / green_coefficient, 1.4 / green_coefficient],
+        dtype=np.float32,
+    )
     balanced_base = base_rgb_float * normalized_gains.reshape((1, 1, 3))
     for bracket_image, multiplier in zip(bracket_images, multipliers):
         np.testing.assert_allclose(
@@ -2432,7 +2435,7 @@ def test_extract_bracket_images_float_uses_single_linear_base_pass() -> None:
 
 
 def test_extract_base_rgb_linear_float_uses_neutral_raw_postprocess_and_normalized_camera_wb() -> None:
-    """Base extraction must use dynamic-range normalization then normalized camera gains."""
+    """Base extraction must normalize by dynamic range then anchor WB gains to green."""
 
     base_rgb_u16 = np.array(
         [
@@ -2497,11 +2500,14 @@ def test_extract_base_rgb_linear_float_uses_neutral_raw_postprocess_and_normaliz
         float(fake_raw.white_level) - float(np.mean(np.array(fake_raw.black_level_per_channel)))
     )
     neutral_base = base_rgb_u16.astype(np.float32) / dynamic_range_max
-    wb_mean = float(np.mean(np.array([1.6, 1.0, 1.4], dtype=np.float64)))
-    expected_gains = np.array([1.6 / wb_mean, 1.0 / wb_mean, 1.4 / wb_mean], dtype=np.float32)
+    green_coefficient = np.float32(1.0)
+    expected_gains = np.array(
+        [1.6 / green_coefficient, 1.0 / green_coefficient, 1.4 / green_coefficient],
+        dtype=np.float32,
+    )
     expected = neutral_base * expected_gains.reshape((1, 1, 3))
     np.testing.assert_allclose(output, expected.astype(np.float32), rtol=1e-6, atol=1e-6)
-    assert float(np.mean(expected_gains)) == 1.0
+    assert float(expected_gains[1]) == 1.0
 
 
 def test_parse_run_options_defaults_gamma_to_auto() -> None:

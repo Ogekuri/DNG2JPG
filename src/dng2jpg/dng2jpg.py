@@ -1825,26 +1825,25 @@ def _extract_camera_whitebalance_rgb_triplet(raw_handle):
 
 
 def _normalize_white_balance_gains_rgb(np_module, camera_wb_rgb):
-    """@brief Normalize one RGB white-balance gain triplet to mean `1.0`.
+    """@brief Normalize one RGB white-balance gain triplet relative to green.
 
-    @details Converts one camera white-balance RGB triplet to float64,
-    computes its arithmetic mean, divides each channel by the mean, and returns
-    normalized gains preserving chromatic ratios without global brightness drift.
-    Invalid or non-positive means resolve to unit gains. Complexity: O(1). Side
-    effects: none.
+    @details Converts one camera white-balance RGB triplet to float64, divides
+    all channels by the green coefficient, and returns gains preserving camera
+    chromatic ratios with green anchored to `1.0`. Invalid or non-positive green
+    coefficients resolve to unit gains. Complexity: O(1). Side effects: none.
     @param np_module {ModuleType} Imported numpy module.
     @param camera_wb_rgb {tuple[float, float, float]} Positive finite camera WB RGB triplet.
-    @return {object} Float64 RGB gain vector with arithmetic mean equal to `1.0`.
+    @return {object} Float64 RGB gain vector normalized by green-channel coefficient.
     @satisfies REQ-031, REQ-158, REQ-183
     """
 
     wb_vector = np_module.asarray(camera_wb_rgb, dtype=np_module.float64)
     if wb_vector.shape != (3,):
         return np_module.asarray([1.0, 1.0, 1.0], dtype=np_module.float64)
-    wb_mean = float(np_module.mean(wb_vector))
-    if not math.isfinite(wb_mean) or wb_mean <= 0.0:
+    green_coefficient = float(wb_vector[1])
+    if not math.isfinite(green_coefficient) or green_coefficient <= 0.0:
         return np_module.asarray([1.0, 1.0, 1.0], dtype=np_module.float64)
-    normalized = wb_vector / wb_mean
+    normalized = wb_vector / green_coefficient
     if not np_module.all(np_module.isfinite(normalized)):
         return np_module.asarray([1.0, 1.0, 1.0], dtype=np_module.float64)
     normalized = np_module.maximum(normalized, 1e-12)
@@ -1980,7 +1979,7 @@ def _extract_base_rgb_linear_float(raw_handle, np_module):
     @details Executes exactly one neutral linear `rawpy.postprocess` call with
     deterministic no-auto/no-camera-WB parameters, converts output to float,
     normalizes by sensor dynamic range `white_level - mean(black_level_per_channel)`,
-    extracts camera WB metadata gains, normalizes gains to RGB mean `1.0`, and
+    extracts camera WB metadata gains, normalizes gains relative to green, and
     applies those gains in float domain without explicit clipping. Complexity:
     O(H*W). Side effects: one RAW postprocess invocation.
     @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
