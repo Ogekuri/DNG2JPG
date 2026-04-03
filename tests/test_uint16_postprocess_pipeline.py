@@ -478,58 +478,103 @@ def test_apply_static_postprocess_float_does_not_call_uint16_conversion(
     assert output.shape == image_rgb_float.shape
 
 
-def test_apply_static_postprocess_float_matches_legacy_within_quantization_tolerance() -> None:
-    """Float static postprocess must preserve legacy transfer semantics."""
+def test_apply_static_postprocess_float_skips_stage_when_all_factors_are_neutral(
+    monkeypatch,
+) -> None:
+    """Static postprocess must bypass all substages when all factors are neutral."""
 
     image_rgb_float = np.array(
-        [
-            [[0.03125, 0.125, 0.21875], [0.34375, 0.4375, 0.53125]],
-            [[0.65625, 0.75, 0.84375], [0.96875, 0.59375, 0.40625]],
-        ],
+        [[[0.12, 0.34, 0.56], [0.78, 0.9, 0.21]]],
         dtype=np.float32,
     )
     postprocess_options = dng2jpg_module.PostprocessOptions(
-        post_gamma=1.07,
-        brightness=1.13,
-        contrast=1.11,
-        saturation=1.09,
+        post_gamma=1.0,
+        brightness=1.0,
+        contrast=1.0,
+        saturation=1.0,
         jpg_compression=25,
         auto_brightness_enabled=False,
         auto_levels_enabled=False,
+        auto_adjust_enabled=False,
+        debug_enabled=False,
     )
+
+    def _fail_post_gamma(*_args, **_kwargs):
+        raise AssertionError("Unexpected gamma stage execution")
+
+    def _fail_brightness(*_args, **_kwargs):
+        raise AssertionError("Unexpected brightness stage execution")
+
+    def _fail_contrast(*_args, **_kwargs):
+        raise AssertionError("Unexpected contrast stage execution")
+
+    def _fail_saturation(*_args, **_kwargs):
+        raise AssertionError("Unexpected saturation stage execution")
+
+    monkeypatch.setattr(dng2jpg_module, "_apply_post_gamma_float", _fail_post_gamma)
+    monkeypatch.setattr(dng2jpg_module, "_apply_brightness_float", _fail_brightness)
+    monkeypatch.setattr(dng2jpg_module, "_apply_contrast_float", _fail_contrast)
+    monkeypatch.setattr(dng2jpg_module, "_apply_saturation_float", _fail_saturation)
 
     output = dng2jpg_module._apply_static_postprocess_float(  # pylint: disable=protected-access
         np_module=np,
         image_rgb_float=image_rgb_float,
         postprocess_options=postprocess_options,
     )
+    np.testing.assert_allclose(output, image_rgb_float, rtol=0.0, atol=0.0)
 
-    expected_float = np.power(image_rgb_float.astype(np.float64), 1.0 / 1.07)
-    expected_float = np.clip(expected_float * 1.13, 0.0, 1.0)
-    channel_mean = np.mean(expected_float, axis=(0, 1), keepdims=True)
-    expected_float = np.clip(
-        channel_mean + 1.11 * (expected_float - channel_mean),
-        0.0,
-        1.0,
+
+def test_apply_static_postprocess_float_executes_only_non_neutral_substages_in_order(
+    monkeypatch,
+) -> None:
+    """Static postprocess must execute only non-neutral substages in fixed order."""
+
+    image_rgb_float = np.array(
+        [[[0.2, 0.4, 0.6], [0.8, 0.3, 0.1]]],
+        dtype=np.float32,
     )
-    grayscale = (
-        (0.2126 * expected_float[:, :, 0])
-        + (0.7152 * expected_float[:, :, 1])
-        + (0.0722 * expected_float[:, :, 2])
-    )[:, :, None]
-    expected_float = np.clip(
-        grayscale + 1.09 * (expected_float - grayscale),
-        0.0,
-        1.0,
-    ).astype(np.float32)
-    legacy_quantized = _legacy_static_postprocess_quantized_reference(
+    postprocess_options = dng2jpg_module.PostprocessOptions(
+        post_gamma=1.0,
+        brightness=1.25,
+        contrast=1.0,
+        saturation=0.85,
+        jpg_compression=25,
+        auto_brightness_enabled=False,
+        auto_levels_enabled=False,
+        auto_adjust_enabled=False,
+        debug_enabled=False,
+    )
+    execution_order: list[str] = []
+
+    def _tracked_gamma(*_args, **_kwargs):
+        execution_order.append("gamma")
+        raise AssertionError("Gamma stage must be skipped for neutral factor")
+
+    def _tracked_brightness(*, np_module, image_rgb_float, brightness_factor):
+        execution_order.append("brightness")
+        return image_rgb_float.astype(np_module.float32, copy=False) + np_module.float32(0.01)
+
+    def _tracked_contrast(*_args, **_kwargs):
+        execution_order.append("contrast")
+        raise AssertionError("Contrast stage must be skipped for neutral factor")
+
+    def _tracked_saturation(*, np_module, image_rgb_float, saturation_factor):
+        execution_order.append("saturation")
+        return image_rgb_float.astype(np_module.float32, copy=False) + np_module.float32(0.02)
+
+    monkeypatch.setattr(dng2jpg_module, "_apply_post_gamma_float", _tracked_gamma)
+    monkeypatch.setattr(dng2jpg_module, "_apply_brightness_float", _tracked_brightness)
+    monkeypatch.setattr(dng2jpg_module, "_apply_contrast_float", _tracked_contrast)
+    monkeypatch.setattr(dng2jpg_module, "_apply_saturation_float", _tracked_saturation)
+
+    output = dng2jpg_module._apply_static_postprocess_float(  # pylint: disable=protected-access
+        np_module=np,
         image_rgb_float=image_rgb_float,
         postprocess_options=postprocess_options,
     )
-
-    np.testing.assert_allclose(output, expected_float, rtol=1e-6, atol=1e-6)
-    max_delta = float(np.max(np.abs(output.astype(np.float64) - legacy_quantized)))
-    assert max_delta <= (6.0 / 65535.0), max_delta
+    expected = image_rgb_float + np.float32(0.03)
+    np.testing.assert_allclose(output, expected, rtol=0.0, atol=0.0)
+    assert execution_order == ["brightness", "saturation"]
 
 
 def test_encode_jpg_quantizes_once_at_final_boundary(monkeypatch, tmp_path) -> None:

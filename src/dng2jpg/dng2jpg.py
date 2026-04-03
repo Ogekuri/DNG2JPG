@@ -6945,11 +6945,13 @@ def _apply_static_postprocess_float(
     """@brief Execute static postprocess chain with float-only stage internals.
 
     @details Accepts one normalized RGB float tensor, preserves the legacy
-    gamma/brightness/contrast/saturation equations and stage order, executes
-    all intermediate calculations in float domain without stage-local `[0,1]`
+    gamma/brightness/contrast/saturation equations and strict substage order,
+    bypasses the static stage when all static factors are neutral (`1.0`),
+    otherwise executes only non-neutral substages in order, runs all
+    intermediate calculations in float domain without stage-local `[0,1]`
     clipping on gamma/brightness/saturation stages, optionally emits persistent
-    debug TIFF checkpoints after each static substage, and eliminates the prior
-    float->uint16->float adaptation cycle from this step.
+    debug TIFF checkpoints after each executed static substage, and eliminates
+    the prior float->uint16->float adaptation cycle from this step.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} RGB float tensor.
     @param postprocess_options {PostprocessOptions} Parsed postprocess controls.
@@ -6963,58 +6965,77 @@ def _apply_static_postprocess_float(
         np_module=np_module,
         image_data=image_rgb_float,
     )
-    processed = _apply_post_gamma_float(
-        np_module=np_module,
-        image_rgb_float=processed,
-        gamma_value=postprocess_options.post_gamma,
-    )
-    if imageio_module is not None and debug_context is not None:
-        _write_debug_rgb_float_tiff(
-            imageio_module=imageio_module,
-            np_module=np_module,
-            debug_context=debug_context,
-            stage_suffix="_3.1_static_correction_gamma",
-            image_rgb_float=processed,
+    gamma_value = float(postprocess_options.post_gamma)
+    brightness_factor = float(postprocess_options.brightness)
+    contrast_factor = float(postprocess_options.contrast)
+    saturation_factor = float(postprocess_options.saturation)
+    static_stage_enabled = any(
+        factor != 1.0
+        for factor in (
+            gamma_value,
+            brightness_factor,
+            contrast_factor,
+            saturation_factor,
         )
-    processed = _apply_brightness_float(
-        np_module=np_module,
-        image_rgb_float=processed,
-        brightness_factor=postprocess_options.brightness,
     )
-    if imageio_module is not None and debug_context is not None:
-        _write_debug_rgb_float_tiff(
-            imageio_module=imageio_module,
+    if not static_stage_enabled:
+        return processed
+    if gamma_value != 1.0:
+        processed = _apply_post_gamma_float(
             np_module=np_module,
-            debug_context=debug_context,
-            stage_suffix="_3.2_static_correction_brightness",
             image_rgb_float=processed,
+            gamma_value=gamma_value,
         )
-    processed = _apply_contrast_float(
-        np_module=np_module,
-        image_rgb_float=processed,
-        contrast_factor=postprocess_options.contrast,
-    )
-    if imageio_module is not None and debug_context is not None:
-        _write_debug_rgb_float_tiff(
-            imageio_module=imageio_module,
+        if imageio_module is not None and debug_context is not None:
+            _write_debug_rgb_float_tiff(
+                imageio_module=imageio_module,
+                np_module=np_module,
+                debug_context=debug_context,
+                stage_suffix="_3.1_static_correction_gamma",
+                image_rgb_float=processed,
+            )
+    if brightness_factor != 1.0:
+        processed = _apply_brightness_float(
             np_module=np_module,
-            debug_context=debug_context,
-            stage_suffix="_3.3_static_correction_contrast",
             image_rgb_float=processed,
+            brightness_factor=brightness_factor,
         )
-    processed = _apply_saturation_float(
-        np_module=np_module,
-        image_rgb_float=processed,
-        saturation_factor=postprocess_options.saturation,
-    )
-    if imageio_module is not None and debug_context is not None:
-        _write_debug_rgb_float_tiff(
-            imageio_module=imageio_module,
+        if imageio_module is not None and debug_context is not None:
+            _write_debug_rgb_float_tiff(
+                imageio_module=imageio_module,
+                np_module=np_module,
+                debug_context=debug_context,
+                stage_suffix="_3.2_static_correction_brightness",
+                image_rgb_float=processed,
+            )
+    if contrast_factor != 1.0:
+        processed = _apply_contrast_float(
             np_module=np_module,
-            debug_context=debug_context,
-            stage_suffix="_3.4_static_correction_saturation",
             image_rgb_float=processed,
+            contrast_factor=contrast_factor,
         )
+        if imageio_module is not None and debug_context is not None:
+            _write_debug_rgb_float_tiff(
+                imageio_module=imageio_module,
+                np_module=np_module,
+                debug_context=debug_context,
+                stage_suffix="_3.3_static_correction_contrast",
+                image_rgb_float=processed,
+            )
+    if saturation_factor != 1.0:
+        processed = _apply_saturation_float(
+            np_module=np_module,
+            image_rgb_float=processed,
+            saturation_factor=saturation_factor,
+        )
+        if imageio_module is not None and debug_context is not None:
+            _write_debug_rgb_float_tiff(
+                imageio_module=imageio_module,
+                np_module=np_module,
+                debug_context=debug_context,
+                stage_suffix="_3.4_static_correction_saturation",
+                image_rgb_float=processed,
+            )
     return processed
 
 
