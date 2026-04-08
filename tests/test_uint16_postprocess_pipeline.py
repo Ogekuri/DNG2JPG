@@ -854,7 +854,7 @@ def test_apply_static_postprocess_float_executes_auto_gamma_then_static_substage
 
 
 def test_encode_jpg_quantizes_once_at_final_boundary(monkeypatch, tmp_path) -> None:
-    """`_encode_jpg` must call float->uint8 conversion exactly once at JPEG boundary."""
+    """Postprocess+encode must quantize exactly once at the final JPEG boundary."""
 
     merged_rgb_float = np.array(
         [
@@ -890,10 +890,15 @@ def test_encode_jpg_quantizes_once_at_final_boundary(monkeypatch, tmp_path) -> N
     monkeypatch.setattr(dng2jpg_module, "_to_uint8_image_array", _tracked_to_uint8)
     monkeypatch.setattr(dng2jpg_module, "_apply_static_postprocess_float", _tracked_static)
 
-    dng2jpg_module._encode_jpg(  # pylint: disable=protected-access
+    postprocessed_image_float = dng2jpg_module._postprocess(  # pylint: disable=protected-access
         imageio_module=imageio_module,
-        pil_image_module=pil_module,
         merged_image_float=merged_rgb_float,
+        postprocess_options=_build_postprocess_options(),
+        numpy_module=np,
+    )
+    dng2jpg_module._encode_jpg(  # pylint: disable=protected-access
+        pil_image_module=pil_module,
+        postprocessed_image_float=postprocessed_image_float,
         output_jpg=tmp_path / "out.jpg",
         postprocess_options=_build_postprocess_options(),
         numpy_module=np,
@@ -917,9 +922,6 @@ def test_encode_jpg_refreshes_exif_thumbnail_from_final_quantized_rgb_uint8(
         dtype=np.float32,
     )
     pil_module = _FakePilModule()
-    imageio_module = _FakeImageIoModule(
-        merged_rgb_u16=(merged_rgb_float * 65535.0).astype(np.uint16)
-    )
     captured_thumbnail_inputs: list[np.ndarray] = []
 
     class _FakePiexifModule:
@@ -965,9 +967,8 @@ def test_encode_jpg_refreshes_exif_thumbnail_from_final_quantized_rgb_uint8(
     )
 
     dng2jpg_module._encode_jpg(  # pylint: disable=protected-access
-        imageio_module=imageio_module,
         pil_image_module=pil_module,
-        merged_image_float=merged_rgb_float,
+        postprocessed_image_float=merged_rgb_float,
         output_jpg=tmp_path / "out.jpg",
         postprocess_options=_build_postprocess_options(),
         numpy_module=np,
@@ -994,7 +995,7 @@ def test_encode_jpg_refreshes_exif_thumbnail_from_final_quantized_rgb_uint8(
 def test_encode_jpg_writes_debug_checkpoints_with_progressive_suffixes(
     monkeypatch, tmp_path
 ) -> None:
-    """Debug mode must persist TIFF checkpoints in post-merge execution order."""
+    """Postprocess debug mode must persist TIFF checkpoints in execution order."""
 
     merged_rgb_float = np.array(
         [
@@ -1053,24 +1054,30 @@ def test_encode_jpg_writes_debug_checkpoints_with_progressive_suffixes(
         "_apply_auto_levels_float",
         _tracked_auto_levels,
     )
-    dng2jpg_module._encode_jpg(  # pylint: disable=protected-access
+    postprocess_options = dng2jpg_module.PostprocessOptions(
+        post_gamma=1.05,
+        brightness=1.02,
+        contrast=1.01,
+        saturation=1.03,
+        jpg_compression=25,
+        auto_brightness_enabled=True,
+        auto_levels_enabled=True,
+        auto_adjust_enabled=False,
+        debug_enabled=True,
+    )
+    postprocessed_image_float = dng2jpg_module._postprocess(  # pylint: disable=protected-access
         imageio_module=imageio_module,
-        pil_image_module=pil_module,
         merged_image_float=merged_rgb_float,
-        output_jpg=tmp_path / "out.jpg",
-        postprocess_options=dng2jpg_module.PostprocessOptions(
-            post_gamma=1.05,
-            brightness=1.02,
-            contrast=1.01,
-            saturation=1.03,
-            jpg_compression=25,
-            auto_brightness_enabled=True,
-            auto_levels_enabled=True,
-            auto_adjust_enabled=False,
-            debug_enabled=True,
-        ),
+        postprocess_options=postprocess_options,
         numpy_module=np,
         debug_context=debug_context,
+    )
+    dng2jpg_module._encode_jpg(  # pylint: disable=protected-access
+        pil_image_module=pil_module,
+        postprocessed_image_float=postprocessed_image_float,
+        output_jpg=tmp_path / "out.jpg",
+        postprocess_options=postprocess_options,
+        numpy_module=np,
     )
 
     assert call_trace == ["auto-brightness", "static", "auto-levels"]
@@ -1091,7 +1098,7 @@ def test_encode_jpg_writes_debug_checkpoints_with_progressive_suffixes(
 def test_encode_jpg_writes_auto_white_balance_checkpoint_when_enabled(
     monkeypatch, tmp_path
 ) -> None:
-    """Debug mode must persist auto-white-balance checkpoint when the stage runs."""
+    """Postprocess debug mode must persist auto-white-balance checkpoint."""
 
     merged_rgb_float = np.full((2, 2, 3), 0.25, dtype=np.float32)
     imageio_module = _FakeImageIoModule(
@@ -1109,25 +1116,31 @@ def test_encode_jpg_writes_auto_white_balance_checkpoint_when_enabled(
         lambda **kwargs: np.array(kwargs["image_rgb_float"], copy=True),
     )
 
-    dng2jpg_module._encode_jpg(  # pylint: disable=protected-access
+    postprocess_options = dng2jpg_module.PostprocessOptions(
+        post_gamma=1.0,
+        brightness=1.0,
+        contrast=1.0,
+        saturation=1.0,
+        jpg_compression=25,
+        auto_brightness_enabled=False,
+        auto_levels_enabled=False,
+        auto_adjust_enabled=False,
+        debug_enabled=True,
+        white_balance_mode="TTL",
+    )
+    postprocessed_image_float = dng2jpg_module._postprocess(  # pylint: disable=protected-access
         imageio_module=imageio_module,
-        pil_image_module=pil_module,
         merged_image_float=merged_rgb_float,
-        output_jpg=tmp_path / "out.jpg",
-        postprocess_options=dng2jpg_module.PostprocessOptions(
-            post_gamma=1.0,
-            brightness=1.0,
-            contrast=1.0,
-            saturation=1.0,
-            jpg_compression=25,
-            auto_brightness_enabled=False,
-            auto_levels_enabled=False,
-            auto_adjust_enabled=False,
-            debug_enabled=True,
-            white_balance_mode="TTL",
-        ),
+        postprocess_options=postprocess_options,
         numpy_module=np,
         debug_context=debug_context,
+    )
+    dng2jpg_module._encode_jpg(  # pylint: disable=protected-access
+        pil_image_module=pil_module,
+        postprocessed_image_float=postprocessed_image_float,
+        output_jpg=tmp_path / "out.jpg",
+        postprocess_options=postprocess_options,
+        numpy_module=np,
     )
 
     written_paths = [Path(path) for path, _image in imageio_module.writes]
@@ -4873,6 +4886,11 @@ def test_run_debug_writes_extraction_and_merge_checkpoints(monkeypatch, tmp_path
         lambda: (_FakeOpenCvModule(), np),
     )
     monkeypatch.setattr(dng2jpg_module, "_write_debug_rgb_float_tiff", _fake_write_debug)
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_postprocess",
+        lambda **kwargs: kwargs["merged_image_float"],
+    )
     monkeypatch.setattr(dng2jpg_module, "_encode_jpg", lambda **_kwargs: None)
     monkeypatch.setattr(
         dng2jpg_module,
@@ -4980,6 +4998,11 @@ def test_run_auto_ev_prints_joint_candidate_diagnostics(monkeypatch, tmp_path, c
         dng2jpg_module,
         "_resolve_auto_adjust_dependencies",
         lambda: (_FakeOpenCvModule(), np),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_postprocess",
+        lambda **kwargs: kwargs["merged_image_float"],
     )
     monkeypatch.setattr(dng2jpg_module, "_encode_jpg", lambda **_kwargs: None)
     monkeypatch.setattr(
@@ -5089,6 +5112,11 @@ def test_run_static_ev_uses_manual_center_and_reports_static_mode(
         dng2jpg_module,
         "_resolve_auto_adjust_dependencies",
         lambda: (_FakeOpenCvModule(), np),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_postprocess",
+        lambda **kwargs: kwargs["merged_image_float"],
     )
     monkeypatch.setattr(dng2jpg_module, "_encode_jpg", lambda **_kwargs: None)
     monkeypatch.setattr(
@@ -5212,6 +5240,11 @@ def test_run_skips_white_balance_when_mode_not_specified(monkeypatch, tmp_path) 
         "_run_opencv_merge_backend",
         _fake_run_opencv_merge_backend,
     )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_postprocess",
+        lambda **kwargs: kwargs["merged_image_float"],
+    )
     monkeypatch.setattr(dng2jpg_module, "_encode_jpg", lambda **_kwargs: None)
     monkeypatch.setattr(
         dng2jpg_module,
@@ -5329,9 +5362,14 @@ def test_run_routes_auto_white_balance_to_post_merge_stage(
     )
 
     def _capture_encode_stage(**kwargs):
-        encode_stage_inputs.append(np.array(kwargs["merged_image_float"], copy=True))
+        encode_stage_inputs.append(np.array(kwargs["postprocessed_image_float"], copy=True))
         encode_modes.append(kwargs["postprocess_options"].auto_white_balance_mode)
 
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_postprocess",
+        lambda **kwargs: kwargs["merged_image_float"],
+    )
     monkeypatch.setattr(dng2jpg_module, "_encode_jpg", _capture_encode_stage)
     monkeypatch.setattr(
         dng2jpg_module,
@@ -5456,6 +5494,11 @@ def test_run_prints_source_gamma_diagnostics(monkeypatch, tmp_path, capsys) -> N
         "_resolve_auto_adjust_dependencies",
         lambda: (_FakeOpenCvModule(), np),
     )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_postprocess",
+        lambda **kwargs: kwargs["merged_image_float"],
+    )
     monkeypatch.setattr(dng2jpg_module, "_encode_jpg", lambda **_kwargs: None)
     monkeypatch.setattr(
         dng2jpg_module,
@@ -5555,6 +5598,11 @@ def test_run_prints_merge_gamma_diagnostics(monkeypatch, tmp_path, capsys) -> No
         dng2jpg_module,
         "_run_opencv_merge_backend",
         lambda **_kwargs: np.full((2, 2, 3), 0.5, dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_postprocess",
+        lambda **kwargs: kwargs["merged_image_float"],
     )
     monkeypatch.setattr(dng2jpg_module, "_encode_jpg", lambda **_kwargs: None)
     monkeypatch.setattr(

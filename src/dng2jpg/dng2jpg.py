@@ -681,7 +681,7 @@ class PostprocessOptions:
     @param saturation {float} Saturation enhancement factor.
     @param jpg_compression {int} JPEG compression level in range `[0, 100]`.
     @param auto_brightness_enabled {bool} `True` when the pre-bracketing auto-brightness stage is enabled.
-    @param auto_brightness_pre_applied {bool} `True` when auto-brightness already executed before `_encode_jpg(...)` and must be skipped inside post-merge encoding.
+    @param auto_brightness_pre_applied {bool} `True` when auto-brightness already executed before `_postprocess(...)` and must be skipped inside post-merge processing.
     @param auto_brightness_options {AutoBrightnessOptions} Auto-brightness stage knobs.
     @param auto_levels_enabled {bool} `True` when auto-levels stage is enabled.
     @param auto_levels_options {AutoLevelsOptions} Auto-levels stage knobs.
@@ -691,7 +691,7 @@ class PostprocessOptions:
     @param merge_gamma_option {MergeGammaOption} Parsed merge-gamma request applied only by OpenCV and HDR+ backends.
     @param raw_white_balance_mode {str} RAW camera WB normalization mode in `{"GREEN","MAX","MIN","MEAN"}`.
     @param white_balance_mode {str|None} Optional `--auto-white-balance` mode applied to the linear base image after auto-brightness and before auto-zero evaluation.
-    @param auto_white_balance_pre_applied {bool} `True` when auto-white-balance already executed before `_encode_jpg(...)` and must be skipped inside post-merge encoding.
+    @param auto_white_balance_pre_applied {bool} `True` when auto-white-balance already executed before `_postprocess(...)` and must be skipped inside post-merge processing.
     @param white_balance_analysis_source {str} `--white-balance-analysis-source` selector for auto-white-balance analysis payload in `{"ev-zero","linear-base"}`.
     @param white_balance_xphoto_domain {str} Xphoto estimation-domain selector in `{"linear","srgb","source-auto"}` applied only to xphoto gain estimation.
     @param opencv_tonemap_options {OpenCvTonemapOptions|None} Optional OpenCV-Tonemap backend selector and knob payload.
@@ -12134,47 +12134,38 @@ def _load_piexif_dependency():
     return piexif
 
 
-def _encode_jpg(
+def _postprocess(
     imageio_module,
-    pil_image_module,
     merged_image_float,
-    output_jpg,
     postprocess_options,
     auto_adjust_dependencies=None,
     numpy_module=None,
     bits_per_color=16,
     source_gamma_info=None,
-    piexif_module=None,
-    source_exif_payload=None,
-    source_orientation=1,
     debug_context=None,
 ):
-    """@brief Encode merged HDR float payload into final JPG output.
+    """@brief Execute post-merge postprocessing stages on one RGB float image.
 
     @details Accepts one normalized RGB float image from the selected merge
     backend, executes optional auto-brightness stage unless pre-applied by the
     caller, executes optional auto-white-balance stage unless pre-applied by the
     caller, executes static postprocess stage (numeric
     gamma/brightness/contrast/saturation or auto-gamma replacement), optional
-    auto-levels stage, optional auto-adjust stage, and then performs exactly one float-to-uint8
-    conversion immediately before JPEG save. When debug context is present, the
-    function emits persistent TIFF16 checkpoints after each executed stage.
-    @param imageio_module {ModuleType} Imported imageio module with `imread` and `imwrite`.
-    @param pil_image_module {ModuleType} Imported Pillow image module.
+    auto-levels stage, and optional auto-adjust stage while preserving float
+    interfaces. When debug context is present, emits persistent TIFF16
+    checkpoints after each executed stage and returns normalized RGB float
+    output for final JPEG encoding.
+    @param imageio_module {ModuleType} Imported imageio module used for debug TIFF checkpoint emission.
     @param merged_image_float {object} Merged RGB float image produced by selected backend.
-    @param output_jpg {Path} Final JPG output path.
     @param postprocess_options {PostprocessOptions} Shared TIFF-to-JPG correction settings.
     @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` modules for the auto-adjust implementation.
     @param numpy_module {ModuleType|None} Optional numpy module for float-domain stages.
     @param bits_per_color {int} Source DNG bit depth used by IA auto-white-balance estimation.
     @param source_gamma_info {SourceGammaInfo|None} Source-gamma diagnostics used by xphoto `source-auto` estimation domain.
-    @param piexif_module {ModuleType|None} Optional piexif module for EXIF thumbnail refresh.
-    @param source_exif_payload {bytes|None} Serialized EXIF payload copied from input DNG.
-    @param source_orientation {int} Source EXIF orientation value in range `1..8`.
     @param debug_context {DebugArtifactContext|None} Optional persistent debug output metadata.
-    @return {None} Side effects only.
+    @return {object} Postprocessed RGB float tensor in range `[0,1]`.
     @exception RuntimeError Raised when numpy or auto-adjust dependencies are missing.
-    @satisfies REQ-012, REQ-013, REQ-014, REQ-041, REQ-050, REQ-069, REQ-073, REQ-074, REQ-075, REQ-078, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-106, REQ-123, REQ-132, REQ-133, REQ-134, REQ-148, REQ-176, REQ-182, REQ-183, REQ-199, REQ-200, REQ-213
+    @satisfies REQ-012, REQ-013, REQ-050, REQ-075, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-106, REQ-123, REQ-132, REQ-134, REQ-148, REQ-176, REQ-182, REQ-183, REQ-199, REQ-200, REQ-213
     """
 
     if numpy_module is not None:
@@ -12277,6 +12268,47 @@ def _encode_jpg(
             ),
         )
 
+    return np_module.clip(image_rgb_float, 0.0, 1.0).astype(np_module.float32, copy=False)
+
+
+def _encode_jpg(
+    pil_image_module,
+    postprocessed_image_float,
+    output_jpg,
+    postprocess_options,
+    numpy_module=None,
+    piexif_module=None,
+    source_exif_payload=None,
+    source_orientation=1,
+):
+    """@brief Encode one postprocessed RGB float payload into final JPG output.
+
+    @details Converts one postprocessed RGB float tensor to final quantized
+    uint8 pixels, writes the JPEG file with resolved compression quality,
+    refreshes EXIF thumbnail bytes when source EXIF payload exists, and leaves
+    timestamp synchronization to the caller.
+    @param pil_image_module {ModuleType} Imported Pillow image module.
+    @param postprocessed_image_float {object} Postprocessed RGB float tensor ready for final JPEG encoding.
+    @param output_jpg {Path} Final JPG output path.
+    @param postprocess_options {PostprocessOptions} Parsed options used for JPEG compression mapping.
+    @param numpy_module {ModuleType|None} Optional numpy module for final quantization.
+    @param piexif_module {ModuleType|None} Optional piexif module for EXIF thumbnail refresh.
+    @param source_exif_payload {bytes|None} Serialized EXIF payload copied from input DNG.
+    @param source_orientation {int} Source EXIF orientation value in range `1..8`.
+    @return {None} Side effects only.
+    @exception RuntimeError Raised when numpy or piexif dependencies are missing.
+    @satisfies REQ-014, REQ-041, REQ-078, REQ-133
+    """
+
+    if numpy_module is not None:
+        np_module = numpy_module
+    else:
+        try:
+            import numpy as np_module  # type: ignore
+        except ModuleNotFoundError as exc:
+            raise RuntimeError("Missing required dependency: numpy") from exc
+
+    image_rgb_float = np_module.asarray(postprocessed_image_float, dtype=np_module.float32)
     image_rgb_float = np_module.clip(image_rgb_float, 0.0, 1.0)
     final_image_rgb_uint8 = _to_uint8_image_array(
         np_module=np_module,
@@ -12824,20 +12856,25 @@ def run(args):
                     postprocess_options.auto_white_balance_mode is not None
                 ),
             )
-            _encode_jpg(
+            postprocessed_image_float = _postprocess(
                 imageio_module=imageio_module,
-                pil_image_module=pil_image_module,
                 merged_image_float=merged_image_float,
-                output_jpg=output_jpg,
                 postprocess_options=encode_postprocess_options,
                 auto_adjust_dependencies=auto_adjust_dependencies,
                 numpy_module=numpy_module,
                 bits_per_color=bits_per_color,
                 source_gamma_info=source_gamma_info,
+                debug_context=debug_context,
+            )
+            _encode_jpg(
+                pil_image_module=pil_image_module,
+                postprocessed_image_float=postprocessed_image_float,
+                output_jpg=output_jpg,
+                postprocess_options=encode_postprocess_options,
+                numpy_module=numpy_module,
                 piexif_module=piexif_module,
                 source_exif_payload=source_exif_payload,
                 source_orientation=source_orientation,
-                debug_context=debug_context,
             )
             _sync_output_file_timestamps_from_exif(
                 output_jpg=output_jpg,

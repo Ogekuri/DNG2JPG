@@ -192,11 +192,12 @@
         - _hdrplus_merge_temporal_rgb(...): temporal merge [src/dng2jpg/dng2jpg.py]
         - _hdrplus_merge_spatial_rgb(...): spatial merge [src/dng2jpg/dng2jpg.py]
       - _write_hdr_merge_debug_checkpoints(...): optional stage checkpoint writer [src/dng2jpg/dng2jpg.py]
-      - _encode_jpg(...): postprocess + JPEG encoding [src/dng2jpg/dng2jpg.py]
+      - _postprocess(...): postprocess [src/dng2jpg/dng2jpg.py]
         - _normalize_float_rgb_image(...): image range normalization [src/dng2jpg/dng2jpg.py]
         - _apply_static_postprocess_float(...): gamma/brightness/contrast/saturation stage [src/dng2jpg/dng2jpg.py]
         - _apply_auto_levels_float(...): optional auto-levels stage [src/dng2jpg/dng2jpg.py]
         - _apply_validated_auto_adjust_pipeline(...): optional validated auto-adjust stage [src/dng2jpg/dng2jpg.py]
+      - _encode_jpg(...): JPEG encoding [src/dng2jpg/dng2jpg.py]
         - _to_uint8_image_array(...): uint8 conversion [src/dng2jpg/dng2jpg.py]
         - _convert_compression_to_quality(jpg_compression): JPEG quality mapping [src/dng2jpg/dng2jpg.py]
         - _refresh_output_jpg_exif_thumbnail_after_save(...): EXIF thumbnail regeneration [src/dng2jpg/dng2jpg.py]
@@ -225,7 +226,8 @@
         - _extract_base_rgb_linear_float(...): RAW extraction and WB normalization [src/dng2jpg/dng2jpg.py]
         - _extract_bracket_images_float(...): bracket synthesis [src/dng2jpg/dng2jpg.py]
         - _run_luminance_hdr_cli(...) / _run_opencv_merge_backend(...) / _run_opencv_tonemap_backend(...) / _run_hdr_plus_merge(...): backend merge dispatch [src/dng2jpg/dng2jpg.py]
-        - _encode_jpg(...): postprocess and final encode [src/dng2jpg/dng2jpg.py]
+        - _postprocess(...): postprocess stage dispatch [src/dng2jpg/dng2jpg.py]
+        - _encode_jpg(...): final JPEG encode stage [src/dng2jpg/dng2jpg.py]
         - _sync_output_file_timestamps_from_exif(...): output timestamp synchronization [src/dng2jpg/dng2jpg.py]
 - External Boundaries:
   - Same external boundaries as PROC:main.

@@ -137,7 +137,7 @@ import subprocess
 
 ---
 
-# dng2jpg.py | Python | 12851L | 404 symbols | 31 imports | 268 comments
+# dng2jpg.py | Python | 12888L | 405 symbols | 32 imports | 269 comments
 > Path: `src/dng2jpg/dng2jpg.py`
 
 ## Imports
@@ -172,6 +172,7 @@ import cv2  # type: ignore
 import numpy as numpy_module  # type: ignore
 import numpy as numpy_module  # type: ignore
 import piexif  # type: ignore
+import numpy as np_module  # type: ignore
 import numpy as np_module  # type: ignore
 ```
 
@@ -413,7 +414,7 @@ import numpy as np_module  # type: ignore
 - @param saturation {float} Saturation enhancement factor.
 - @param jpg_compression {int} JPEG compression level in range `[0, 100]`.
 - @param auto_brightness_enabled {bool} `True` when the pre-bracketing auto-brightness stage is enabled.
-- @param auto_brightness_pre_applied {bool} `True` when auto-brightness already executed before `_encode_jpg(...)` and must be skipped inside post-merge encoding.
+- @param auto_brightness_pre_applied {bool} `True` when auto-brightness already executed before `_postprocess(...)` and must be skipped inside post-merge processing.
 - @param auto_brightness_options {AutoBrightnessOptions} Auto-brightness stage knobs.
 - @param auto_levels_enabled {bool} `True` when auto-levels stage is enabled.
 - @param auto_levels_options {AutoLevelsOptions} Auto-levels stage knobs.
@@ -423,7 +424,7 @@ import numpy as np_module  # type: ignore
 - @param merge_gamma_option {MergeGammaOption} Parsed merge-gamma request applied only by OpenCV and HDR+ backends.
 - @param raw_white_balance_mode {str} RAW camera WB normalization mode in `{"GREEN","MAX","MIN","MEAN"}`.
 - @param white_balance_mode {str|None} Optional `--auto-white-balance` mode applied to the linear base image after auto-brightness and before auto-zero evaluation.
-- @param auto_white_balance_pre_applied {bool} `True` when auto-white-balance already executed before `_encode_jpg(...)` and must be skipped inside post-merge encoding.
+- @param auto_white_balance_pre_applied {bool} `True` when auto-white-balance already executed before `_postprocess(...)` and must be skipped inside post-merge processing.
 - @param white_balance_analysis_source {str} `--white-balance-analysis-source` selector for auto-white-balance analysis payload in `{"ev-zero","linear-base"}`.
 - @param white_balance_xphoto_domain {str} Xphoto estimation-domain selector in `{"linear","srgb","source-auto"}` applied only to xphoto gain estimation.
 - @param opencv_tonemap_options {OpenCvTonemapOptions|None} Optional OpenCV-Tonemap backend selector and knob payload.
@@ -2900,22 +2901,24 @@ RGB float output without any file round-trip.
 - @satisfies REQ-051, REQ-075, REQ-106, REQ-123, REQ-136, REQ-137, REQ-148
 - @satisfies REQ-059, REQ-078
 
-### fn `def _encode_jpg(` `priv` (L12137-12150)
+### fn `def _postprocess(` `priv` (L12137-12145)
 
-### fn `def _collect_processing_errors(rawpy_module)` `priv` (L12310-12338)
+### fn `def _encode_jpg(` `priv` (L12274-12282)
+
+### fn `def _collect_processing_errors(rawpy_module)` `priv` (L12342-12370)
 - @brief Build deterministic tuple of recoverable processing exceptions.
 - @details Combines common IO/value/subprocess errors with rawpy-specific decoding error classes when present in runtime module version.
 - @param rawpy_module {ModuleType} Imported rawpy module.
 - @return {tuple[type[BaseException], ...]} Ordered deduplicated exception class tuple.
 - @satisfies REQ-059
 
-### fn `def _is_supported_runtime_os()` `priv` (L12339-12358)
+### fn `def _is_supported_runtime_os()` `priv` (L12371-12390)
 - @brief Validate runtime platform support for `dng2jpg`.
 - @details Accepts Linux runtime only; emits explicit non-Linux unsupported message that includes OS label (`Windows` or `MacOS`) for deterministic UX.
 - @return {bool} `True` when runtime OS is Linux; `False` otherwise.
 - @satisfies REQ-055, REQ-059
 
-### fn `def run(args)` (L12359-12558)
+### fn `def run(args)` (L12391-12590)
 - @brief Execute `dng2jpg` command pipeline.
 - @details Parses command options, validates dependencies, detects source DNG bits-per-color from RAW metadata, resolves manual or automatic EV-zero center, resolves static or adaptive EV selector, extracts one linear HDR base image using selected RAW WB normalization mode and derives three normalized RGB float brackets, executes the selected HDR backend with float input/output interfaces, executes the float-interface post-merge pipeline, optionally emits persistent debug TIFF checkpoints for executed stages, writes the final JPG, and guarantees temporary artifact cleanup through isolated temporary directory lifecycle.
 - @param args {list[str]} Command argument vector excluding command token.
@@ -3325,10 +3328,11 @@ RGB float output without any file round-trip.
 |`_overlay_composite`|fn|priv|11982-12003|def _overlay_composite(np_module, base_rgb, overlay_gray)|
 |`_apply_validated_auto_adjust_pipeline`|fn|priv|12004-12010|def _apply_validated_auto_adjust_pipeline(|
 |`_load_piexif_dependency`|fn|priv|12119-12136|def _load_piexif_dependency()|
-|`_encode_jpg`|fn|priv|12137-12150|def _encode_jpg(|
-|`_collect_processing_errors`|fn|priv|12310-12338|def _collect_processing_errors(rawpy_module)|
-|`_is_supported_runtime_os`|fn|priv|12339-12358|def _is_supported_runtime_os()|
-|`run`|fn|pub|12359-12558|def run(args)|
+|`_postprocess`|fn|priv|12137-12145|def _postprocess(|
+|`_encode_jpg`|fn|priv|12274-12282|def _encode_jpg(|
+|`_collect_processing_errors`|fn|priv|12342-12370|def _collect_processing_errors(rawpy_module)|
+|`_is_supported_runtime_os`|fn|priv|12371-12390|def _is_supported_runtime_os()|
+|`run`|fn|pub|12391-12590|def run(args)|
 
 
 ---
