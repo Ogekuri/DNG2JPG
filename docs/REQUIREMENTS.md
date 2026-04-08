@@ -120,7 +120,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-011**: MUST run `luminance-hdr-cli` with deterministic HDR/TMO arguments including `--ldrTiff 32b` for luminance backend, MUST print the full executed command syntax with parameters to runtime output, confine any required float32 TIFF intermediates to the backend step, and return normalized RGB float output.
 - **REQ-174**: MUST serialize luminance backend input bracket images from DNG2JPG RGB float `[0,1]` working format into TIFF float32 files before `luminance-hdr-cli` execution.
 - **REQ-175**: MUST import `luminance-hdr-cli` output TIFF float32 data and normalize it back to DNG2JPG RGB float `[0,1]` working format.
-- **REQ-012**: MUST exchange normalized OpenCV-compatible RGB float tensors `[0,1]` across linear-base extraction, auto-brightness, auto-white-balance, auto-zero evaluation, bracket generation, merge, dedicated postprocess orchestration, auto-adjust, and final-save preparation stages.
+- **REQ-012**: MUST exchange RGB float tensors across linear-base extraction, auto-brightness, auto-white-balance, auto-zero evaluation, bracket generation, merge, dedicated postprocess orchestration, auto-adjust, and final-save preparation stages.
 - **REQ-013**: MUST execute optional auto-brightness after `_extract_base_rgb_linear_float` and before `_calculate_auto_zero_evaluations`; static postprocess MUST keep `gamma->brightness->contrast->saturation`, and its brightness substage MUST apply only static/manual brightness.
 - **REQ-106**: MUST execute optional auto-adjust stage after static postprocess and before final JPEG quantization/write, preserve RGB float input/output interfaces, and confine any required float-to-uint16 or TIFF16 conversions to the auto-adjust step itself.
 - **REQ-014**: MUST synchronize output file timestamps from EXIF datetime only after refreshed EXIF metadata has been written when EXIF datetime metadata is available.
@@ -231,7 +231,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-140**: MUST NOT convert HDR+ RGB frames or HDR+ scalar proxy arrays to `uint16` at any point in the HDR+ backend.
 - **REQ-132**: MUST bypass numeric static postprocess when `post_gamma=1.0`, `brightness=1.0`, `contrast=1.0`, and `saturation=1.0`, and otherwise execute only non-neutral static factors directly on RGB float tensors without quantized intermediates.
 - **REQ-133**: MUST keep `_encode_jpg` scoped to final-save operations: one float-to-uint8 quantization, JPEG write, EXIF thumbnail refresh, and EXIF-timestamp synchronization.
-- **REQ-134**: MUST preserve legacy numeric static equations in float domain, execute `gamma->brightness->contrast->saturation`, and MUST NOT apply stage-local `[0,1]` clipping in static substage input adaptation or substage equations.
+- **REQ-134**: MUST preserve legacy numeric static equations in float domain, execute `gamma->brightness->contrast->saturation`, and MUST NOT apply stage-local `[0,1]` clipping in postprocess entry adaptation or static substage equations.
+- **REQ-214**: MUST normalize postprocess entry payloads only when they originate from non-float image encodings; merge-backend outputs already expressed as RGB float32 MUST be forwarded without entry normalization, clamping, or clipping.
 - **REQ-176**: MUST parse `--post-gamma=auto` as an alternative to numeric `--post-gamma=<value>` and replace only the static gamma substage, preserving downstream static `brightness->contrast->saturation` execution unchanged.
 - **REQ-177**: MUST compute auto-gamma from grayscale mean luminance `L` using `gamma=log(target_gray)/log(L)` when `luma_min < L < luma_max`, and MUST return input unchanged with resolved gamma `1.0` otherwise.
 - **REQ-178**: MUST apply auto-gamma by LUT-domain mapping in RGB float space using `output=input^gamma` with configurable LUT size, without stage-local clipping or quantized intermediates.
@@ -346,6 +347,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-072**: MUST verify OpenCV-Tonemap backend dispatches Drago, Reinhard, and Mantiuk implementations with fixed `gamma=1.0` and algorithm-specific optional knobs.
 - **TST-073**: MUST verify OpenCV-Tonemap backend applies resolved merge gamma only after selected tone mapping execution.
 - **TST-074**: MUST verify OpenCV-Tonemap backend does not clip float values at backend input, tone-map output, merge-gamma output, or backend return boundary.
+- **TST-078**: MUST verify `_postprocess` forwards merge-backend float outputs without entry clipping and normalizes only external non-float payloads before stage execution.
 
 ## 5. Evidence Matrix
 
@@ -383,7 +385,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-011 | `src/dng2jpg/dng2jpg.py::_run_luminance_hdr_cli`, `_format_external_command_for_log`; excerpt: deterministic luminance args including `--ldrTiff 32b`, emitted full command syntax with parameters, and backend-local float32 TIFF artifact handling. |
 | REQ-174 | `src/dng2jpg/dng2jpg.py::_materialize_bracket_tiffs_from_float`, `_write_rgb_float_tiff32`; excerpt: serializes DNG2JPG RGB float `[0,1]` brackets as TIFF float32 files. |
 | REQ-175 | `src/dng2jpg/dng2jpg.py::_run_luminance_hdr_cli`; excerpt: imports `luminance-hdr-cli` output TIFF float32 and normalizes to RGB float `[0,1]`. |
-| REQ-012 | `src/dng2jpg/dng2jpg.py::_postprocess`, `_apply_static_postprocess_float`; excerpt: keeps merge/postprocess/auto-adjust/final-save buffers on normalized RGB float interfaces. |
+| REQ-012 | `src/dng2jpg/dng2jpg.py::_extract_base_rgb_linear_float`, `_extract_bracket_images_float`, `_run_opencv_merge_backend`, `_run_opencv_tonemap_backend`, `_run_hdr_plus_merge`, `_postprocess`, `_encode_jpg`; excerpt: exchanges RGB float tensors across extraction, merge, postprocess, and final-save preparation boundaries. |
 | REQ-013 | `src/dng2jpg/dng2jpg.py::_postprocess`, `_apply_static_postprocess_float`; excerpt: executes optional auto-brightness before static order `gamma->brightness->contrast->saturation`, then optional auto-levels. |
 | REQ-014 | `src/dng2jpg/dng2jpg.py::_encode_jpg`, `_sync_output_file_timestamps_from_exif`; excerpt: writes refreshed EXIF metadata before applying `os.utime` from EXIF timestamp. |
 | REQ-015 | `src/dng2jpg/dng2jpg.py::run`; excerpt: parse/dependency/processing failures return `1`, success returns `0`. |
@@ -482,7 +484,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-154 | `src/dng2jpg/dng2jpg.py::_run_opencv_merge_mertens`, `_run_opencv_merge_backend`; excerpt: keeps Mertens on RGB float `[0,1]` brackets and applies `255x` output rescaling plus optional OpenCV tonemap before final normalization. |
 | REQ-132 | `src/dng2jpg/dng2jpg.py::_apply_static_postprocess_float`, `_apply_post_gamma_float`, `_apply_brightness_float`, `_apply_contrast_float`, `_apply_saturation_float`; excerpt: bypasses numeric static postprocess when all numeric static factors are neutral and otherwise executes only non-neutral static factors directly on RGB float tensors without quantized intermediates. |
 | REQ-133 | `src/dng2jpg/dng2jpg.py::_encode_jpg`; excerpt: performs the only float-to-uint8 quantization immediately before Pillow JPEG save. |
-| REQ-134 | `src/dng2jpg/dng2jpg.py::_apply_static_postprocess_float`, `_apply_post_gamma_float`, `_apply_brightness_float`, `_apply_contrast_float`, `_apply_saturation_float`; excerpt: preserves numeric static transfer equations in float domain and enforces static substage order `gamma->brightness->contrast->saturation` for executed factors. |
+| REQ-134 | `src/dng2jpg/dng2jpg.py::_postprocess`, `_apply_static_postprocess_float`, `_apply_post_gamma_float`, `_apply_brightness_float`, `_apply_contrast_float`, `_apply_saturation_float`; excerpt: preserves float-domain static equations, keeps substage order, and forbids stage-local clipping in postprocess entry adaptation and static substages. |
+| REQ-214 | `src/dng2jpg/dng2jpg.py::_postprocess`; excerpt: normalizes postprocess entry payloads only for non-float encodings and forwards merge-backend RGB float32 outputs without entry normalization/clamping/clipping. |
 | REQ-176 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `_apply_static_postprocess_float`; excerpt: parses `--post-gamma=auto` and replaces only the gamma substage while preserving downstream static brightness/contrast/saturation execution. |
 | REQ-177 | `src/dng2jpg/dng2jpg.py::_apply_auto_post_gamma_float`; excerpt: computes grayscale mean-luminance anchored gamma and returns unchanged input with gamma `1.0` outside configured guard bounds. |
 | REQ-178 | `src/dng2jpg/dng2jpg.py::_build_auto_post_gamma_lut_float`, `_apply_auto_post_gamma_float`; excerpt: applies float LUT-domain mapping `output=input^gamma` without quantized intermediates or stage-local clipping. |
@@ -588,3 +591,4 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | TST-072 | `tests/test_uint16_postprocess_pipeline.py::test_run_opencv_tonemap_backend_dispatches_algorithms_with_fixed_gamma`; verifies Drago/Reinhard/Mantiuk dispatch and fixed gamma `1.0`. |
 | TST-073 | `tests/test_uint16_postprocess_pipeline.py::test_run_opencv_tonemap_backend_applies_merge_gamma_last`; verifies merge gamma is applied after tone mapping. |
 | TST-074 | `tests/test_uint16_postprocess_pipeline.py::test_run_opencv_tonemap_backend_preserves_dynamic_range_without_clipping`; verifies no backend-local clipping across OpenCV-Tonemap boundaries. |
+| TST-078 | `tests/test_uint16_postprocess_pipeline.py::test_postprocess_skips_entry_normalization_for_float_merge_output`, `test_postprocess_normalizes_non_float_entry_payload`; verifies postprocess entry handling preserves merge float outputs and normalizes external non-float payloads only. |

@@ -193,7 +193,7 @@
         - _hdrplus_merge_spatial_rgb(...): spatial merge [src/dng2jpg/dng2jpg.py]
       - _write_hdr_merge_debug_checkpoints(...): optional stage checkpoint writer [src/dng2jpg/dng2jpg.py]
       - _postprocess(...): postprocess [src/dng2jpg/dng2jpg.py]
-        - _normalize_float_rgb_image(...): image range normalization [src/dng2jpg/dng2jpg.py]
+        - _prepare_postprocess_entry_rgb_float(...): postprocess entry payload adaptation [src/dng2jpg/dng2jpg.py]
         - _apply_static_postprocess_float(...): gamma/brightness/contrast/saturation stage [src/dng2jpg/dng2jpg.py]
         - _apply_auto_levels_float(...): optional auto-levels stage [src/dng2jpg/dng2jpg.py]
         - _apply_validated_auto_adjust_pipeline(...): optional validated auto-adjust stage [src/dng2jpg/dng2jpg.py]

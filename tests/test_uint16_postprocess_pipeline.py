@@ -909,6 +909,92 @@ def test_encode_jpg_quantizes_once_at_final_boundary(monkeypatch, tmp_path) -> N
 
 
 
+def test_postprocess_skips_entry_normalization_for_float_merge_output(
+    monkeypatch,
+) -> None:
+    """Postprocess must pass float merge output to static stage without entry clipping."""
+
+    merged_rgb_float = np.array([[[-0.25, 0.5, 1.75]]], dtype=np.float32)
+    imageio_module = _FakeImageIoModule(
+        merged_rgb_u16=np.zeros((1, 1, 3), dtype=np.uint16)
+    )
+    captured_static_inputs: list[np.ndarray] = []
+
+    def _capture_static(*, np_module, image_rgb_float, postprocess_options):
+        del np_module, postprocess_options
+        captured_static_inputs.append(np.array(image_rgb_float, copy=True))
+        return np.array(image_rgb_float, copy=True)
+
+    monkeypatch.setattr(dng2jpg_module, "_apply_static_postprocess_float", _capture_static)
+
+    _ = dng2jpg_module._postprocess(  # pylint: disable=protected-access
+        imageio_module=imageio_module,
+        merged_image_float=merged_rgb_float,
+        postprocess_options=dng2jpg_module.PostprocessOptions(
+            post_gamma=1.0,
+            brightness=1.0,
+            contrast=1.0,
+            saturation=1.0,
+            jpg_compression=25,
+            auto_brightness_enabled=False,
+            auto_levels_enabled=False,
+            auto_adjust_enabled=False,
+            debug_enabled=False,
+        ),
+        numpy_module=np,
+    )
+
+    assert len(captured_static_inputs) == 1
+    np.testing.assert_allclose(
+        captured_static_inputs[0],
+        merged_rgb_float,
+        rtol=0.0,
+        atol=0.0,
+    )
+
+
+def test_postprocess_normalizes_non_float_entry_payload(monkeypatch) -> None:
+    """Postprocess must normalize non-float image payloads before static stage."""
+
+    merged_rgb_u16 = np.array([[[0, 32768, 65535]]], dtype=np.uint16)
+    imageio_module = _FakeImageIoModule(
+        merged_rgb_u16=np.zeros((1, 1, 3), dtype=np.uint16)
+    )
+    captured_static_inputs: list[np.ndarray] = []
+
+    def _capture_static(*, np_module, image_rgb_float, postprocess_options):
+        del np_module, postprocess_options
+        captured_static_inputs.append(np.array(image_rgb_float, copy=True))
+        return np.array(image_rgb_float, copy=True)
+
+    monkeypatch.setattr(dng2jpg_module, "_apply_static_postprocess_float", _capture_static)
+
+    _ = dng2jpg_module._postprocess(  # pylint: disable=protected-access
+        imageio_module=imageio_module,
+        merged_image_float=merged_rgb_u16,
+        postprocess_options=dng2jpg_module.PostprocessOptions(
+            post_gamma=1.0,
+            brightness=1.0,
+            contrast=1.0,
+            saturation=1.0,
+            jpg_compression=25,
+            auto_brightness_enabled=False,
+            auto_levels_enabled=False,
+            auto_adjust_enabled=False,
+            debug_enabled=False,
+        ),
+        numpy_module=np,
+    )
+
+    assert len(captured_static_inputs) == 1
+    np.testing.assert_allclose(
+        captured_static_inputs[0],
+        np.array([[[0.0, 32768.0 / 65535.0, 1.0]]], dtype=np.float32),
+        rtol=0.0,
+        atol=1e-7,
+    )
+
+
 def test_encode_jpg_refreshes_exif_thumbnail_from_final_quantized_rgb_uint8(
     monkeypatch, tmp_path
 ) -> None:
@@ -2189,6 +2275,51 @@ def test_run_luminance_hdr_cli_prints_full_command_syntax(
     assert "--hdrResponseCurve" in recorded_command
     assert recorded_command[recorded_command.index("--hdrResponseCurve") + 1] == "linear"
     assert output.shape == (1, 1, 3)
+
+
+def test_run_luminance_hdr_cli_normalizes_float_tiff_output(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Luminance backend must normalize float TIFF output before postprocess handoff."""
+
+    bracket_images_float = [
+        np.full((1, 1, 3), 0.1, dtype=np.float32),
+        np.full((1, 1, 3), 0.5, dtype=np.float32),
+        np.full((1, 1, 3), 0.9, dtype=np.float32),
+    ]
+    imageio_module = _FakeImageIoModule(
+        merged_rgb_u16=np.array([[[-0.5, 0.5, 1.5]]], dtype=np.float32)
+    )
+
+    monkeypatch.setattr(
+        dng2jpg_module.subprocess,
+        "run",
+        lambda command, check: (command, check),
+    )
+
+    output = dng2jpg_module._run_luminance_hdr_cli(  # pylint: disable=protected-access
+        bracket_images_float=bracket_images_float,
+        temp_dir=tmp_path,
+        imageio_module=imageio_module,
+        np_module=np,
+        ev_value=1.0,
+        ev_zero=0.0,
+        luminance_options=dng2jpg_module.LuminanceOptions(
+            hdr_model="debevec",
+            hdr_weight="flat",
+            hdr_response_curve="linear",
+            tmo="mantiuk08",
+            tmo_extra_args=(),
+        ),
+    )
+
+    np.testing.assert_allclose(
+        output,
+        np.array([[[0.0, 0.5, 1.0]]], dtype=np.float32),
+        rtol=0.0,
+        atol=1e-7,
+    )
 
 
 def test_parse_run_options_rejects_non_linear_luminance_response_curve(capsys) -> None:

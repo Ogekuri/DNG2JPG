@@ -8294,6 +8294,34 @@ def _normalize_float_rgb_image(np_module, image_data):
     return normalized.astype(np_module.float32, copy=False)
 
 
+def _prepare_postprocess_entry_rgb_float(np_module, image_data):
+    """@brief Adapt postprocess entry payload to RGB float32 without unconditional clipping.
+
+    @details Preserves merge-backend float payload dynamic range by bypassing
+    normalization/clipping for float-typed inputs and normalizes only non-float
+    image encodings (`uint8`, `uint16`, or integer-like payloads) into the
+    repository RGB float working domain before postprocess stages execute.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_data {object} Postprocess entry image payload.
+    @return {object} RGB `float32` tensor with shape `(H,W,3)`.
+    @exception ValueError Raised when input shape is unsupported.
+    @satisfies REQ-012, REQ-134, REQ-214
+    """
+
+    dtype_kind = str(getattr(getattr(image_data, "dtype", None), "kind", ""))
+    if not dtype_kind:
+        dtype_kind = str(np_module.asarray(image_data).dtype.kind)
+    if dtype_kind == "f":
+        return _ensure_three_channel_float_array_no_bounds(
+            np_module=np_module,
+            image_data=image_data,
+        ).astype(np_module.float32, copy=False)
+    return _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=image_data,
+    )
+
+
 def _write_rgb_float_tiff16(imageio_module, np_module, output_path, image_rgb_float):
     """@brief Serialize one RGB float tensor as 16-bit TIFF payload.
 
@@ -12146,8 +12174,9 @@ def _postprocess(
 ):
     """@brief Execute post-merge postprocessing stages on one RGB float image.
 
-    @details Accepts one normalized RGB float image from the selected merge
-    backend, executes optional auto-brightness stage unless pre-applied by the
+    @details Accepts one merge-backend RGB payload, adapts postprocess entry by
+    normalizing only non-float encodings while preserving float payload dynamic
+    range, executes optional auto-brightness stage unless pre-applied by the
     caller, executes optional auto-white-balance stage unless pre-applied by the
     caller, executes static postprocess stage (numeric
     gamma/brightness/contrast/saturation or auto-gamma replacement), optional
@@ -12156,7 +12185,7 @@ def _postprocess(
     checkpoints after each executed stage and returns normalized RGB float
     output for final JPEG encoding.
     @param imageio_module {ModuleType} Imported imageio module used for debug TIFF checkpoint emission.
-    @param merged_image_float {object} Merged RGB float image produced by selected backend.
+    @param merged_image_float {object} Merged image payload produced by selected backend.
     @param postprocess_options {PostprocessOptions} Shared TIFF-to-JPG correction settings.
     @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` modules for the auto-adjust implementation.
     @param numpy_module {ModuleType|None} Optional numpy module for float-domain stages.
@@ -12165,7 +12194,7 @@ def _postprocess(
     @param debug_context {DebugArtifactContext|None} Optional persistent debug output metadata.
     @return {object} Postprocessed RGB float tensor in range `[0,1]`.
     @exception RuntimeError Raised when numpy or auto-adjust dependencies are missing.
-    @satisfies REQ-012, REQ-013, REQ-050, REQ-075, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-106, REQ-123, REQ-132, REQ-134, REQ-148, REQ-176, REQ-182, REQ-183, REQ-199, REQ-200, REQ-213
+    @satisfies REQ-012, REQ-013, REQ-050, REQ-075, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-106, REQ-123, REQ-132, REQ-134, REQ-148, REQ-176, REQ-182, REQ-183, REQ-199, REQ-200, REQ-213, REQ-214
     """
 
     if numpy_module is not None:
@@ -12179,7 +12208,7 @@ def _postprocess(
         except ModuleNotFoundError as exc:
             raise RuntimeError("Missing required dependency: numpy") from exc
 
-    image_rgb_float = _normalize_float_rgb_image(
+    image_rgb_float = _prepare_postprocess_entry_rgb_float(
         np_module=np_module,
         image_data=merged_image_float,
     )
