@@ -1088,6 +1088,52 @@ def test_encode_jpg_writes_debug_checkpoints_with_progressive_suffixes(
         assert image.shape[-1] == 3
 
 
+def test_encode_jpg_writes_auto_white_balance_checkpoint_when_enabled(
+    monkeypatch, tmp_path
+) -> None:
+    """Debug mode must persist auto-white-balance checkpoint when the stage runs."""
+
+    merged_rgb_float = np.full((2, 2, 3), 0.25, dtype=np.float32)
+    imageio_module = _FakeImageIoModule(
+        merged_rgb_u16=(merged_rgb_float * 65535.0).astype(np.uint16)
+    )
+    pil_module = _FakePilModule()
+    debug_context = dng2jpg_module.DebugArtifactContext(  # pylint: disable=protected-access
+        output_dir=tmp_path,
+        input_stem="sample",
+    )
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_apply_auto_white_balance_stage_float",
+        lambda **kwargs: np.array(kwargs["image_rgb_float"], copy=True),
+    )
+
+    dng2jpg_module._encode_jpg(  # pylint: disable=protected-access
+        imageio_module=imageio_module,
+        pil_image_module=pil_module,
+        merged_image_float=merged_rgb_float,
+        output_jpg=tmp_path / "out.jpg",
+        postprocess_options=dng2jpg_module.PostprocessOptions(
+            post_gamma=1.0,
+            brightness=1.0,
+            contrast=1.0,
+            saturation=1.0,
+            jpg_compression=25,
+            auto_brightness_enabled=False,
+            auto_levels_enabled=False,
+            auto_adjust_enabled=False,
+            debug_enabled=True,
+            white_balance_mode="TTL",
+        ),
+        numpy_module=np,
+        debug_context=debug_context,
+    )
+
+    written_paths = [Path(path) for path, _image in imageio_module.writes]
+    assert written_paths == [tmp_path / "sample_3.5_auto-white-balance.tiff"]
+
+
 def test_parse_run_options_accepts_remaining_auto_brightness_controls() -> None:
     """Parser must expose the surviving float-domain auto-brightness controls."""
 
@@ -1151,7 +1197,7 @@ def test_parse_run_options_accepts_auto_adjust_clahe_controls() -> None:
 
 
 def test_parse_run_options_accepts_white_balance_modes_and_selector_defaults() -> None:
-    """Parser must accept white-balance selectors and default analysis/xphoto selectors."""
+    """Parser must accept white-balance selectors and default xphoto selector."""
 
     parsed_default = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         ["input.dng", "output.jpg", "--ev=1"]
@@ -1162,10 +1208,6 @@ def test_parse_run_options_accepts_white_balance_modes_and_selector_defaults() -
         == dng2jpg_module.DEFAULT_RAW_WHITE_BALANCE_MODE
     )
     assert parsed_default[4].white_balance_mode is None
-    assert (
-        parsed_default[4].white_balance_analysis_source
-        == dng2jpg_module.WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO
-    )
     assert (
         parsed_default[4].white_balance_xphoto_domain
         == dng2jpg_module.DEFAULT_WHITE_BALANCE_XPHOTO_DOMAIN
@@ -1201,28 +1243,9 @@ def test_parse_run_options_accepts_white_balance_modes_and_selector_defaults() -
         assert parsed is not None
         assert parsed[4].white_balance_mode == white_balance_mode
         assert (
-            parsed[4].white_balance_analysis_source
-            == dng2jpg_module.WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO
-        )
-        assert (
             parsed[4].white_balance_xphoto_domain
             == dng2jpg_module.DEFAULT_WHITE_BALANCE_XPHOTO_DOMAIN
         )
-
-    parsed_linear_base = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        [
-            "input.dng",
-            "output.jpg",
-            "--ev=1",
-            "--auto-white-balance=Simple",
-            "--white-balance-analysis-source=linear-base",
-        ]
-    )
-    assert parsed_linear_base is not None
-    assert (
-        parsed_linear_base[4].white_balance_analysis_source
-        == dng2jpg_module.WHITE_BALANCE_ANALYSIS_SOURCE_LINEAR_BASE
-    )
     parsed_xphoto_domain = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         [
             "input.dng",
@@ -1254,16 +1277,16 @@ def test_parse_run_options_rejects_invalid_white_balance_mode_or_selectors() -> 
         ["input.dng", "output.jpg", "--ev=1", "--auto-white-balance"]
     )
     assert missing is None
-    invalid_analysis_source = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+    removed_analysis_source = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         [
             "input.dng",
             "output.jpg",
             "--ev=1",
             "--auto-white-balance=Simple",
-            "--white-balance-analysis-source=invalid",
+            "--white-balance-analysis-source=linear-base",
         ]
     )
-    assert invalid_analysis_source is None
+    assert removed_analysis_source is None
     invalid_xphoto_domain = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         [
             "input.dng",
@@ -3137,20 +3160,21 @@ def test_parse_run_options_rejects_invalid_gamma_payload() -> None:
     assert invalid_non_positive is None
 
 
-def test_apply_white_balance_to_bracket_triplet_uses_configured_analysis_image_and_identical_gains(
+def test_apply_auto_white_balance_stage_float_uses_transient_auto_brightness_preprocessing(
     monkeypatch,
 ) -> None:
-    """White-balance stage must estimate from configured analysis image only."""
+    """Auto-white-balance must estimate on transient auto-brightness data only."""
 
-    bracket_images_float = [
-        np.full((2, 2, 3), 0.10, dtype=np.float32),
-        np.full((2, 2, 3), 0.20, dtype=np.float32),
-        np.full((2, 2, 3), 0.30, dtype=np.float32),
-    ]
-    analysis_image_rgb_float = np.full((2, 2, 3), 0.70, dtype=np.float32)
+    stage_input = np.full((2, 2, 3), [0.2, 0.3, 0.4], dtype=np.float32)
+    transient_estimation = np.full((2, 2, 3), [0.8, 0.6, 0.5], dtype=np.float32)
     fake_cv2 = _FakeOpenCvModule()
-    analysis_calls: list[np.ndarray] = []
-    resolved_xphoto_domains: list[str] = []
+    captured_estimation_images: list[np.ndarray] = []
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_apply_auto_brightness_rgb_float",
+        lambda **_kwargs: np.array(transient_estimation, copy=True),
+    )
 
     def _fake_estimate_xphoto(
         *,
@@ -3163,8 +3187,8 @@ def test_apply_white_balance_to_bracket_triplet_uses_configured_analysis_image_a
         source_gamma_info,
     ):
         del cv2_module, np_module, white_balance_mode, bits_per_color, source_gamma_info
-        analysis_calls.append(np.array(analysis_image_rgb_float, copy=True))
-        resolved_xphoto_domains.append(white_balance_xphoto_domain)
+        captured_estimation_images.append(np.array(analysis_image_rgb_float, copy=True))
+        assert white_balance_xphoto_domain == "srgb"
         return np.array([2.0, 3.0, 4.0], dtype=np.float64)
 
     monkeypatch.setattr(
@@ -3173,32 +3197,24 @@ def test_apply_white_balance_to_bracket_triplet_uses_configured_analysis_image_a
         _fake_estimate_xphoto,
     )
 
-    output_triplet = dng2jpg_module._apply_white_balance_to_bracket_triplet(  # pylint: disable=protected-access
-        bracket_images_float=bracket_images_float,
+    output_image = dng2jpg_module._apply_auto_white_balance_stage_float(  # pylint: disable=protected-access
+        image_rgb_float=stage_input,
         white_balance_mode="Simple",
-        white_balance_analysis_image_float=analysis_image_rgb_float,
+        auto_brightness_options=dng2jpg_module.AutoBrightnessOptions(),
         white_balance_xphoto_domain="srgb",
         auto_adjust_dependencies=(fake_cv2, np),
     )
 
-    assert len(analysis_calls) == 1
-    assert resolved_xphoto_domains == ["srgb"]
-    np.testing.assert_allclose(analysis_calls[0], analysis_image_rgb_float, rtol=0.0, atol=0.0)
+    assert len(captured_estimation_images) == 1
     np.testing.assert_allclose(
-        output_triplet[0],
-        bracket_images_float[0] * np.array([2.0, 3.0, 4.0], dtype=np.float32),
-        rtol=1e-6,
-        atol=1e-6,
+        captured_estimation_images[0],
+        transient_estimation,
+        rtol=0.0,
+        atol=0.0,
     )
     np.testing.assert_allclose(
-        output_triplet[1],
-        bracket_images_float[1] * np.array([2.0, 3.0, 4.0], dtype=np.float32),
-        rtol=1e-6,
-        atol=1e-6,
-    )
-    np.testing.assert_allclose(
-        output_triplet[2],
-        bracket_images_float[2] * np.array([2.0, 3.0, 4.0], dtype=np.float32),
+        output_image,
+        stage_input * np.array([2.0, 3.0, 4.0], dtype=np.float32),
         rtol=1e-6,
         atol=1e-6,
     )
@@ -5153,10 +5169,10 @@ def test_run_skips_white_balance_when_mode_not_specified(monkeypatch, tmp_path) 
     np.testing.assert_allclose(captured_brackets[0][2], 0.5, rtol=0.0, atol=0.0)
 
 
-def test_run_passes_linear_base_white_balance_analysis_when_selected(
+def test_run_routes_auto_white_balance_to_post_merge_stage(
     monkeypatch, tmp_path
 ) -> None:
-    """Runtime must pass linear-base-derived WB analysis payload when selected."""
+    """Runtime must not apply white balance on bracket triplet before HDR merge."""
 
     input_dng = tmp_path / "scene.dng"
     input_dng.write_bytes(b"fake-dng")
@@ -5188,8 +5204,10 @@ def test_run_passes_linear_base_white_balance_analysis_when_selected(
         merged_rgb_u16=np.full((2, 2, 3), 32768, dtype=np.uint16)
     )
     fake_pil_module = _FakePilModule()
-    wb_analysis_calls: list[np.ndarray] = []
+    pre_merge_wb_calls: list[str] = []
     merge_input_triplets: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+    encode_stage_inputs: list[np.ndarray] = []
+    encode_modes: list[str | None] = []
 
     monkeypatch.setattr(
         dng2jpg_module,
@@ -5229,20 +5247,10 @@ def test_run_passes_linear_base_white_balance_analysis_when_selected(
         ),
     )
 
-    def _capture_white_balance_stage(**kwargs):
-        wb_analysis_calls.append(
-            np.array(kwargs["white_balance_analysis_image_float"], copy=True)
-        )
-        gains = np.array([1.1, 1.0, 0.9], dtype=np.float32).reshape((1, 1, 3))
-        return [
-            np.array(image, copy=True) * gains
-            for image in kwargs["bracket_images_float"]
-        ]
-
     monkeypatch.setattr(
         dng2jpg_module,
         "_apply_white_balance_to_bracket_triplet",
-        _capture_white_balance_stage,
+        lambda **_kwargs: pre_merge_wb_calls.append("called"),
     )
     monkeypatch.setattr(
         dng2jpg_module,
@@ -5252,7 +5260,12 @@ def test_run_passes_linear_base_white_balance_analysis_when_selected(
             np.full((2, 2, 3), 0.5, dtype=np.float32),
         )[1],
     )
-    monkeypatch.setattr(dng2jpg_module, "_encode_jpg", lambda **_kwargs: None)
+
+    def _capture_encode_stage(**kwargs):
+        encode_stage_inputs.append(np.array(kwargs["merged_image_float"], copy=True))
+        encode_modes.append(kwargs["postprocess_options"].auto_white_balance_mode)
+
+    monkeypatch.setattr(dng2jpg_module, "_encode_jpg", _capture_encode_stage)
     monkeypatch.setattr(
         dng2jpg_module,
         "_sync_output_file_timestamps_from_exif",
@@ -5266,33 +5279,39 @@ def test_run_passes_linear_base_white_balance_analysis_when_selected(
             "--ev=1",
             "--ev-zero=1",
             "--auto-white-balance=TTL",
-            "--white-balance-analysis-source=linear-base",
             "--hdr-merge=OpenCV-Merge",
         ]
     )
 
     assert exit_code == 0
-    assert len(wb_analysis_calls) == 1
-    assert float(np.max(wb_analysis_calls[0])) > 1.0
+    assert pre_merge_wb_calls == []
     assert len(merge_input_triplets) == 1
     np.testing.assert_allclose(
         merge_input_triplets[0][0],
-        np.full((2, 2, 3), [0.11, 0.10, 0.09], dtype=np.float32),
+        np.full((2, 2, 3), 0.1, dtype=np.float32),
         rtol=1e-6,
         atol=1e-6,
     )
     np.testing.assert_allclose(
         merge_input_triplets[0][1],
-        np.full((2, 2, 3), [1.1, 1.0, 0.9], dtype=np.float32),
+        np.full((2, 2, 3), 1.0, dtype=np.float32),
         rtol=1e-6,
         atol=1e-6,
     )
     np.testing.assert_allclose(
         merge_input_triplets[0][2],
-        np.full((2, 2, 3), [0.33, 0.30, 0.27], dtype=np.float32),
+        np.full((2, 2, 3), 0.3, dtype=np.float32),
         rtol=1e-6,
         atol=1e-6,
     )
+    assert len(encode_stage_inputs) == 1
+    np.testing.assert_allclose(
+        encode_stage_inputs[0],
+        np.full((2, 2, 3), 0.5, dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    assert encode_modes == ["TTL"]
 
 
 def test_run_prints_source_gamma_diagnostics(monkeypatch, tmp_path, capsys) -> None:

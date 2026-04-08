@@ -1207,22 +1207,12 @@ def print_help(version):
     )
     _print_help_option(
         "--auto-white-balance=<mode>",
-        "Optional bracket white-balance stage executed after bracket extraction and before HDR merge backend selection.",
+        "Optional post-merge white-balance stage executed after auto-brightness and before static postprocess controls.",
         (
             "Allowed values: "
             + ", ".join(_WHITE_BALANCE_MODES)
             + ".",
             "Default: disabled (stage skipped when omitted).",
-        ),
-    )
-    _print_help_option(
-        "--white-balance-analysis-source=<source>",
-        "Optional white-balance analysis payload selector used when white-balance stage is enabled.",
-        (
-            "Allowed values: "
-            + ", ".join(_WHITE_BALANCE_ANALYSIS_SOURCES)
-            + ".",
-            f"Default: `{WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO}`.",
         ),
     )
     _print_help_option(
@@ -4633,9 +4623,7 @@ def _parse_run_options(args):
     step controls, optional RAW white-balance normalization selector
     (`--white-balance=<GREEN|MAX|MIN|MEAN>`),
     optional auto-white-balance selector (`--auto-white-balance=<mode>`) applied to
-    bracket triplet before backend merge when enabled, optional
-    white-balance analysis selector (`--white-balance-analysis-source=<ev-zero|linear-base>`),
-    optional xphoto estimation-domain selector
+    post-merge image after auto-brightness when enabled, optional xphoto estimation-domain selector
     (`--white-balance-xphoto-domain=<linear|srgb|source-auto>`),
     optional postprocess controls including `--post-gamma=<value|auto>` and
     optional `--post-gamma-auto-*` knobs,
@@ -4872,20 +4860,6 @@ def _parse_run_options(args):
             if parsed_auto_white_balance_mode is None:
                 return None
             auto_white_balance_mode = parsed_auto_white_balance_mode
-            idx += 1
-            continue
-
-        if token.startswith("--white-balance-analysis-source="):
-            parsed_auto_white_balance_analysis_source = (
-                _parse_white_balance_analysis_source_option(
-                    token.split("=", 1)[1]
-                )
-            )
-            if parsed_auto_white_balance_analysis_source is None:
-                return None
-            auto_white_balance_analysis_source = (
-                parsed_auto_white_balance_analysis_source
-            )
             idx += 1
             continue
 
@@ -6474,6 +6448,126 @@ def _apply_channel_gains_to_white_balance_triplet(
             ).astype(np_module.float32)
         )
     return balanced_triplet
+
+
+def _apply_channel_gains_to_white_balance_image(
+    np_module,
+    image_rgb_float,
+    channel_gains,
+):
+    """@brief Apply one channel-gain vector to one RGB image.
+
+    @details Broadcast-multiplies one normalized RGB float image by one
+    channel-gain vector `(r_gain,g_gain,b_gain)` without stage-local clipping.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_float {object} RGB float image tensor.
+    @param channel_gains {object} Channel gains vector `(r_gain, g_gain, b_gain)`.
+    @return {object} White-balanced RGB float image.
+    @satisfies REQ-200
+    """
+
+    normalized_image = _ensure_three_channel_float_array_no_range_adjust(
+        np_module=np_module,
+        image_data=image_rgb_float,
+    ).astype(np_module.float32, copy=False)
+    gains_rgb = np_module.asarray(channel_gains, dtype=np_module.float64).reshape((1, 1, 3))
+    balanced_image = normalized_image.astype(np_module.float64, copy=False) * gains_rgb
+    return balanced_image.astype(np_module.float32, copy=False)
+
+
+def _apply_auto_white_balance_stage_float(
+    image_rgb_float,
+    white_balance_mode,
+    auto_brightness_options,
+    white_balance_xphoto_domain=DEFAULT_WHITE_BALANCE_XPHOTO_DOMAIN,
+    source_gamma_info=None,
+    bits_per_color=16,
+    auto_adjust_dependencies=None,
+):
+    """@brief Apply post-merge auto-white-balance stage on one RGB float image.
+
+    @details Keeps the stage disabled when `white_balance_mode` is `None`.
+    Otherwise computes one transient estimation image by applying the shared
+    auto-brightness algorithm to the stage input, derives one gain vector using
+    the configured white-balance mode, applies gains to the original stage
+    input, and emits one corrected RGB float output.
+    @param image_rgb_float {object} Post-merge RGB float stage input image.
+    @param white_balance_mode {str|None} Optional canonical white-balance mode selector.
+    @param auto_brightness_options {AutoBrightnessOptions} Auto-brightness options reused for estimation preprocessing.
+    @param white_balance_xphoto_domain {str} Xphoto estimation-domain selector in `{"linear","srgb","source-auto"}`.
+    @param source_gamma_info {SourceGammaInfo|None} Source-gamma diagnostics used only when xphoto domain is `source-auto`.
+    @param bits_per_color {int} Source DNG bit depth used for IA quantization settings.
+    @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
+    @return {object} RGB float image after optional auto-white-balance stage.
+    @exception RuntimeError Raised when required dependencies are missing.
+    @exception ValueError Raised when mode is unsupported.
+    @satisfies REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188, REQ-199, REQ-200, REQ-201, REQ-211, REQ-212, REQ-213
+    """
+
+    if auto_adjust_dependencies is not None:
+        cv2_module, np_module = auto_adjust_dependencies
+    else:
+        numpy_module = _resolve_numpy_dependency()
+        if numpy_module is None:
+            raise RuntimeError("Missing required dependency: numpy")
+        cv2_module = None
+        np_module = numpy_module
+    stage_input_rgb = _ensure_three_channel_float_array_no_range_adjust(
+        np_module=np_module,
+        image_data=image_rgb_float,
+    ).astype(np_module.float32, copy=False)
+    if white_balance_mode is None:
+        return stage_input_rgb
+    estimation_image_rgb = _apply_auto_brightness_rgb_float(
+        np_module=np_module,
+        image_rgb_float=stage_input_rgb,
+        auto_brightness_options=auto_brightness_options,
+    )
+    if white_balance_mode in (
+        WHITE_BALANCE_MODE_SIMPLE,
+        WHITE_BALANCE_MODE_GRAYWORLD,
+        WHITE_BALANCE_MODE_IA,
+    ):
+        if cv2_module is None:
+            resolved_dependencies = _resolve_auto_adjust_dependencies()
+            if resolved_dependencies is None:
+                raise RuntimeError(
+                    "Missing required dependencies: opencv-contrib-python and numpy"
+                )
+            cv2_module, np_module = resolved_dependencies
+        channel_gains = _estimate_xphoto_white_balance_gains_rgb(
+            cv2_module=cv2_module,
+            np_module=np_module,
+            white_balance_mode=white_balance_mode,
+            analysis_image_rgb_float=estimation_image_rgb,
+            bits_per_color=bits_per_color,
+            white_balance_xphoto_domain=white_balance_xphoto_domain,
+            source_gamma_info=source_gamma_info,
+        )
+    elif white_balance_mode == WHITE_BALANCE_MODE_COLOR_CONSTANCY:
+        try:
+            from skimage import color as skimage_color_module  # type: ignore
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "Missing required dependency: scikit-image"
+            ) from exc
+        channel_gains = _estimate_color_constancy_white_balance_gains_rgb(
+            np_module=np_module,
+            skimage_color_module=skimage_color_module,
+            analysis_image_rgb_float=estimation_image_rgb,
+        )
+    elif white_balance_mode == WHITE_BALANCE_MODE_TTL:
+        channel_gains = _estimate_ttl_white_balance_gains_rgb(
+            np_module=np_module,
+            analysis_image_rgb_float=estimation_image_rgb,
+        )
+    else:
+        raise ValueError(f"Unsupported --auto-white-balance mode: {white_balance_mode}")
+    return _apply_channel_gains_to_white_balance_image(
+        np_module=np_module,
+        image_rgb_float=stage_input_rgb,
+        channel_gains=channel_gains,
+    )
 
 
 def _apply_white_balance_to_bracket_triplet(
@@ -11947,6 +12041,8 @@ def _encode_jpg(
     postprocess_options,
     auto_adjust_dependencies=None,
     numpy_module=None,
+    bits_per_color=16,
+    source_gamma_info=None,
     piexif_module=None,
     source_exif_payload=None,
     source_orientation=1,
@@ -11955,10 +12051,10 @@ def _encode_jpg(
     """@brief Encode merged HDR float payload into final JPG output.
 
     @details Accepts one normalized RGB float image from the selected merge
-    backend, executes optional auto-brightness stage, static postprocess stage
-    (numeric gamma/brightness/contrast/saturation or auto-gamma replacement),
-    optional auto-levels stage, optional auto-adjust stage, and then performs
-    exactly one float-to-uint8
+    backend, executes optional auto-brightness stage, optional post-merge
+    auto-white-balance stage, static postprocess stage (numeric
+    gamma/brightness/contrast/saturation or auto-gamma replacement), optional
+    auto-levels stage, optional auto-adjust stage, and then performs exactly one float-to-uint8
     conversion immediately before JPEG save. When debug context is present, the
     function emits persistent TIFF16 checkpoints after each executed stage.
     @param imageio_module {ModuleType} Imported imageio module with `imread` and `imwrite`.
@@ -11968,13 +12064,15 @@ def _encode_jpg(
     @param postprocess_options {PostprocessOptions} Shared TIFF-to-JPG correction settings.
     @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` modules for the auto-adjust implementation.
     @param numpy_module {ModuleType|None} Optional numpy module for float-domain stages.
+    @param bits_per_color {int} Source DNG bit depth used by IA auto-white-balance estimation.
+    @param source_gamma_info {SourceGammaInfo|None} Source-gamma diagnostics used by xphoto `source-auto` estimation domain.
     @param piexif_module {ModuleType|None} Optional piexif module for EXIF thumbnail refresh.
     @param source_exif_payload {bytes|None} Serialized EXIF payload copied from input DNG.
     @param source_orientation {int} Source EXIF orientation value in range `1..8`.
     @param debug_context {DebugArtifactContext|None} Optional persistent debug output metadata.
     @return {None} Side effects only.
     @exception RuntimeError Raised when numpy or auto-adjust dependencies are missing.
-    @satisfies REQ-012, REQ-013, REQ-014, REQ-041, REQ-050, REQ-069, REQ-073, REQ-074, REQ-075, REQ-078, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-106, REQ-123, REQ-132, REQ-133, REQ-134, REQ-148, REQ-176
+    @satisfies REQ-012, REQ-013, REQ-014, REQ-041, REQ-050, REQ-069, REQ-073, REQ-074, REQ-075, REQ-078, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-106, REQ-123, REQ-132, REQ-133, REQ-134, REQ-148, REQ-176, REQ-182, REQ-183, REQ-199, REQ-200, REQ-213
     """
 
     if numpy_module is not None:
@@ -12004,6 +12102,24 @@ def _encode_jpg(
                 np_module=np_module,
                 debug_context=debug_context,
                 stage_suffix="_3.0_auto-brightness",
+                image_rgb_float=image_rgb_float,
+            )
+    if postprocess_options.auto_white_balance_mode is not None:
+        image_rgb_float = _apply_auto_white_balance_stage_float(
+            image_rgb_float=image_rgb_float,
+            white_balance_mode=postprocess_options.auto_white_balance_mode,
+            auto_brightness_options=postprocess_options.auto_brightness_options,
+            white_balance_xphoto_domain=postprocess_options.auto_white_balance_xphoto_domain,
+            source_gamma_info=source_gamma_info,
+            bits_per_color=bits_per_color,
+            auto_adjust_dependencies=auto_adjust_dependencies,
+        )
+        if debug_context is not None:
+            _write_debug_rgb_float_tiff(
+                imageio_module=imageio_module,
+                np_module=np_module,
+                debug_context=debug_context,
+                stage_suffix="_3.5_auto-white-balance",
                 image_rgb_float=image_rgb_float,
             )
     image_rgb_float = _apply_static_postprocess_float(
@@ -12263,7 +12379,6 @@ def run(args):
         print_info(
             "Auto-white-balance stage: "
             f"mode={postprocess_options.auto_white_balance_mode}, "
-            f"analysis-source={postprocess_options.auto_white_balance_analysis_source}, "
             f"xphoto-domain={postprocess_options.auto_white_balance_xphoto_domain}"
         )
     if postprocess_options.post_gamma_mode == "auto":
@@ -12510,43 +12625,6 @@ def run(args):
                     base_rgb_float=base_rgb_float,
                     raw_white_balance_mode=postprocess_options.raw_white_balance_mode,
                 )
-                if postprocess_options.auto_white_balance_mode is not None:
-                    if (
-                        postprocess_options.auto_white_balance_analysis_source
-                        == WHITE_BALANCE_ANALYSIS_SOURCE_LINEAR_BASE
-                    ):
-                        if base_rgb_float is None:
-                            raise RuntimeError(
-                                "Auto-white-balance linear-base analysis requires extracted linear base"
-                            )
-                        auto_white_balance_analysis_image_float = (
-                            _build_white_balance_analysis_image_from_linear_base_float(
-                                np_module=numpy_module,
-                                base_rgb_float=base_rgb_float,
-                                ev_zero=resolved_ev_zero,
-                            )
-                        )
-                    elif (
-                        postprocess_options.auto_white_balance_analysis_source
-                        == WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO
-                    ):
-                        auto_white_balance_analysis_image_float = bracket_images_float[
-                            1
-                        ]
-                    else:
-                        raise ValueError(
-                            "Unsupported --white-balance-analysis-source value: "
-                            f"{postprocess_options.auto_white_balance_analysis_source}"
-                        )
-                    bracket_images_float = _apply_white_balance_to_bracket_triplet(
-                        bracket_images_float=bracket_images_float,
-                        white_balance_mode=postprocess_options.auto_white_balance_mode,
-                        white_balance_analysis_image_float=auto_white_balance_analysis_image_float,
-                        white_balance_xphoto_domain=postprocess_options.auto_white_balance_xphoto_domain,
-                        source_gamma_info=source_gamma_info,
-                        bits_per_color=bits_per_color,
-                        auto_adjust_dependencies=auto_adjust_dependencies,
-                    )
                 if debug_context is not None:
                     extraction_suffixes = (
                         "_1.1_ev_min"
@@ -12624,6 +12702,8 @@ def run(args):
                 postprocess_options=postprocess_options,
                 auto_adjust_dependencies=auto_adjust_dependencies,
                 numpy_module=numpy_module,
+                bits_per_color=bits_per_color,
+                source_gamma_info=source_gamma_info,
                 piexif_module=piexif_module,
                 source_exif_payload=source_exif_payload,
                 source_orientation=source_orientation,
