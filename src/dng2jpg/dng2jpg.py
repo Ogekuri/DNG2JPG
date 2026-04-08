@@ -7092,6 +7092,7 @@ def _run_opencv_tonemap_backend(
     opencv_tonemap_options,
     auto_adjust_dependencies,
     resolved_merge_gamma,
+    merge_debug_snapshots=None,
 ):
     """@brief Execute OpenCV-Tonemap backend on ev-zero only.
 
@@ -7104,10 +7105,11 @@ def _run_opencv_tonemap_backend(
     @param opencv_tonemap_options {OpenCvTonemapOptions} OpenCV-Tonemap selector and knob payload.
     @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
     @param resolved_merge_gamma {ResolvedMergeGamma} Backend-final merge-output transfer payload.
+    @param merge_debug_snapshots {dict|None} Optional mutable mapping populated with merge-stage debug images.
     @return {object} OpenCV-Tonemap RGB float tensor after backend-final merge gamma.
     @exception RuntimeError Raised when OpenCV/numpy dependencies are missing.
     @exception ValueError Raised when bracket payload or selector is invalid.
-    @satisfies REQ-192, REQ-193, REQ-194, REQ-195, REQ-196, REQ-197, REQ-198
+    @satisfies REQ-148, REQ-192, REQ-193, REQ-194, REQ-195, REQ-196, REQ-197, REQ-198
     """
 
     if len(bracket_images_float) != 3:
@@ -7153,11 +7155,17 @@ def _run_opencv_tonemap_backend(
         tonemap.process(ev_zero_rgb),
         dtype=np_module.float32,
     )
-    return _apply_merge_gamma_float_no_clip(
+    if merge_debug_snapshots is not None:
+        merge_debug_snapshots["pre_merge_gamma_output"] = tonemapped_rgb
+    merge_gamma_output = _apply_merge_gamma_float_no_clip(
         np_module=np_module,
         image_rgb_float=tonemapped_rgb,
         resolved_merge_gamma=resolved_merge_gamma,
     )
+    if merge_debug_snapshots is not None:
+        merge_debug_snapshots["post_merge_gamma_output"] = merge_gamma_output
+        merge_debug_snapshots["hdr_merge_final_output"] = merge_gamma_output
+    return merge_gamma_output
 
 
 def _derive_opencv_tonemap_enabled(postprocess_options):
@@ -7182,6 +7190,7 @@ def _run_opencv_merge_backend(
     opencv_merge_options,
     auto_adjust_dependencies,
     resolved_merge_gamma=None,
+    merge_debug_snapshots=None,
 ):
     """@brief Merge bracket float images into one RGB float image via OpenCV.
 
@@ -7203,9 +7212,10 @@ def _run_opencv_merge_backend(
     @param opencv_merge_options {OpenCvMergeOptions} OpenCV merge backend controls.
     @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
     @param resolved_merge_gamma {ResolvedMergeGamma} Backend-final merge-output transfer payload.
+    @param merge_debug_snapshots {dict|None} Optional mutable mapping populated with merge-stage debug images.
     @return {object} Normalized RGB float merged image.
     @exception RuntimeError Raised when OpenCV/numpy dependencies are missing or bracket payloads are invalid.
-    @satisfies REQ-107, REQ-108, REQ-109, REQ-110, REQ-142, REQ-143, REQ-144, REQ-152, REQ-153, REQ-154, REQ-160, REQ-161, REQ-162, REQ-170
+    @satisfies REQ-107, REQ-108, REQ-109, REQ-110, REQ-142, REQ-143, REQ-144, REQ-148, REQ-152, REQ-153, REQ-154, REQ-160, REQ-161, REQ-162, REQ-170
     """
 
     if resolved_merge_gamma is None:
@@ -7247,6 +7257,8 @@ def _run_opencv_merge_backend(
             tonemap_enabled=opencv_merge_options.tonemap_enabled,
             tonemap_gamma=opencv_merge_options.tonemap_gamma,
         )
+        if merge_debug_snapshots is not None:
+            merge_debug_snapshots["hdr_merge_final_output"] = merged_rgb_float
         return merged_rgb_float
     exposure_times = _build_opencv_radiance_exposure_times(
         source_exposure_time_seconds=source_exposure_time_seconds,
@@ -7262,11 +7274,17 @@ def _run_opencv_merge_backend(
         tonemap_enabled=opencv_merge_options.tonemap_enabled,
         tonemap_gamma=opencv_merge_options.tonemap_gamma,
     )
-    return _apply_merge_gamma_float(
+    if merge_debug_snapshots is not None:
+        merge_debug_snapshots["pre_merge_gamma_output"] = merged_rgb_float
+    merge_gamma_output = _apply_merge_gamma_float(
         np_module=np_module,
         image_rgb_float=merged_rgb_float,
         resolved_merge_gamma=resolved_merge_gamma,
     )
+    if merge_debug_snapshots is not None:
+        merge_debug_snapshots["post_merge_gamma_output"] = merge_gamma_output
+        merge_debug_snapshots["hdr_merge_final_output"] = merge_gamma_output
+    return merge_gamma_output
 
 
 def _hdrplus_box_down2_float32(np_module, frames_float32):
@@ -8028,6 +8046,7 @@ def _run_hdr_plus_merge(
     np_module,
     hdrplus_options,
     resolved_merge_gamma=None,
+    merge_debug_snapshots=None,
 ):
     """@brief Merge bracket float images into one RGB float image via HDR+.
 
@@ -8042,9 +8061,10 @@ def _run_hdr_plus_merge(
     @param np_module {ModuleType} Imported numpy module.
     @param hdrplus_options {HdrPlusOptions} HDR+ proxy/alignment/temporal controls.
     @param resolved_merge_gamma {ResolvedMergeGamma} Backend-final merge-output transfer payload.
+    @param merge_debug_snapshots {dict|None} Optional mutable mapping populated with merge-stage debug images.
     @return {object} Normalized RGB float32 merged image.
     @exception RuntimeError Raised when bracket payloads are invalid.
-    @satisfies REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-129, REQ-138, REQ-139, REQ-140, REQ-170
+    @satisfies REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-129, REQ-138, REQ-139, REQ-140, REQ-148, REQ-170
     """
 
     if resolved_merge_gamma is None:
@@ -8108,11 +8128,18 @@ def _run_hdr_plus_merge(
         width=int(frames_rgb_float32.shape[2]),
         height=int(frames_rgb_float32.shape[1]),
     )
-    return _apply_merge_gamma_float(
+    pre_merge_gamma_output = np_module.asarray(merged_rgb_float32, dtype=np_module.float32)
+    if merge_debug_snapshots is not None:
+        merge_debug_snapshots["pre_merge_gamma_output"] = pre_merge_gamma_output
+    merge_gamma_output = _apply_merge_gamma_float(
         np_module=np_module,
-        image_rgb_float=np_module.asarray(merged_rgb_float32, dtype=np_module.float32),
+        image_rgb_float=pre_merge_gamma_output,
         resolved_merge_gamma=resolved_merge_gamma,
     )
+    if merge_debug_snapshots is not None:
+        merge_debug_snapshots["post_merge_gamma_output"] = merge_gamma_output
+        merge_debug_snapshots["hdr_merge_final_output"] = merge_gamma_output
+    return merge_gamma_output
 
 
 def _convert_compression_to_quality(jpg_compression):
@@ -8362,6 +8389,70 @@ def _build_debug_artifact_context(output_jpg, input_dng, postprocess_options):
     return DebugArtifactContext(
         output_dir=output_jpg.parent,
         input_stem=input_dng.stem,
+    )
+
+
+def _write_hdr_merge_debug_checkpoints(
+    imageio_module,
+    np_module,
+    debug_context,
+    merged_image_float,
+    merge_debug_snapshots=None,
+):
+    """@brief Persist HDR merge boundary checkpoints when debug mode is enabled.
+
+    @details Emits merge-stage checkpoints in execution order. When backend code
+    provides explicit merge-gamma boundaries, this helper writes pre-gamma,
+    post-gamma, and final-HDR outputs. Otherwise it writes only final-HDR output.
+    @param imageio_module {ModuleType} Imported imageio module with `imwrite`.
+    @param np_module {ModuleType} Imported numpy module.
+    @param debug_context {DebugArtifactContext|None} Persistent debug output metadata; `None` disables emission.
+    @param merged_image_float {object} Final HDR merge output forwarded to post-merge processing.
+    @param merge_debug_snapshots {dict|None} Optional mutable mapping with backend-provided merge checkpoint tensors.
+    @return {None} Side effects only.
+    @satisfies REQ-148
+    """
+
+    if debug_context is None:
+        return
+    pre_merge_gamma_output = None
+    post_merge_gamma_output = None
+    final_hdr_merge_output = merged_image_float
+    if merge_debug_snapshots is not None:
+        pre_merge_gamma_output = merge_debug_snapshots.get("pre_merge_gamma_output")
+        post_merge_gamma_output = merge_debug_snapshots.get("post_merge_gamma_output")
+        snapshot_final_output = merge_debug_snapshots.get("hdr_merge_final_output")
+        if snapshot_final_output is not None:
+            final_hdr_merge_output = snapshot_final_output
+    has_explicit_merge_gamma_boundaries = (
+        pre_merge_gamma_output is not None or post_merge_gamma_output is not None
+    )
+    if pre_merge_gamma_output is not None:
+        _write_debug_rgb_float_tiff(
+            imageio_module=imageio_module,
+            np_module=np_module,
+            debug_context=debug_context,
+            stage_suffix="_2.0_hdr-merge_pre-merge-gamma",
+            image_rgb_float=pre_merge_gamma_output,
+        )
+    if post_merge_gamma_output is not None:
+        _write_debug_rgb_float_tiff(
+            imageio_module=imageio_module,
+            np_module=np_module,
+            debug_context=debug_context,
+            stage_suffix="_2.1_hdr-merge_post-merge-gamma",
+            image_rgb_float=post_merge_gamma_output,
+        )
+    _write_debug_rgb_float_tiff(
+        imageio_module=imageio_module,
+        np_module=np_module,
+        debug_context=debug_context,
+        stage_suffix=(
+            "_2.2_hdr-merge_final"
+            if has_explicit_merge_gamma_boundaries
+            else "_2.0_hdr-merge_final"
+        ),
+        image_rgb_float=final_hdr_merge_output,
     )
 
 
@@ -12648,6 +12739,7 @@ def run(args):
                             stage_suffix=stage_suffix,
                             image_rgb_float=bracket_image_float,
                         )
+            merge_debug_snapshots = {}
             if enable_luminance:
                 merged_image_float = _run_luminance_hdr_cli(
                     bracket_images_float=bracket_images_float,
@@ -12667,6 +12759,7 @@ def run(args):
                     opencv_merge_options=opencv_merge_options,
                     auto_adjust_dependencies=auto_adjust_dependencies,
                     resolved_merge_gamma=resolved_merge_gamma,
+                    merge_debug_snapshots=merge_debug_snapshots,
                 )
             elif enable_opencv_tonemap:
                 if postprocess_options.opencv_tonemap_options is None:
@@ -12676,6 +12769,7 @@ def run(args):
                     opencv_tonemap_options=postprocess_options.opencv_tonemap_options,
                     auto_adjust_dependencies=auto_adjust_dependencies,
                     resolved_merge_gamma=resolved_merge_gamma,
+                    merge_debug_snapshots=merge_debug_snapshots,
                 )
             elif enable_hdr_plus:
                 merged_image_float = _run_hdr_plus_merge(
@@ -12683,16 +12777,18 @@ def run(args):
                     np_module=numpy_module,
                     hdrplus_options=hdrplus_options,
                     resolved_merge_gamma=resolved_merge_gamma,
+                    merge_debug_snapshots=merge_debug_snapshots,
                 )
             else:
                 raise RuntimeError("No HDR merge backend enabled")
+            merge_debug_snapshots.setdefault("hdr_merge_final_output", merged_image_float)
             if debug_context is not None:
-                _write_debug_rgb_float_tiff(
+                _write_hdr_merge_debug_checkpoints(
                     imageio_module=imageio_module,
                     np_module=numpy_module,
                     debug_context=debug_context,
-                    stage_suffix="_2.0_hdr-merge",
-                    image_rgb_float=merged_image_float,
+                    merged_image_float=merged_image_float,
+                    merge_debug_snapshots=merge_debug_snapshots,
                 )
             _encode_jpg(
                 imageio_module=imageio_module,

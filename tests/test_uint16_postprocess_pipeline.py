@@ -1134,6 +1134,68 @@ def test_encode_jpg_writes_auto_white_balance_checkpoint_when_enabled(
     assert written_paths == [tmp_path / "sample_3.5_auto-white-balance.tiff"]
 
 
+def test_write_hdr_merge_debug_checkpoints_writes_merge_gamma_boundaries(
+    tmp_path,
+) -> None:
+    """HDR merge debug helper must persist pre/post merge-gamma and final checkpoints."""
+
+    imageio_module = _FakeImageIoModule(
+        merged_rgb_u16=np.zeros((2, 2, 3), dtype=np.uint16)
+    )
+    debug_context = dng2jpg_module.DebugArtifactContext(  # pylint: disable=protected-access
+        output_dir=tmp_path,
+        input_stem="sample",
+    )
+    pre_merge_gamma = np.full((2, 2, 3), 0.25, dtype=np.float32)
+    post_merge_gamma = np.full((2, 2, 3), 0.5, dtype=np.float32)
+    final_merge = np.full((2, 2, 3), 0.75, dtype=np.float32)
+
+    dng2jpg_module._write_hdr_merge_debug_checkpoints(  # pylint: disable=protected-access
+        imageio_module=imageio_module,
+        np_module=np,
+        debug_context=debug_context,
+        merged_image_float=final_merge,
+        merge_debug_snapshots={
+            "pre_merge_gamma_output": pre_merge_gamma,
+            "post_merge_gamma_output": post_merge_gamma,
+            "hdr_merge_final_output": final_merge,
+        },
+    )
+
+    written_paths = [Path(path) for path, _image in imageio_module.writes]
+    assert written_paths == [
+        tmp_path / "sample_2.0_hdr-merge_pre-merge-gamma.tiff",
+        tmp_path / "sample_2.1_hdr-merge_post-merge-gamma.tiff",
+        tmp_path / "sample_2.2_hdr-merge_final.tiff",
+    ]
+
+
+def test_write_hdr_merge_debug_checkpoints_writes_final_only_without_boundaries(
+    tmp_path,
+) -> None:
+    """HDR merge debug helper must persist only final checkpoint when boundaries are absent."""
+
+    imageio_module = _FakeImageIoModule(
+        merged_rgb_u16=np.zeros((2, 2, 3), dtype=np.uint16)
+    )
+    debug_context = dng2jpg_module.DebugArtifactContext(  # pylint: disable=protected-access
+        output_dir=tmp_path,
+        input_stem="sample",
+    )
+    final_merge = np.full((2, 2, 3), 0.75, dtype=np.float32)
+
+    dng2jpg_module._write_hdr_merge_debug_checkpoints(  # pylint: disable=protected-access
+        imageio_module=imageio_module,
+        np_module=np,
+        debug_context=debug_context,
+        merged_image_float=final_merge,
+        merge_debug_snapshots={},
+    )
+
+    written_paths = [Path(path) for path, _image in imageio_module.writes]
+    assert written_paths == [tmp_path / "sample_2.0_hdr-merge_final.tiff"]
+
+
 def test_parse_run_options_accepts_remaining_auto_brightness_controls() -> None:
     """Parser must expose the surviving float-domain auto-brightness controls."""
 
@@ -4720,7 +4782,7 @@ def test_run_hdr_plus_merge_applies_resolved_merge_gamma_last(monkeypatch) -> No
 
 
 def test_run_debug_writes_extraction_and_merge_checkpoints(monkeypatch, tmp_path) -> None:
-    """`run` must persist extraction and merge debug checkpoints when enabled."""
+    """`run` must persist extraction and HDR merge boundary checkpoints."""
 
     input_dng = tmp_path / "scene.dng"
     input_dng.write_bytes(b"fake-dng")
@@ -4829,12 +4891,17 @@ def test_run_debug_writes_extraction_and_merge_checkpoints(monkeypatch, tmp_path
     )
 
     assert exit_code == 0
-    assert [stage for _stem, stage in debug_calls[-1:]] == ["_2.0_hdr-merge"]
-    extraction_stages = [stage for _stem, stage in debug_calls[:-1]]
+    extraction_stages = [stage for _stem, stage in debug_calls[:3]]
+    merge_stages = [stage for _stem, stage in debug_calls[3:]]
     assert len(extraction_stages) == 3
     assert extraction_stages[0].startswith("_1.1_ev_min")
     assert extraction_stages[1].startswith("_1.2_ev_zero")
     assert extraction_stages[2].startswith("_1.3_ev_max")
+    assert merge_stages == [
+        "_2.0_hdr-merge_pre-merge-gamma",
+        "_2.1_hdr-merge_post-merge-gamma",
+        "_2.2_hdr-merge_final",
+    ]
 
 
 def test_run_auto_ev_prints_joint_candidate_diagnostics(monkeypatch, tmp_path, capsys) -> None:
