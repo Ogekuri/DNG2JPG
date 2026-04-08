@@ -265,9 +265,13 @@ class _FakeXphotoWhiteBalanceAlgorithm:
     def __init__(self, marker: str) -> None:
         self.marker = marker
         self.hist_bin_num: int | None = None
+        self.range_max: float | None = None
 
     def setHistBinNum(self, hist_bin_num: int) -> None:
         self.hist_bin_num = int(hist_bin_num)
+
+    def setRangeMax(self, range_max: float) -> None:
+        self.range_max = float(range_max)
 
     def balanceWhite(self, image_bgr_u8: np.ndarray) -> np.ndarray:
         del image_bgr_u8
@@ -304,6 +308,7 @@ class _FakeOpenCvModule:
     IMREAD_UNCHANGED = -1
     COLOR_BGR2RGB = 1
     COLOR_RGB2BGR = 2
+    INTER_AREA = 3
     CV_32F = 5
 
     def __init__(self) -> None:
@@ -319,6 +324,7 @@ class _FakeOpenCvModule:
         self.last_tonemap_drago: _FakeAdvancedTonemap | None = None
         self.last_tonemap_reinhard: _FakeAdvancedTonemap | None = None
         self.last_tonemap_mantiuk: _FakeAdvancedTonemap | None = None
+        self.resize_calls: list[tuple[tuple[int, ...], tuple[int, int], int]] = []
 
     def register_image(self, path: Path, image: np.ndarray) -> None:
         self._images_by_path[str(path)] = np.array(image, copy=True)
@@ -333,6 +339,20 @@ class _FakeOpenCvModule:
         if color_code not in (self.COLOR_BGR2RGB, self.COLOR_RGB2BGR):
             raise AssertionError(f"Unsupported color conversion code: {color_code}")
         return np.array(image[..., ::-1], copy=True)
+
+    def resize(
+        self,
+        image: np.ndarray,
+        dsize: tuple[int, int],
+        interpolation: int,
+    ) -> np.ndarray:
+        if interpolation != self.INTER_AREA:
+            raise AssertionError(f"Unsupported interpolation: {interpolation}")
+        self.resize_calls.append((tuple(image.shape), dsize, interpolation))
+        width, height = dsize
+        row_indices = np.linspace(0, image.shape[0] - 1, num=height).astype(np.int32)
+        col_indices = np.linspace(0, image.shape[1] - 1, num=width).astype(np.int32)
+        return np.array(image[row_indices][:, col_indices], copy=True)
 
     def createMergeMertens(self) -> _FakeMergeMertens:
         return self.merge_mertens
@@ -1130,8 +1150,8 @@ def test_parse_run_options_accepts_auto_adjust_clahe_controls() -> None:
     )
 
 
-def test_parse_run_options_accepts_white_balance_modes_and_analysis_source_defaults() -> None:
-    """Parser must accept white-balance selectors and default analysis source."""
+def test_parse_run_options_accepts_white_balance_modes_and_selector_defaults() -> None:
+    """Parser must accept white-balance selectors and default analysis/xphoto selectors."""
 
     parsed_default = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         ["input.dng", "output.jpg", "--ev=1"]
@@ -1145,6 +1165,10 @@ def test_parse_run_options_accepts_white_balance_modes_and_analysis_source_defau
     assert (
         parsed_default[4].white_balance_analysis_source
         == dng2jpg_module.WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO
+    )
+    assert (
+        parsed_default[4].white_balance_xphoto_domain
+        == dng2jpg_module.DEFAULT_WHITE_BALANCE_XPHOTO_DOMAIN
     )
 
     for raw_white_balance_mode in ("GREEN", "MAX", "MIN", "MEAN"):
@@ -1180,6 +1204,10 @@ def test_parse_run_options_accepts_white_balance_modes_and_analysis_source_defau
             parsed[4].white_balance_analysis_source
             == dng2jpg_module.WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO
         )
+        assert (
+            parsed[4].white_balance_xphoto_domain
+            == dng2jpg_module.DEFAULT_WHITE_BALANCE_XPHOTO_DOMAIN
+        )
 
     parsed_linear_base = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         [
@@ -1195,10 +1223,24 @@ def test_parse_run_options_accepts_white_balance_modes_and_analysis_source_defau
         parsed_linear_base[4].white_balance_analysis_source
         == dng2jpg_module.WHITE_BALANCE_ANALYSIS_SOURCE_LINEAR_BASE
     )
+    parsed_xphoto_domain = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        [
+            "input.dng",
+            "output.jpg",
+            "--ev=1",
+            "--auto-white-balance=Simple",
+            "--white-balance-xphoto-domain=srgb",
+        ]
+    )
+    assert parsed_xphoto_domain is not None
+    assert (
+        parsed_xphoto_domain[4].white_balance_xphoto_domain
+        == dng2jpg_module.WHITE_BALANCE_XPHOTO_DOMAIN_SRGB
+    )
 
 
-def test_parse_run_options_rejects_invalid_white_balance_mode_or_analysis_source() -> None:
-    """Parser must reject unsupported white-balance mode or analysis source."""
+def test_parse_run_options_rejects_invalid_white_balance_mode_or_selectors() -> None:
+    """Parser must reject unsupported white-balance mode and selector values."""
 
     invalid_raw_white_balance = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         ["input.dng", "output.jpg", "--ev=1", "--white-balance=invalid-mode"]
@@ -1222,6 +1264,16 @@ def test_parse_run_options_rejects_invalid_white_balance_mode_or_analysis_source
         ]
     )
     assert invalid_analysis_source is None
+    invalid_xphoto_domain = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        [
+            "input.dng",
+            "output.jpg",
+            "--ev=1",
+            "--auto-white-balance=Simple",
+            "--white-balance-xphoto-domain=invalid",
+        ]
+    )
+    assert invalid_xphoto_domain is None
 
 
 def test_analyze_luminance_key_uses_original_thresholds_and_auto_boost_rules() -> None:
@@ -1645,6 +1697,9 @@ def test_print_help_orders_sections_by_pipeline_step(capsys) -> None:
         "--auto-white-balance=<mode>"
     )
     assert output.index("--auto-white-balance=<mode>") < output.index(
+        "--white-balance-xphoto-domain=<domain>"
+    )
+    assert output.index("--white-balance-xphoto-domain=<domain>") < output.index(
         "--hdr-merge=<Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>"
     )
     assert output.index("--hdr-merge=<Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>") < output.index(
@@ -1679,6 +1734,7 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
         "--auto-ev-step=<value>",
         "--white-balance=<GREEN|MAX|MIN|MEAN>",
         "--auto-white-balance=<mode>",
+        "--white-balance-xphoto-domain=<domain>",
         "--hdr-merge=<Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>",
         "--opencv-merge-algorithm=<name>",
         "--opencv-tonemap=<bool>",
@@ -3108,6 +3164,7 @@ def test_apply_white_balance_to_bracket_triplet_uses_configured_analysis_image_a
     analysis_image_rgb_float = np.full((2, 2, 3), 0.70, dtype=np.float32)
     fake_cv2 = _FakeOpenCvModule()
     analysis_calls: list[np.ndarray] = []
+    resolved_xphoto_domains: list[str] = []
 
     def _fake_estimate_xphoto(
         *,
@@ -3115,9 +3172,13 @@ def test_apply_white_balance_to_bracket_triplet_uses_configured_analysis_image_a
         np_module,
         white_balance_mode,
         analysis_image_rgb_float,
+        bits_per_color,
+        white_balance_xphoto_domain,
+        source_gamma_info,
     ):
-        del cv2_module, np_module, white_balance_mode
+        del cv2_module, np_module, white_balance_mode, bits_per_color, source_gamma_info
         analysis_calls.append(np.array(analysis_image_rgb_float, copy=True))
+        resolved_xphoto_domains.append(white_balance_xphoto_domain)
         return np.array([2.0, 3.0, 4.0], dtype=np.float64)
 
     monkeypatch.setattr(
@@ -3130,10 +3191,12 @@ def test_apply_white_balance_to_bracket_triplet_uses_configured_analysis_image_a
         bracket_images_float=bracket_images_float,
         white_balance_mode="Simple",
         white_balance_analysis_image_float=analysis_image_rgb_float,
+        white_balance_xphoto_domain="srgb",
         auto_adjust_dependencies=(fake_cv2, np),
     )
 
     assert len(analysis_calls) == 1
+    assert resolved_xphoto_domains == ["srgb"]
     np.testing.assert_allclose(analysis_calls[0], analysis_image_rgb_float, rtol=0.0, atol=0.0)
     np.testing.assert_allclose(
         output_triplet[0],
@@ -3230,7 +3293,7 @@ def test_apply_white_balance_to_bracket_triplet_grayworld_mode_uses_xphoto_facto
 def test_apply_white_balance_to_bracket_triplet_ia_mode_sets_hist_bins(
     monkeypatch,
 ) -> None:
-    """IA mode must configure `setHistBinNum(256)` on LearningBasedWB."""
+    """IA mode must configure LearningBasedWB range and histogram by bit depth."""
 
     fake_cv2 = _FakeOpenCvModule()
     bracket_images_float = [
@@ -3249,11 +3312,13 @@ def test_apply_white_balance_to_bracket_triplet_ia_mode_sets_hist_bins(
         bracket_images_float=bracket_images_float,
         white_balance_mode="IA",
         white_balance_analysis_image_float=bracket_images_float[1],
+        bits_per_color=14,
         auto_adjust_dependencies=(fake_cv2, np),
     )
 
     assert fake_cv2.xphoto.learning_calls == 1
-    assert fake_cv2.xphoto.learning_wb.hist_bin_num == 256
+    assert fake_cv2.xphoto.learning_wb.range_max == float((1 << 14) - 1)
+    assert fake_cv2.xphoto.learning_wb.hist_bin_num == 1024
 
 
 def test_extract_white_balance_channel_gains_from_xphoto_accepts_real_image_payload_shape(
@@ -3296,6 +3361,8 @@ def test_extract_white_balance_channel_gains_from_xphoto_accepts_real_image_payl
         np_module=np,
         wb_algorithm=fake_algorithm,
         analysis_image_rgb_float=ev_zero_rgb,
+        bits_per_color=8,
+        prefer_uint16_payload=False,
     )
 
     assert len(uint8_shapes) == 1
@@ -3304,6 +3371,147 @@ def test_extract_white_balance_channel_gains_from_xphoto_accepts_real_image_payl
     assert fake_algorithm.seen_payload is not None
     assert fake_algorithm.seen_payload.shape == uint8_shapes[0]
     np.testing.assert_allclose(gains, np.array([1.0, 1.0, 1.0], dtype=np.float64), rtol=0.0, atol=0.0)
+
+
+def test_extract_white_balance_channel_gains_from_xphoto_uses_inter_area_pyramid_downsampling() -> None:
+    """xphoto payload builder must use INTER_AREA pyramid downsampling for large images."""
+
+    class _FakeXphotoAlgorithm:
+        def __init__(self) -> None:
+            self.seen_payload: np.ndarray | None = None
+
+        def balanceWhite(self, image_bgr_u8: np.ndarray) -> np.ndarray:
+            self.seen_payload = np.array(image_bgr_u8, copy=True)
+            return np.array(image_bgr_u8, copy=True)
+
+    fake_cv2 = _FakeOpenCvModule()
+    fake_algorithm = _FakeXphotoAlgorithm()
+    large_analysis_rgb = np.linspace(
+        0.0,
+        1.0,
+        num=3 * 1200 * 1400,
+        endpoint=True,
+        dtype=np.float32,
+    ).reshape((1200, 1400, 3))
+
+    gains = dng2jpg_module._extract_white_balance_channel_gains_from_xphoto(  # pylint: disable=protected-access
+        cv2_module=fake_cv2,
+        np_module=np,
+        wb_algorithm=fake_algorithm,
+        analysis_image_rgb_float=large_analysis_rgb,
+        bits_per_color=8,
+        prefer_uint16_payload=False,
+    )
+
+    assert fake_algorithm.seen_payload is not None
+    assert fake_algorithm.seen_payload.shape[0] <= 1024
+    assert fake_algorithm.seen_payload.shape[1] <= 1024
+    assert fake_cv2.resize_calls
+    assert all(
+        resize_call[2] == fake_cv2.INTER_AREA for resize_call in fake_cv2.resize_calls
+    )
+    np.testing.assert_allclose(
+        gains,
+        np.array([1.0, 1.0, 1.0], dtype=np.float64),
+        rtol=0.0,
+        atol=0.0,
+    )
+
+
+def test_extract_white_balance_channel_gains_from_xphoto_supports_uint16_payload_for_ia() -> None:
+    """IA extraction must support uint16 payloads when backend support is available."""
+
+    class _FakeXphotoAlgorithm:
+        def __init__(self) -> None:
+            self.seen_payload: np.ndarray | None = None
+
+        def balanceWhite(self, image_bgr_u16: np.ndarray) -> np.ndarray:
+            self.seen_payload = np.array(image_bgr_u16, copy=True)
+            return np.array(image_bgr_u16, copy=True)
+
+    fake_cv2 = _FakeOpenCvModule()
+    fake_algorithm = _FakeXphotoAlgorithm()
+    analysis_rgb = np.full((8, 8, 3), 0.75, dtype=np.float32)
+
+    gains = dng2jpg_module._extract_white_balance_channel_gains_from_xphoto(  # pylint: disable=protected-access
+        cv2_module=fake_cv2,
+        np_module=np,
+        wb_algorithm=fake_algorithm,
+        analysis_image_rgb_float=analysis_rgb,
+        bits_per_color=14,
+        prefer_uint16_payload=True,
+    )
+
+    assert fake_algorithm.seen_payload is not None
+    assert fake_algorithm.seen_payload.dtype == np.uint16
+    assert int(np.max(fake_algorithm.seen_payload)) <= (1 << 14) - 1
+    np.testing.assert_allclose(
+        gains,
+        np.array([1.0, 1.0, 1.0], dtype=np.float64),
+        rtol=0.0,
+        atol=0.0,
+    )
+
+
+def test_estimate_xphoto_white_balance_gains_source_auto_resolves_srgb_domain(
+    monkeypatch,
+) -> None:
+    """Source-auto domain must resolve from source gamma diagnostics for xphoto estimation."""
+
+    fake_cv2 = _FakeOpenCvModule()
+    captured_analysis_means: list[float] = []
+
+    def _capture_extract(**kwargs):
+        captured_analysis_means.append(
+            float(np.mean(kwargs["analysis_image_rgb_float"]))
+        )
+        return np.array([1.0, 1.0, 1.0], dtype=np.float64)
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_extract_white_balance_channel_gains_from_xphoto",
+        _capture_extract,
+    )
+    source_gamma_info = dng2jpg_module.SourceGammaInfo(
+        label="sRGB",
+        gamma_value=2.2,
+        evidence="explicit-profile",
+    )
+    gains = dng2jpg_module._estimate_xphoto_white_balance_gains_rgb(  # pylint: disable=protected-access
+        cv2_module=fake_cv2,
+        np_module=np,
+        white_balance_mode="Simple",
+        analysis_image_rgb_float=np.full((2, 2, 3), 0.25, dtype=np.float32),
+        bits_per_color=12,
+        white_balance_xphoto_domain=dng2jpg_module.WHITE_BALANCE_XPHOTO_DOMAIN_SOURCE_AUTO,
+        source_gamma_info=source_gamma_info,
+    )
+
+    assert len(captured_analysis_means) == 1
+    assert captured_analysis_means[0] > 0.25
+    np.testing.assert_allclose(
+        gains,
+        np.array([1.0, 1.0, 1.0], dtype=np.float64),
+        rtol=0.0,
+        atol=0.0,
+    )
+
+
+def test_build_white_balance_robust_analysis_mask_uses_percentile_thresholds() -> None:
+    """Robust mask must reject near-black and near-saturated pixels using percentiles."""
+
+    channel = np.linspace(0.0, 1.0, num=100, dtype=np.float32).reshape((10, 10, 1))
+    analysis_rgb = np.repeat(channel, repeats=3, axis=2)
+
+    robust_mask = dng2jpg_module._build_white_balance_robust_analysis_mask(  # pylint: disable=protected-access
+        np_module=np,
+        analysis_rgb_float=analysis_rgb,
+    )
+
+    assert robust_mask.shape == (10, 10)
+    assert not bool(robust_mask[0, 0])
+    assert not bool(robust_mask[-1, -1])
+    assert bool(robust_mask[5, 5])
 
 
 def test_apply_white_balance_to_bracket_triplet_color_constancy_mode_uses_robust_masked_statistics(
@@ -4995,6 +5203,7 @@ def test_run_passes_linear_base_white_balance_analysis_when_selected(
     )
     fake_pil_module = _FakePilModule()
     wb_analysis_calls: list[np.ndarray] = []
+    merge_input_triplets: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
 
     monkeypatch.setattr(
         dng2jpg_module,
@@ -5038,7 +5247,11 @@ def test_run_passes_linear_base_white_balance_analysis_when_selected(
         wb_analysis_calls.append(
             np.array(kwargs["white_balance_analysis_image_float"], copy=True)
         )
-        return kwargs["bracket_images_float"]
+        gains = np.array([1.1, 1.0, 0.9], dtype=np.float32).reshape((1, 1, 3))
+        return [
+            np.array(image, copy=True) * gains
+            for image in kwargs["bracket_images_float"]
+        ]
 
     monkeypatch.setattr(
         dng2jpg_module,
@@ -5048,7 +5261,10 @@ def test_run_passes_linear_base_white_balance_analysis_when_selected(
     monkeypatch.setattr(
         dng2jpg_module,
         "_run_opencv_merge_backend",
-        lambda **_kwargs: np.full((2, 2, 3), 0.5, dtype=np.float32),
+        lambda **_kwargs: (
+            merge_input_triplets.append(tuple(np.array(image, copy=True) for image in _kwargs["bracket_images_float"])),
+            np.full((2, 2, 3), 0.5, dtype=np.float32),
+        )[1],
     )
     monkeypatch.setattr(dng2jpg_module, "_encode_jpg", lambda **_kwargs: None)
     monkeypatch.setattr(
@@ -5072,6 +5288,25 @@ def test_run_passes_linear_base_white_balance_analysis_when_selected(
     assert exit_code == 0
     assert len(wb_analysis_calls) == 1
     assert float(np.max(wb_analysis_calls[0])) > 1.0
+    assert len(merge_input_triplets) == 1
+    np.testing.assert_allclose(
+        merge_input_triplets[0][0],
+        np.full((2, 2, 3), [0.11, 0.10, 0.09], dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        merge_input_triplets[0][1],
+        np.full((2, 2, 3), [1.1, 1.0, 0.9], dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        merge_input_triplets[0][2],
+        np.full((2, 2, 3), [0.33, 0.30, 0.27], dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
 
 
 def test_run_prints_source_gamma_diagnostics(monkeypatch, tmp_path, capsys) -> None:

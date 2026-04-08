@@ -120,11 +120,15 @@ WHITE_BALANCE_MODE_GRAYWORLD = "GrayworldWB"
 WHITE_BALANCE_MODE_IA = "IA"
 WHITE_BALANCE_MODE_COLOR_CONSTANCY = "ColorConstancy"
 WHITE_BALANCE_MODE_TTL = "TTL"
+WHITE_BALANCE_XPHOTO_DOMAIN_LINEAR = "linear"
+WHITE_BALANCE_XPHOTO_DOMAIN_SRGB = "srgb"
+WHITE_BALANCE_XPHOTO_DOMAIN_SOURCE_AUTO = "source-auto"
 RAW_WHITE_BALANCE_MODE_GREEN = "GREEN"
 RAW_WHITE_BALANCE_MODE_MAX = "MAX"
 RAW_WHITE_BALANCE_MODE_MIN = "MIN"
 RAW_WHITE_BALANCE_MODE_MEAN = "MEAN"
 DEFAULT_RAW_WHITE_BALANCE_MODE = RAW_WHITE_BALANCE_MODE_MEAN
+DEFAULT_WHITE_BALANCE_XPHOTO_DOMAIN = WHITE_BALANCE_XPHOTO_DOMAIN_SOURCE_AUTO
 WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO = "ev-zero"
 WHITE_BALANCE_ANALYSIS_SOURCE_LINEAR_BASE = "linear-base"
 OPENCV_TONEMAP_MAP_DRAGO = "drago"
@@ -276,6 +280,11 @@ _WHITE_BALANCE_MODES = (
 _WHITE_BALANCE_ANALYSIS_SOURCES = (
     WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO,
     WHITE_BALANCE_ANALYSIS_SOURCE_LINEAR_BASE,
+)
+_WHITE_BALANCE_XPHOTO_DOMAINS = (
+    WHITE_BALANCE_XPHOTO_DOMAIN_LINEAR,
+    WHITE_BALANCE_XPHOTO_DOMAIN_SRGB,
+    WHITE_BALANCE_XPHOTO_DOMAIN_SOURCE_AUTO,
 )
 _RAW_WHITE_BALANCE_MODES = (
     RAW_WHITE_BALANCE_MODE_GREEN,
@@ -682,9 +691,10 @@ class PostprocessOptions:
     @param raw_white_balance_mode {str} RAW camera WB normalization mode in `{"GREEN","MAX","MIN","MEAN"}`.
     @param white_balance_mode {str|None} Optional `--auto-white-balance` mode applied to bracket triplet before HDR merge backend execution.
     @param white_balance_analysis_source {str} `--white-balance-analysis-source` selector for auto-white-balance analysis payload in `{"ev-zero","linear-base"}`.
+    @param white_balance_xphoto_domain {str} Xphoto estimation-domain selector in `{"linear","srgb","source-auto"}` applied only to xphoto gain estimation.
     @param opencv_tonemap_options {OpenCvTonemapOptions|None} Optional OpenCV-Tonemap backend selector and knob payload.
     @return {None} Immutable dataclass container.
-    @satisfies REQ-020, REQ-050, REQ-065, REQ-066, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-088, REQ-089, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-146, REQ-176, REQ-179, REQ-181, REQ-182, REQ-190, REQ-194, REQ-195, REQ-196, REQ-199, REQ-203
+    @satisfies REQ-020, REQ-050, REQ-065, REQ-066, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-088, REQ-089, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-146, REQ-176, REQ-179, REQ-181, REQ-182, REQ-190, REQ-194, REQ-195, REQ-196, REQ-199, REQ-203, REQ-210
     """
 
     post_gamma: float
@@ -709,6 +719,7 @@ class PostprocessOptions:
     raw_white_balance_mode: str = DEFAULT_RAW_WHITE_BALANCE_MODE
     white_balance_mode: str | None = None
     white_balance_analysis_source: str = WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO
+    white_balance_xphoto_domain: str = DEFAULT_WHITE_BALANCE_XPHOTO_DOMAIN
     opencv_tonemap_options: OpenCvTonemapOptions | None = None
 
     @property
@@ -736,6 +747,19 @@ class PostprocessOptions:
         """
 
         return self.white_balance_analysis_source
+
+    @property
+    def auto_white_balance_xphoto_domain(self) -> str:
+        """@brief Expose xphoto estimation-domain selector with explicit auto-stage naming.
+
+        @details Provides a semantically explicit alias for
+        `white_balance_xphoto_domain` so runtime orchestration can pass the
+        selector only to xphoto gain estimation.
+        @return {str} Canonical auto-white-balance xphoto estimation-domain selector.
+        @satisfies REQ-210, REQ-212
+        """
+
+        return self.white_balance_xphoto_domain
 
 
 @dataclass(frozen=True)
@@ -1199,6 +1223,16 @@ def print_help(version):
             + ", ".join(_WHITE_BALANCE_ANALYSIS_SOURCES)
             + ".",
             f"Default: `{WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO}`.",
+        ),
+    )
+    _print_help_option(
+        "--white-balance-xphoto-domain=<domain>",
+        "Optional estimation-domain selector applied only to xphoto white-balance modes.",
+        (
+            "Allowed values: "
+            + ", ".join(_WHITE_BALANCE_XPHOTO_DOMAINS)
+            + ".",
+            f"Default: `{DEFAULT_WHITE_BALANCE_XPHOTO_DOMAIN}`.",
         ),
     )
     _print_help_option(
@@ -4002,6 +4036,33 @@ def _parse_white_balance_analysis_source_option(analysis_source_raw):
     return None
 
 
+def _parse_white_balance_xphoto_domain_option(xphoto_domain_raw):
+    """@brief Parse white-balance xphoto estimation-domain selector option value.
+
+    @details Accepts case-insensitive xphoto estimation-domain selector names
+    and normalizes them to canonical runtime selector names.
+    @param xphoto_domain_raw {str} Raw `--white-balance-xphoto-domain` selector token.
+    @return {str|None} Canonical xphoto estimation-domain selector or `None` on parse failure.
+    @satisfies REQ-210
+    """
+
+    xphoto_domain_text = str(xphoto_domain_raw).strip()
+    if not xphoto_domain_text:
+        print_error("Invalid --white-balance-xphoto-domain value: empty value")
+        return None
+    mapping = {
+        WHITE_BALANCE_XPHOTO_DOMAIN_LINEAR.lower(): WHITE_BALANCE_XPHOTO_DOMAIN_LINEAR,
+        WHITE_BALANCE_XPHOTO_DOMAIN_SRGB.lower(): WHITE_BALANCE_XPHOTO_DOMAIN_SRGB,
+        WHITE_BALANCE_XPHOTO_DOMAIN_SOURCE_AUTO.lower(): WHITE_BALANCE_XPHOTO_DOMAIN_SOURCE_AUTO,
+    }
+    resolved_domain = mapping.get(xphoto_domain_text.lower())
+    if resolved_domain is not None:
+        return resolved_domain
+    print_error(f"Invalid --white-balance-xphoto-domain value: {xphoto_domain_raw}")
+    print_error("Allowed values: " + ", ".join(_WHITE_BALANCE_XPHOTO_DOMAINS))
+    return None
+
+
 def _parse_hdr_merge_option(hdr_merge_raw):
     """@brief Parse HDR backend selector option value.
 
@@ -4572,7 +4633,10 @@ def _parse_run_options(args):
     step controls, optional RAW white-balance normalization selector
     (`--white-balance=<GREEN|MAX|MIN|MEAN>`),
     optional auto-white-balance selector (`--auto-white-balance=<mode>`) applied to
-    bracket triplet before backend merge when enabled,
+    bracket triplet before backend merge when enabled, optional
+    white-balance analysis selector (`--white-balance-analysis-source=<ev-zero|linear-base>`),
+    optional xphoto estimation-domain selector
+    (`--white-balance-xphoto-domain=<linear|srgb|source-auto>`),
     optional postprocess controls including `--post-gamma=<value|auto>` and
     optional `--post-gamma-auto-*` knobs,
     optional auto-brightness stage and
@@ -4588,7 +4652,7 @@ def _parse_run_options(args):
     invalid arity.
     @param args {list[str]} Raw command argument vector.
     @return {tuple[Path, Path, float|None, bool, PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, bool, AutoEvOptions]|None} Parsed `(input, output, ev, auto_ev, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, ev_zero_specified, auto_ev_options)` tuple; `None` on parse failure.
-    @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-020, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146, REQ-176, REQ-179, REQ-180, REQ-181, REQ-183, REQ-189, REQ-190, REQ-191, REQ-194, REQ-195, REQ-196, REQ-203
+    @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-020, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146, REQ-176, REQ-179, REQ-180, REQ-181, REQ-183, REQ-189, REQ-190, REQ-191, REQ-194, REQ-195, REQ-196, REQ-199, REQ-203, REQ-210
     """
 
     positional = []
@@ -4618,6 +4682,7 @@ def _parse_run_options(args):
     raw_white_balance_mode = DEFAULT_RAW_WHITE_BALANCE_MODE
     auto_white_balance_mode = None
     auto_white_balance_analysis_source = WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO
+    auto_white_balance_xphoto_domain = DEFAULT_WHITE_BALANCE_XPHOTO_DOMAIN
     hdr_merge_mode = HDR_MERGE_MODE_OPENCV_MERGE
     opencv_raw_values = {}
     opencv_tonemap_selector_options = []
@@ -4820,6 +4885,18 @@ def _parse_run_options(args):
                 return None
             auto_white_balance_analysis_source = (
                 parsed_auto_white_balance_analysis_source
+            )
+            idx += 1
+            continue
+
+        if token.startswith("--white-balance-xphoto-domain="):
+            parsed_auto_white_balance_xphoto_domain = (
+                _parse_white_balance_xphoto_domain_option(token.split("=", 1)[1])
+            )
+            if parsed_auto_white_balance_xphoto_domain is None:
+                return None
+            auto_white_balance_xphoto_domain = (
+                parsed_auto_white_balance_xphoto_domain
             )
             idx += 1
             continue
@@ -5206,6 +5283,7 @@ def _parse_run_options(args):
             raw_white_balance_mode=raw_white_balance_mode,
             white_balance_mode=auto_white_balance_mode,
             white_balance_analysis_source=auto_white_balance_analysis_source,
+            white_balance_xphoto_domain=auto_white_balance_xphoto_domain,
             opencv_tonemap_options=opencv_tonemap_options,
         ),
         enable_luminance,
@@ -5910,16 +5988,68 @@ def _validate_white_balance_triplet_shape(np_module, bracket_images_float):
     return normalized_triplet
 
 
-def _build_xphoto_analysis_image_rgb_float(np_module, analysis_image_rgb_float):
+def _downsample_xphoto_analysis_image_half(np_module, analysis_rgb, cv2_module):
+    """@brief Downsample one RGB analysis payload by factor `2` with anti-aliasing.
+
+    @details Uses OpenCV `resize(..., INTER_AREA)` when available; otherwise
+    applies deterministic `2x2` area averaging with edge padding for odd image
+    dimensions. The output keeps RGB channel order and finite non-negative
+    values.
+    @param np_module {ModuleType} Imported numpy module.
+    @param analysis_rgb {object} RGB float tensor.
+    @param cv2_module {ModuleType|None} Optional OpenCV module.
+    @return {object} Anti-aliased half-resolution RGB float tensor.
+    @satisfies REQ-184, REQ-185, REQ-186
+    """
+
+    height = int(analysis_rgb.shape[0])
+    width = int(analysis_rgb.shape[1])
+    target_height = max(1, height // 2)
+    target_width = max(1, width // 2)
+    if (
+        cv2_module is not None
+        and hasattr(cv2_module, "resize")
+        and hasattr(cv2_module, "INTER_AREA")
+    ):
+        resized = cv2_module.resize(
+            analysis_rgb.astype(np_module.float32, copy=False),
+            (target_width, target_height),
+            interpolation=cv2_module.INTER_AREA,
+        )
+        return _ensure_three_channel_float_array_no_range_adjust(
+            np_module=np_module,
+            image_data=resized,
+        ).astype(np_module.float64, copy=False)
+    pad_height = height % 2
+    pad_width = width % 2
+    padded_rgb = np_module.pad(
+        analysis_rgb,
+        ((0, pad_height), (0, pad_width), (0, 0)),
+        mode="edge",
+    )
+    return (
+        padded_rgb[0::2, 0::2, :]
+        + padded_rgb[1::2, 0::2, :]
+        + padded_rgb[0::2, 1::2, :]
+        + padded_rgb[1::2, 1::2, :]
+    ) * 0.25
+
+
+def _build_xphoto_analysis_image_rgb_float(
+    np_module,
+    analysis_image_rgb_float,
+    cv2_module=None,
+):
     """@brief Build deterministic real-image xphoto analysis payload.
 
     @details Converts one analysis image to RGB float, preserves values above
     `1.0`, replaces non-finite values with `0`, removes negatives, and applies
-    deterministic pyramid downsampling (`::2`) until maximum side is `<=1024`.
-    This removes fixed proxy-size assumptions while keeping xphoto estimation
-    stable and bounded in memory.
+    deterministic anti-aliased pyramid downsampling (`INTER_AREA` when
+    available) until maximum side is `<=1024`. This removes fixed proxy-size
+    assumptions while reducing chromatic aliasing bias in estimation.
     @param np_module {ModuleType} Imported numpy module.
     @param analysis_image_rgb_float {object} Analysis RGB float tensor.
+    @param cv2_module {ModuleType|None} Optional OpenCV module used for `INTER_AREA` resizing.
     @return {object} Downsampled RGB float32 analysis payload.
     @satisfies REQ-183, REQ-184, REQ-185, REQ-186
     """
@@ -5932,7 +6062,11 @@ def _build_xphoto_analysis_image_rgb_float(np_module, analysis_image_rgb_float):
     analysis_rgb = np_module.where(finite_mask, analysis_rgb, 0.0)
     analysis_rgb = np_module.maximum(analysis_rgb, 0.0)
     while max(analysis_rgb.shape[0], analysis_rgb.shape[1]) > 1024:
-        analysis_rgb = analysis_rgb[::2, ::2, :]
+        analysis_rgb = _downsample_xphoto_analysis_image_half(
+            np_module=np_module,
+            analysis_rgb=analysis_rgb,
+            cv2_module=cv2_module,
+        )
     return analysis_rgb.astype(np_module.float32, copy=False)
 
 
@@ -5940,9 +6074,9 @@ def _build_white_balance_robust_analysis_mask(np_module, analysis_rgb_float):
     """@brief Build robust white-balance mask excluding near-black and near-saturated pixels.
 
     @details Builds a deterministic per-pixel mask using finite and non-negative
-    RGB values, excludes near-black pixels (`max_channel<=1e-3`), excludes
-    near-saturated pixels (`max_channel>=0.995`), and applies fallback tiers to
-    guarantee at least one valid pixel for downstream statistics.
+    RGB values, derives near-black and near-saturation cutoffs from channel-max
+    percentile thresholds, and applies fallback tiers to guarantee at least one
+    valid pixel for downstream statistics.
     @param np_module {ModuleType} Imported numpy module.
     @param analysis_rgb_float {object} Analysis RGB float tensor.
     @return {object} Boolean mask with shape `(H,W)`.
@@ -5956,16 +6090,23 @@ def _build_white_balance_robust_analysis_mask(np_module, analysis_rgb_float):
     finite_mask = np_module.all(np_module.isfinite(analysis_rgb), axis=2)
     non_negative_mask = np_module.all(analysis_rgb >= 0.0, axis=2)
     channel_max = np_module.max(analysis_rgb, axis=2)
+    valid_mask = finite_mask & non_negative_mask
+    if bool(np_module.any(valid_mask)):
+        valid_channel_max = channel_max[valid_mask]
+        black_cutoff = float(np_module.percentile(valid_channel_max, 1.0))
+        saturation_cutoff = float(np_module.percentile(valid_channel_max, 99.0))
+    else:
+        black_cutoff = 0.0
+        saturation_cutoff = 1.0
     robust_mask = (
-        finite_mask
-        & non_negative_mask
-        & (channel_max > 1e-3)
-        & (channel_max < 0.995)
+        valid_mask
+        & (channel_max > black_cutoff)
+        & (channel_max < saturation_cutoff)
     )
     if not bool(np_module.any(robust_mask)):
-        robust_mask = finite_mask & non_negative_mask & (channel_max > 1e-3)
+        robust_mask = valid_mask & (channel_max > black_cutoff)
     if not bool(np_module.any(robust_mask)):
-        robust_mask = finite_mask & non_negative_mask
+        robust_mask = valid_mask
     return robust_mask
 
 
@@ -5974,6 +6115,8 @@ def _extract_white_balance_channel_gains_from_xphoto(
     np_module,
     wb_algorithm,
     analysis_image_rgb_float,
+    bits_per_color,
+    prefer_uint16_payload=False,
 ):
     """@brief Derive per-channel white-balance gains from one OpenCV xphoto algorithm.
 
@@ -5986,14 +6129,17 @@ def _extract_white_balance_channel_gains_from_xphoto(
     @param np_module {ModuleType} Imported numpy module.
     @param wb_algorithm {object} OpenCV xphoto white-balance instance.
     @param analysis_image_rgb_float {object} EV0 RGB float tensor.
+    @param bits_per_color {int} Source DNG bit depth used for range-aware quantization.
+    @param prefer_uint16_payload {bool} `True` requests uint16 xphoto payload generation when backend support exists.
     @return {object} Channel gains vector with shape `(3,)`.
     @exception RuntimeError Raised when xphoto result shape is invalid.
-    @satisfies REQ-183, REQ-184, REQ-185, REQ-186, REQ-201
+    @satisfies REQ-183, REQ-184, REQ-185, REQ-186, REQ-201, REQ-211
     """
 
     analysis_payload_rgb = _build_xphoto_analysis_image_rgb_float(
         np_module=np_module,
         analysis_image_rgb_float=analysis_image_rgb_float,
+        cv2_module=cv2_module,
     )
     payload_scale = float(np_module.percentile(analysis_payload_rgb, 99.5))
     if not math.isfinite(payload_scale) or payload_scale <= 1e-12:
@@ -6003,21 +6149,41 @@ def _extract_white_balance_channel_gains_from_xphoto(
         0.0,
         1.0,
     ).astype(np_module.float32, copy=False)
-    analysis_payload_bgr_uint8 = cv2_module.cvtColor(
-        _to_uint8_image_array(
+    effective_bits_per_color = max(8, min(16, int(bits_per_color)))
+    if prefer_uint16_payload:
+        range_max = float((1 << effective_bits_per_color) - 1)
+        analysis_payload_rgb_quantized = np_module.clip(
+            np_module.round(
+                scaled_payload_rgb.astype(np_module.float64, copy=False) * range_max
+            ),
+            0.0,
+            range_max,
+        ).astype(np_module.uint16, copy=False)
+    else:
+        analysis_payload_rgb_quantized = _to_uint8_image_array(
             np_module=np_module,
             image_data=scaled_payload_rgb,
-        ),
+        )
+    analysis_payload_bgr_quantized = cv2_module.cvtColor(
+        analysis_payload_rgb_quantized,
         cv2_module.COLOR_RGB2BGR,
     )
-    balanced_payload_bgr_uint8 = wb_algorithm.balanceWhite(analysis_payload_bgr_uint8)
+    balanced_payload_bgr_quantized = wb_algorithm.balanceWhite(
+        analysis_payload_bgr_quantized
+    )
     source_payload_rgb_float = _normalize_float_rgb_image(
         np_module=np_module,
-        image_data=cv2_module.cvtColor(analysis_payload_bgr_uint8, cv2_module.COLOR_BGR2RGB),
+        image_data=cv2_module.cvtColor(
+            analysis_payload_bgr_quantized,
+            cv2_module.COLOR_BGR2RGB,
+        ),
     ).astype(np_module.float64, copy=False)
     balanced_payload_rgb_float = _normalize_float_rgb_image(
         np_module=np_module,
-        image_data=cv2_module.cvtColor(balanced_payload_bgr_uint8, cv2_module.COLOR_BGR2RGB),
+        image_data=cv2_module.cvtColor(
+            balanced_payload_bgr_quantized,
+            cv2_module.COLOR_BGR2RGB,
+        ),
     ).astype(np_module.float64, copy=False)
     source_mean = np_module.mean(source_payload_rgb_float, axis=(0, 1))
     balanced_mean = np_module.mean(balanced_payload_rgb_float, axis=(0, 1))
@@ -6030,11 +6196,113 @@ def _extract_white_balance_channel_gains_from_xphoto(
     return gains.astype(np_module.float64, copy=False)
 
 
+def _resolve_white_balance_xphoto_estimation_domain(
+    white_balance_xphoto_domain,
+    source_gamma_info,
+):
+    """@brief Resolve effective xphoto estimation domain from selector and source diagnostics.
+
+    @details Returns explicit selector values unchanged for `linear` and `srgb`.
+    For `source-auto`, derives one deterministic domain from source-gamma
+    diagnostics, preferring numeric gamma (`>1.2 => srgb`, else `linear`) and
+    falling back to label-token classification.
+    @param white_balance_xphoto_domain {str} Requested xphoto estimation-domain selector.
+    @param source_gamma_info {SourceGammaInfo|None} Source-gamma diagnostic payload.
+    @return {str} Effective xphoto estimation-domain selector in `{"linear","srgb"}`.
+    @satisfies REQ-212
+    """
+
+    if white_balance_xphoto_domain in (
+        WHITE_BALANCE_XPHOTO_DOMAIN_LINEAR,
+        WHITE_BALANCE_XPHOTO_DOMAIN_SRGB,
+    ):
+        return white_balance_xphoto_domain
+    if source_gamma_info is None:
+        return WHITE_BALANCE_XPHOTO_DOMAIN_LINEAR
+    gamma_value = source_gamma_info.gamma_value
+    if gamma_value is not None and math.isfinite(gamma_value):
+        if float(gamma_value) > 1.2:
+            return WHITE_BALANCE_XPHOTO_DOMAIN_SRGB
+        return WHITE_BALANCE_XPHOTO_DOMAIN_LINEAR
+    label_text = str(source_gamma_info.label).strip().lower()
+    if "linear" in label_text:
+        return WHITE_BALANCE_XPHOTO_DOMAIN_LINEAR
+    gamma_encoded_tokens = (
+        "srgb",
+        "rec.709",
+        "bt.709",
+        "adobe",
+        "display p3",
+        "prophoto",
+        "tone curve gamma",
+    )
+    if any(token in label_text for token in gamma_encoded_tokens):
+        return WHITE_BALANCE_XPHOTO_DOMAIN_SRGB
+    return WHITE_BALANCE_XPHOTO_DOMAIN_LINEAR
+
+
+def _prepare_xphoto_estimation_image_rgb_float(
+    np_module,
+    analysis_image_rgb_float,
+    xphoto_estimation_domain,
+):
+    """@brief Build xphoto estimation payload in selected estimation domain.
+
+    @details Normalizes one analysis image to finite non-negative RGB float.
+    When the selected estimation domain is `srgb`, clamps values to `[0,1]`,
+    applies linear-to-sRGB transfer, and returns gamma-encoded analysis payload.
+    The conversion is local to xphoto estimation and does not mutate triplet
+    processing domains.
+    @param np_module {ModuleType} Imported numpy module.
+    @param analysis_image_rgb_float {object} Analysis RGB float tensor.
+    @param xphoto_estimation_domain {str} Effective estimation-domain selector in `{"linear","srgb"}`.
+    @return {object} Domain-resolved RGB float32 analysis payload.
+    @satisfies REQ-212
+    """
+
+    analysis_rgb = _ensure_three_channel_float_array_no_range_adjust(
+        np_module=np_module,
+        image_data=analysis_image_rgb_float,
+    ).astype(np_module.float64, copy=False)
+    finite_mask = np_module.isfinite(analysis_rgb)
+    analysis_rgb = np_module.where(finite_mask, analysis_rgb, 0.0)
+    analysis_rgb = np_module.maximum(analysis_rgb, 0.0)
+    if xphoto_estimation_domain == WHITE_BALANCE_XPHOTO_DOMAIN_SRGB:
+        linear_srgb = np_module.clip(analysis_rgb, 0.0, 1.0).astype(
+            np_module.float32,
+            copy=False,
+        )
+        return _from_linear_srgb(
+            np_module=np_module,
+            image_linear=linear_srgb,
+        ).astype(np_module.float32, copy=False)
+    return analysis_rgb.astype(np_module.float32, copy=False)
+
+
+def _resolve_learning_based_wb_hist_bin_num(bits_per_color):
+    """@brief Resolve IA histogram-bin count from source bit depth.
+
+    @details Maps source bit depth to a bounded power-of-two histogram count to
+    keep LearningBasedWB histogram granularity coherent with source precision
+    while avoiding excessive bin counts. Mapping: `2^clamp(bits-4, 8, 12)`.
+    @param bits_per_color {int} Source DNG bit depth.
+    @return {int} LearningBasedWB histogram-bin count.
+    @satisfies REQ-211
+    """
+
+    effective_bits = max(8, min(16, int(bits_per_color)))
+    hist_bin_exponent = max(8, min(12, effective_bits - 4))
+    return int(1 << hist_bin_exponent)
+
+
 def _estimate_xphoto_white_balance_gains_rgb(
     cv2_module,
     np_module,
     white_balance_mode,
     analysis_image_rgb_float,
+    bits_per_color,
+    white_balance_xphoto_domain,
+    source_gamma_info,
 ):
     """@brief Estimate EV0-derived white-balance gains using OpenCV xphoto modes.
 
@@ -6045,10 +6313,13 @@ def _estimate_xphoto_white_balance_gains_rgb(
     @param np_module {ModuleType} Imported numpy module.
     @param white_balance_mode {str} Canonical white-balance mode selector.
     @param analysis_image_rgb_float {object} EV0 RGB float tensor.
+    @param bits_per_color {int} Source DNG bit depth used for IA quantization settings.
+    @param white_balance_xphoto_domain {str} Requested xphoto estimation-domain selector.
+    @param source_gamma_info {SourceGammaInfo|None} Source-gamma diagnostic payload used by `source-auto`.
     @return {object} Channel gains vector with shape `(3,)`.
     @exception RuntimeError Raised when required xphoto API is unavailable.
     @exception ValueError Raised when mode is unsupported for xphoto estimation.
-    @satisfies REQ-183, REQ-184, REQ-185, REQ-186
+    @satisfies REQ-183, REQ-184, REQ-185, REQ-186, REQ-211, REQ-212
     """
 
     xphoto_module = getattr(cv2_module, "xphoto", None)
@@ -6056,6 +6327,7 @@ def _estimate_xphoto_white_balance_gains_rgb(
         raise RuntimeError(
             "OpenCV xphoto module is unavailable for auto-white-balance stage"
         )
+    use_uint16_payload = False
     if white_balance_mode == WHITE_BALANCE_MODE_SIMPLE:
         factory = getattr(xphoto_module, "createSimpleWB", None)
         if factory is None:
@@ -6071,16 +6343,37 @@ def _estimate_xphoto_white_balance_gains_rgb(
         if factory is None:
             raise RuntimeError("OpenCV xphoto LearningBasedWB is unavailable")
         wb_algorithm = factory()
+        effective_bits_per_color = max(8, min(16, int(bits_per_color)))
+        use_uint16_payload = False
+        set_range_max = getattr(wb_algorithm, "setRangeMax", None)
+        if callable(set_range_max) and effective_bits_per_color > 8:
+            set_range_max(float((1 << effective_bits_per_color) - 1))
+            use_uint16_payload = True
         set_hist_bins = getattr(wb_algorithm, "setHistBinNum", None)
         if callable(set_hist_bins):
-            set_hist_bins(256)
+            set_hist_bins(
+                _resolve_learning_based_wb_hist_bin_num(
+                    bits_per_color=effective_bits_per_color
+                )
+            )
     else:
         raise ValueError(f"Unsupported xphoto white-balance mode: {white_balance_mode}")
+    xphoto_estimation_domain = _resolve_white_balance_xphoto_estimation_domain(
+        white_balance_xphoto_domain=white_balance_xphoto_domain,
+        source_gamma_info=source_gamma_info,
+    )
+    estimation_analysis_image_rgb_float = _prepare_xphoto_estimation_image_rgb_float(
+        np_module=np_module,
+        analysis_image_rgb_float=analysis_image_rgb_float,
+        xphoto_estimation_domain=xphoto_estimation_domain,
+    )
     return _extract_white_balance_channel_gains_from_xphoto(
         cv2_module=cv2_module,
         np_module=np_module,
         wb_algorithm=wb_algorithm,
-        analysis_image_rgb_float=analysis_image_rgb_float,
+        analysis_image_rgb_float=estimation_analysis_image_rgb_float,
+        bits_per_color=bits_per_color,
+        prefer_uint16_payload=use_uint16_payload,
     )
 
 
@@ -6187,7 +6480,10 @@ def _apply_white_balance_to_bracket_triplet(
     bracket_images_float,
     white_balance_mode,
     white_balance_analysis_image_float,
-    auto_adjust_dependencies,
+    white_balance_xphoto_domain=DEFAULT_WHITE_BALANCE_XPHOTO_DOMAIN,
+    source_gamma_info=None,
+    bits_per_color=16,
+    auto_adjust_dependencies=None,
 ):
     """@brief Apply optional analysis-image-derived auto-white-balance correction to bracket triplet.
 
@@ -6198,11 +6494,14 @@ def _apply_white_balance_to_bracket_triplet(
     @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors `(ev_minus, ev_zero, ev_plus)`.
     @param white_balance_mode {str|None} Optional canonical white-balance mode selector.
     @param white_balance_analysis_image_float {object} Selected white-balance analysis RGB float tensor.
+    @param white_balance_xphoto_domain {str} Xphoto estimation-domain selector in `{"linear","srgb","source-auto"}`.
+    @param source_gamma_info {SourceGammaInfo|None} Source-gamma diagnostics used only when xphoto domain is `source-auto`.
+    @param bits_per_color {int} Source DNG bit depth used for IA quantization settings.
     @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
     @return {list[object]} Ordered bracket tensors after optional auto-white-balance stage.
     @exception RuntimeError Raised when required dependencies are missing.
     @exception ValueError Raised when mode is unsupported or bracket contract is invalid.
-    @satisfies REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188, REQ-200
+    @satisfies REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188, REQ-200, REQ-201, REQ-211, REQ-212
     """
 
     if white_balance_mode is None:
@@ -6240,6 +6539,9 @@ def _apply_white_balance_to_bracket_triplet(
             np_module=np_module,
             white_balance_mode=white_balance_mode,
             analysis_image_rgb_float=analysis_rgb,
+            bits_per_color=bits_per_color,
+            white_balance_xphoto_domain=white_balance_xphoto_domain,
+            source_gamma_info=source_gamma_info,
         )
     elif white_balance_mode == WHITE_BALANCE_MODE_COLOR_CONSTANCY:
         try:
@@ -11964,7 +12266,8 @@ def run(args):
         print_info(
             "Auto-white-balance stage: "
             f"mode={postprocess_options.auto_white_balance_mode}, "
-            f"analysis-source={postprocess_options.auto_white_balance_analysis_source}"
+            f"analysis-source={postprocess_options.auto_white_balance_analysis_source}, "
+            f"xphoto-domain={postprocess_options.auto_white_balance_xphoto_domain}"
         )
     if postprocess_options.post_gamma_mode == "auto":
         print_info(
@@ -12242,6 +12545,9 @@ def run(args):
                         bracket_images_float=bracket_images_float,
                         white_balance_mode=postprocess_options.auto_white_balance_mode,
                         white_balance_analysis_image_float=auto_white_balance_analysis_image_float,
+                        white_balance_xphoto_domain=postprocess_options.auto_white_balance_xphoto_domain,
+                        source_gamma_info=source_gamma_info,
+                        bits_per_color=bits_per_color,
                         auto_adjust_dependencies=auto_adjust_dependencies,
                     )
                 if debug_context is not None:
