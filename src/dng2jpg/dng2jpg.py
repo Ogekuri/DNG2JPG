@@ -2099,7 +2099,7 @@ def _normalize_white_balance_gains_rgb(
 
     @details Converts one camera white-balance RGB triplet to float64 and
     normalizes coefficients by one mode-specific divisor: `GREEN` uses the
-    green coefficient and requires `G==1.0`, `MAX` uses the triplet maximum,
+    green coefficient, `MAX` uses the triplet maximum,
     `MIN` uses the triplet minimum, and `MEAN` uses the arithmetic mean.
     Invalid vectors resolve to unit gains. Complexity: O(1). Side effects:
     none.
@@ -2107,7 +2107,7 @@ def _normalize_white_balance_gains_rgb(
     @param camera_wb_rgb {tuple[float, float, float]} Positive finite camera WB RGB triplet.
     @param raw_white_balance_mode {str} RAW WB normalization mode selector.
     @return {object} Float64 RGB gain vector normalized by selected mode divisor.
-    @exception ValueError Raised when `GREEN` mode receives a green WB coefficient not equal to `1.0` or an unsupported mode selector.
+    @exception ValueError Raised when the mode selector is unsupported.
     @satisfies REQ-031, REQ-158, REQ-183, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207
     """
 
@@ -2122,11 +2122,6 @@ def _normalize_white_balance_gains_rgb(
     resolved_mode = str(raw_white_balance_mode).strip().upper()
     if resolved_mode == RAW_WHITE_BALANCE_MODE_GREEN:
         normalization_divisor = float(wb_vector[1])
-        if normalization_divisor != 1.0:
-            raise ValueError(
-                "RAW WB GREEN mode requires camera green coefficient equal to 1.0; "
-                f"received {normalization_divisor!r}"
-            )
     elif resolved_mode == RAW_WHITE_BALANCE_MODE_MAX:
         normalization_divisor = float(np_module.max(wb_vector))
     elif resolved_mode == RAW_WHITE_BALANCE_MODE_MIN:
@@ -2142,11 +2137,6 @@ def _normalize_white_balance_gains_rgb(
     if not np_module.all(np_module.isfinite(normalized)):
         return np_module.asarray([1.0, 1.0, 1.0], dtype=np_module.float64)
     normalized = np_module.maximum(normalized, 1e-12)
-    if resolved_mode == RAW_WHITE_BALANCE_MODE_GREEN and float(normalized[1]) != 1.0:
-        raise ValueError(
-            "RAW WB GREEN mode produced non-unit normalized green gain; "
-            f"received {float(normalized[1])!r}"
-        )
     return normalized.astype(np_module.float64, copy=False)
 
 

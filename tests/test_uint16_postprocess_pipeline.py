@@ -2956,19 +2956,21 @@ def test_normalize_white_balance_gains_rgb_supports_all_modes() -> None:
     np.testing.assert_allclose(float(np.mean(gains_mean)), 1.0, rtol=1e-12, atol=1e-12)
 
 
-def test_normalize_white_balance_gains_rgb_green_mode_rejects_non_unit_green() -> None:
-    """GREEN mode must fail when raw green WB coefficient is not exactly 1.0."""
+def test_normalize_white_balance_gains_rgb_green_mode_accepts_non_unit_green() -> None:
+    """GREEN mode must normalize by green coefficient without strict input check."""
 
-    try:
-        dng2jpg_module._normalize_white_balance_gains_rgb(  # pylint: disable=protected-access
-            np_module=np,
-            camera_wb_rgb=(1.6, 1.1, 1.4),
-            raw_white_balance_mode="GREEN",
-        )
-    except ValueError as exc:
-        assert "GREEN mode requires camera green coefficient equal to 1.0" in str(exc)
-    else:
-        raise AssertionError("Expected ValueError for GREEN mode with non-unit green")
+    gains_green = dng2jpg_module._normalize_white_balance_gains_rgb(  # pylint: disable=protected-access
+        np_module=np,
+        camera_wb_rgb=(1.6, 1.1, 1.4),
+        raw_white_balance_mode="GREEN",
+    )
+    np.testing.assert_allclose(
+        gains_green,
+        np.array([1.6 / 1.1, 1.0, 1.4 / 1.1], dtype=np.float64),
+        rtol=1e-12,
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(float(gains_green[1]), 1.0, rtol=1e-12, atol=1e-12)
 
 
 def test_parse_run_options_defaults_gamma_to_auto() -> None:

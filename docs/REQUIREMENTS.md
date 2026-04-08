@@ -150,7 +150,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-030**: MUST accept finite numeric `--ev` values `>=0` and finite numeric `--ev-zero` values without enforcing `0.25` EV step granularity or bit-depth-derived upper bounds.
 - **REQ-031**: MUST derive exposure-planning inputs from one shared neutral-linear HDR base image after applying float-domain `rawpy` camera white-balance gains normalized by the resolved RAW white-balance normalization mode.
 - **REQ-203**: MUST parse optional `--white-balance=<GREEN|MAX|MIN|MEAN>`, defaulting to `MEAN`, and MUST reject unknown values.
-- **REQ-204**: MUST implement `GREEN` normalization by dividing all RAW WB coefficients by the green coefficient and MUST terminate with explicit error when the normalized green gain is not exactly `1.0`.
+- **REQ-204**: MUST implement `GREEN` normalization by dividing all RAW WB coefficients by the green coefficient so the normalized green gain equals `1.0`.
 - **REQ-205**: MUST implement `MAX` normalization by dividing all RAW WB coefficients by the maximum coefficient so the maximum normalized gain equals `1.0`.
 - **REQ-206**: MUST implement `MIN` normalization by dividing all RAW WB coefficients by the minimum coefficient so the minimum normalized gain equals `1.0`.
 - **REQ-207**: MUST implement `MEAN` normalization by dividing all RAW WB coefficients by their arithmetic mean so the normalized mean gain equals `1.0`.
