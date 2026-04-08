@@ -199,6 +199,8 @@
         - `_extract_sensor_dynamic_range_max(...)`: derive positive dynamic-range denominator from RAW `white_level` and `black_level_per_channel` metadata [`src/dng2jpg/dng2jpg.py`]
         - `_extract_camera_whitebalance_rgb_triplet(...)`: read finite positive `(R,G,B)` coefficients from RAW camera white-balance metadata [`src/dng2jpg/dng2jpg.py`]
         - `_normalize_white_balance_gains_rgb(...)`: normalize extracted WB coefficients by selected RAW WB mode divisor (`GREEN|MAX|MIN|MEAN`) where `GREEN` divides by the green coefficient without pre-validation constraints [`src/dng2jpg/dng2jpg.py`]
+        - `_format_rgb_triplet_fixed4(...)`: format extracted and normalized WB RGB coefficients into deterministic fixed-point diagnostic tokens with four fractional digits [`src/dng2jpg/dng2jpg.py`]
+        - `print_info(...)`: emit RAW WB normalization diagnostics with extracted coefficients, selected mode, and normalized gains [`src/shell_scripts/utils.py`]
         - `_apply_normalized_white_balance_to_rgb_float(...)`: apply normalized WB gains in float domain without stage-local clipping or pre-normalization [`src/dng2jpg/dng2jpg.py`]
       - `_calculate_auto_zero_evaluations(...)`: evaluate `ev_best`, `ev_ettr`, and `ev_detail` on the normalized linear RGB float image [`src/dng2jpg/dng2jpg.py`]
           - `_calculate_bt709_luminance(...)`: convert normalized RGB float input to BT.709 linear luminance [`src/dng2jpg/dng2jpg.py`]

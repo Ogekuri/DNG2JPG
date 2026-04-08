@@ -154,6 +154,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-205**: MUST implement `MAX` normalization by dividing all RAW WB coefficients by the maximum coefficient so the maximum normalized gain equals `1.0`.
 - **REQ-206**: MUST implement `MIN` normalization by dividing all RAW WB coefficients by the minimum coefficient so the minimum normalized gain equals `1.0`.
 - **REQ-207**: MUST implement `MEAN` normalization by dividing all RAW WB coefficients by their arithmetic mean so the normalized mean gain equals `1.0`.
+- **REQ-208**: MUST print one RAW WB normalization diagnostic before exposure planning containing rawpy-extracted RGB coefficients, selected normalization mode (`GREEN|MAX|MIN|MEAN`), and normalized RGB gains used for white-balance application.
+- **REQ-209**: MUST format every numeric coefficient in RAW WB normalization diagnostics as fixed-point float with exactly four fractional digits.
 - **REQ-032**: MUST evaluate `ev_best`, `ev_ettr`, and `ev_detail` on the normalized linear gamma=`1` RGB image and MUST select default `ev_zero` as the minimum absolute-value candidate among those three values when `--ev-zero` is not specified.
 - **REQ-166**: MUST expose `--auto-ev-step` as a positive configurable EV increment for iterative bracket expansion, defaulting to `0.1`.
 - **REQ-167**: MUST derive `ev_delta` by iterating from `auto_ev_step`, evaluating unclipped bracket images at `ev_zero-ev_delta` and `ev_zero+ev_delta`, and stopping at the first step where shadow clipping exceeds `--auto-ev-shadow-clipping` or highlight clipping reaches `--auto-ev-highlight-clipping`.

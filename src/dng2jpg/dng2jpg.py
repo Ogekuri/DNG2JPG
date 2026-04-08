@@ -2090,6 +2090,36 @@ def _extract_camera_whitebalance_rgb_triplet(raw_handle):
     return (triplet[0], triplet[1], triplet[2])
 
 
+def _format_rgb_triplet_fixed4(rgb_values):
+    """@brief Format one RGB triplet for deterministic RAW WB diagnostics.
+
+    @details Converts one iterable payload to exactly three finite float values
+    and renders deterministic `R/G/B` fixed-point tokens with four fractional
+    digits. Invalid or missing entries are replaced by `1.0000`.
+    Complexity: O(1). Side effects: none.
+    @param rgb_values {object} Iterable-like payload containing at least three channel coefficients.
+    @return {str} Formatted token string `R=<value>, G=<value>, B=<value>`.
+    @satisfies REQ-208, REQ-209
+    """
+
+    try:
+        values = list(rgb_values)
+    except TypeError:
+        values = [1.0, 1.0, 1.0]
+    if len(values) < 3:
+        values = [1.0, 1.0, 1.0]
+    channels = []
+    for value in values[:3]:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            numeric = 1.0
+        if not math.isfinite(numeric):
+            numeric = 1.0
+        channels.append(f"{numeric:.4f}")
+    return f"R={channels[0]}, G={channels[1]}, B={channels[2]}"
+
+
 def _normalize_white_balance_gains_rgb(
     np_module,
     camera_wb_rgb,
@@ -2281,7 +2311,7 @@ def _extract_base_rgb_linear_float(
     @param np_module {ModuleType} Imported numpy module.
     @param raw_white_balance_mode {str} RAW WB normalization mode selector.
     @return {object} White-balanced RGB float tensor derived from neutral extraction.
-    @satisfies REQ-010, REQ-031, REQ-158, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207
+    @satisfies REQ-010, REQ-031, REQ-158, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207, REQ-208, REQ-209
     @see _extract_normalized_preview_luminance_stats
     """
 
@@ -2298,6 +2328,13 @@ def _extract_base_rgb_linear_float(
         np_module=np_module,
         camera_wb_rgb=camera_wb_rgb,
         raw_white_balance_mode=raw_white_balance_mode,
+    )
+    resolved_mode = str(raw_white_balance_mode).strip().upper()
+    print_info(
+        "RAW WB normalization diagnostics: "
+        f"rawpy-coefficients[{_format_rgb_triplet_fixed4(camera_wb_rgb)}], "
+        f"mode={resolved_mode}, "
+        f"normalized-gains[{_format_rgb_triplet_fixed4(normalized_gains_rgb)}]"
     )
     return _apply_normalized_white_balance_to_rgb_float(
         np_module=np_module,
