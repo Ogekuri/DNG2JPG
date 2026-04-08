@@ -1098,7 +1098,7 @@ def print_help(version):
     _print_help_section("Step 2 - Exposure planning and RAW bracket extraction")
     _print_help_option(
         "--ev=<value>",
-        "Static symmetric bracket EV delta in `0 .. MAX_BRACKET`, where `MAX_BRACKET=((bits_per_color-8)/2)-abs(ev_zero)`.",
+        "Static symmetric bracket EV delta as one finite numeric value `>= 0`.",
         (
             "Mutually exclusive with enabled `--auto-ev`.",
             "The exposure-measure EV triplet is still computed and printed.",
@@ -1114,10 +1114,10 @@ def print_help(version):
     )
     _print_help_option(
         "--ev-zero=<value>",
-        "Static central bracket EV in `-SAFE_ZERO_MAX .. +SAFE_ZERO_MAX`, where `SAFE_ZERO_MAX=((bits_per_color-8)/2)-1`.",
+        "Static central bracket EV as one finite numeric value.",
         (
             "Accepted only together with `--ev`.",
-            "Any numeric in-range value is accepted.",
+            "No bit-depth-derived upper bound is enforced.",
         ),
     )
     _print_help_option(
@@ -1482,62 +1482,22 @@ def print_help(version):
     )
 
 
-def _calculate_max_ev_from_bits(bits_per_color):
-    """@brief Compute EV ceiling from detected DNG bits per color.
+def _validate_supported_bits_per_color(bits_per_color):
+    """@brief Validate supported minimum DNG bits-per-color contract.
 
-    @details Implements `MAX=((bits_per_color-8)/2)` and validates minimum
-    supported bit depth before computing clamp ceiling used by static and
-    adaptive EV flows.
+    @details Enforces repository minimum bit-depth support independently from
+    exposure range planning and raises deterministic failure when source DNG
+    metadata exposes a lower precision container.
     @param bits_per_color {int} Detected source DNG bits per color.
-    @return {float} Bit-derived EV ceiling.
+    @return {None} Validation completion without payload.
     @exception ValueError Raised when bit depth is below supported minimum.
-    @satisfies REQ-026, REQ-027, REQ-028
+    @satisfies REQ-027
     """
 
     if bits_per_color < MIN_SUPPORTED_BITS_PER_COLOR:
         raise ValueError(
             f"Unsupported bits_per_color={bits_per_color}; expected >= {MIN_SUPPORTED_BITS_PER_COLOR}"
         )
-    return (bits_per_color - 8) / 2.0
-
-
-def _calculate_safe_ev_zero_max(base_max_ev):
-    """@brief Compute safe absolute EV-zero ceiling preserving at least `±1EV` bracket.
-
-    @details Derives `SAFE_ZERO_MAX=(BASE_MAX-1)` where `BASE_MAX=((bits_per_color-8)/2)`.
-    Safe range guarantees `MAX_BRACKET=(BASE_MAX-abs(ev_zero)) >= 1`.
-    @param base_max_ev {float} Bit-derived `BASE_MAX` value.
-    @return {float} Safe absolute EV-zero ceiling.
-    @satisfies DES-003, REQ-018, REQ-030
-    """
-
-    return max(0.0, base_max_ev - 1.0)
-
-
-def _derive_supported_ev_values(
-    bits_per_color,
-    ev_zero=0.0,
-):
-    """@brief Derive valid bracket EV selector interval from bit depth and `ev_zero`.
-
-    @details Computes the maximum valid bracket half-span
-    `MAX_BRACKET=((bits_per_color-8)/2)-abs(ev_zero)` without applying any
-    quantization or histogram-derived contraction.
-    @param bits_per_color {int} Detected source DNG bits per color.
-    @param ev_zero {float} Central EV selector.
-    @return {float} Maximum valid bracket half-span.
-    @exception ValueError Raised when bit-derived bracket EV ceiling is not positive.
-    @satisfies REQ-026, REQ-027, REQ-028
-    """
-
-    base_max_ev = _calculate_max_ev_from_bits(bits_per_color)
-    max_bracket = base_max_ev - abs(float(ev_zero))
-    if max_bracket <= 0.0:
-        raise ValueError(
-            "Derived bracket EV ceiling is too small for selector generation: "
-            f"{max_bracket:g} (MAX_BRACKET = ((bits_per_color-8)/2)-abs(ev_zero))"
-        )
-    return float(max_bracket)
 
 
 def _detect_dng_bits_per_color(raw_handle):
@@ -1603,8 +1563,8 @@ def _parse_ev_option(ev_raw):
     """@brief Parse and validate one EV option value.
 
     @details Converts token to `float`, enforces finiteness and non-negativity,
-    and defers bit-depth upper-bound validation until RAW metadata is loaded
-    from source DNG.
+    and preserves the parsed static bracket half-span without applying any
+    bit-depth-derived upper-bound contract.
     @param ev_raw {str} EV token extracted from command arguments.
     @return {float|None} Parsed EV value when valid; `None` otherwise.
     @satisfies REQ-030
@@ -1614,12 +1574,12 @@ def _parse_ev_option(ev_raw):
         ev_value = float(ev_raw)
     except ValueError:
         print_error(f"Invalid --ev value: {ev_raw}")
-        print_error("Allowed values: 0 .. MAX_BRACKET")
+        print_error("Allowed values: finite numeric >= 0")
         return None
 
     if ev_value < 0.0 or not _is_ev_value_on_supported_step(ev_value):
         print_error(f"Unsupported --ev value: {ev_raw}")
-        print_error("Allowed values: 0 .. MAX_BRACKET")
+        print_error("Allowed values: finite numeric >= 0")
         return None
 
     return float(ev_value)
@@ -1628,8 +1588,8 @@ def _parse_ev_option(ev_raw):
 def _parse_ev_zero_option(ev_zero_raw):
     """@brief Parse and validate one `--ev-zero` option value.
 
-    @details Converts token to `float`, enforces finiteness, and defers
-    bit-depth bound validation to RAW-metadata runtime stage.
+    @details Converts token to `float`, enforces finiteness, and preserves
+    static center EV value without applying bit-depth-derived upper bounds.
     @param ev_zero_raw {str} EV-zero token extracted from command arguments.
     @return {float|None} Parsed EV-zero value when valid; `None` otherwise.
     @satisfies REQ-018, REQ-030
@@ -1639,12 +1599,12 @@ def _parse_ev_zero_option(ev_zero_raw):
         ev_zero_value = float(ev_zero_raw)
     except ValueError:
         print_error(f"Invalid --ev-zero value: {ev_zero_raw}")
-        print_error("Allowed values: -SAFE_ZERO_MAX .. +SAFE_ZERO_MAX")
+        print_error("Allowed values: finite numeric")
         return None
 
     if not _is_ev_value_on_supported_step(ev_zero_value):
         print_error(f"Unsupported --ev-zero value: {ev_zero_raw}")
-        print_error("Allowed values: -SAFE_ZERO_MAX .. +SAFE_ZERO_MAX")
+        print_error("Allowed values: finite numeric")
         return None
 
     return float(ev_zero_value)
@@ -2780,14 +2740,13 @@ def _calculate_auto_zero_evaluations(cv2_module, np_module, image_rgb_float):
     )
 
 
-def _select_ev_zero_candidate(evaluations, safe_ev_zero_max):
+def _select_ev_zero_candidate(evaluations):
     """@brief Select `ev_zero` from the exposure-measure EV triplet.
 
-    @details Clamps the three EV measures into the signed safe range and selects
-    the minimum absolute-value candidate using deterministic tie-break order
-    `abs(value) -> declaration order -> numeric value`.
+    @details Selects the minimum absolute-value EV candidate using deterministic
+    tie-break order `abs(value) -> declaration order -> numeric value` without
+    applying bit-depth-derived clamping.
     @param evaluations {AutoZeroEvaluation} Exposure-measure EV values.
-    @param safe_ev_zero_max {float} Bit-derived absolute safe EV-zero ceiling.
     @return {tuple[float, str]} Selected `(ev_zero, source_label)` pair.
     @satisfies REQ-032
     """
@@ -2799,7 +2758,7 @@ def _select_ev_zero_candidate(evaluations, safe_ev_zero_max):
     )
     best = None
     for index, (label, raw_value) in enumerate(candidates):
-        candidate_value = max(-safe_ev_zero_max, min(safe_ev_zero_max, float(raw_value)))
+        candidate_value = float(raw_value)
         sort_key = (round(abs(candidate_value), 9), index, round(candidate_value, 9))
         if best is None or sort_key < best[0]:
             best = (sort_key, candidate_value, label)
@@ -2881,31 +2840,24 @@ def _measure_any_channel_shadow_clipping_pct(np_module, image_rgb_float):
 
 
 def _resolve_joint_auto_ev_solution(
-    raw_handle,
-    bits_per_color,
-    base_max_ev,
     auto_ev_options,
     auto_adjust_dependencies=None,
     base_rgb_float=None,
 ):
     """@brief Resolve the automatic symmetric exposure plan.
 
-    @details Loads the required numeric dependencies, extracts one linear base
-    image at most once, computes the exposure-measure EV triplet, selects
-    `ev_zero` by minimum absolute value, then expands the bracket iteratively
-    until clipping thresholds are reached or the bit-depth ceiling is hit.
-    @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
-    @param bits_per_color {int} Detected source DNG bits per color.
-    @param base_max_ev {float} Bit-derived `BASE_MAX` ceiling.
+    @details Loads numeric dependencies, computes the exposure-measure EV
+    triplet from one normalized linear base image, selects `ev_zero` by minimum
+    absolute value, and expands bracket half-span iteratively until clipping
+    thresholds are reached.
     @param auto_ev_options {AutoEvOptions} Automatic clipping thresholds and EV increment.
     @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2_module, numpy_module)` tuple.
     @param base_rgb_float {object|None} Optional precomputed normalized linear base RGB image.
     @return {JointAutoEvSolution} Selected joint automatic exposure solution.
     @exception RuntimeError Raised when required `cv2` or `numpy` dependencies are unavailable.
-    @satisfies REQ-008, REQ-009, REQ-028, REQ-031, REQ-032, REQ-037, REQ-052, REQ-167, REQ-168
+    @satisfies REQ-008, REQ-009, REQ-031, REQ-032, REQ-037, REQ-052, REQ-167, REQ-168
     """
 
-    del raw_handle
     if auto_adjust_dependencies is None:
         np_module = _resolve_numpy_dependency()
         if np_module is None:
@@ -2923,20 +2875,12 @@ def _resolve_joint_auto_ev_solution(
         np_module=np_module,
         image_rgb_float=base_rgb_float,
     )
-    safe_ev_zero_max = _calculate_safe_ev_zero_max(base_max_ev)
     selected_ev_zero, selected_source = _select_ev_zero_candidate(
         evaluations=evaluations,
-        safe_ev_zero_max=safe_ev_zero_max,
-    )
-    max_bracket = _derive_supported_ev_values(
-        bits_per_color=bits_per_color,
-        ev_zero=selected_ev_zero,
     )
     ev_delta = float(auto_ev_options.step)
     iteration_steps = []
     while True:
-        if ev_delta > (max_bracket + _EV_SELECTION_EPS):
-            ev_delta = max_bracket
         ev_minus, _ev_center, ev_plus = _build_unclipped_bracket_images_from_linear_base_float(
             np_module=np_module,
             base_rgb_float=base_rgb_float,
@@ -2955,7 +2899,6 @@ def _resolve_joint_auto_ev_solution(
         if (
             highlight_pct >= auto_ev_options.highlight_clipping_pct
             or shadow_pct > auto_ev_options.shadow_clipping_pct
-            or ev_delta >= (max_bracket - _EV_SELECTION_EPS)
         ):
             break
         ev_delta += auto_ev_options.step
@@ -12082,9 +12025,8 @@ def run(args):
     """@brief Execute `dng2jpg` command pipeline.
 
     @details Parses command options, validates dependencies, detects source DNG
-    bits-per-color from RAW metadata, resolves manual or automatic EV-zero center,
-    resolves static or adaptive EV selector around resolved center using
-    bit-derived EV ceilings, extracts one linear HDR base image and derives
+    bits-per-color from RAW metadata, resolves manual or automatic EV-zero
+    center, resolves static or adaptive EV selector, extracts one linear HDR base image and derives
     three normalized RGB float brackets, executes the selected HDR backend with
     float input/output interfaces,
     executes the float-interface post-merge pipeline, optionally emits
@@ -12324,7 +12266,7 @@ def run(args):
             with rawpy_module.imread(str(input_dng)) as raw_handle:
                 source_gamma_info = _extract_source_gamma_info(raw_handle)
                 bits_per_color = _detect_dng_bits_per_color(raw_handle)
-                base_max_ev = _calculate_max_ev_from_bits(bits_per_color)
+                _validate_supported_bits_per_color(bits_per_color)
                 base_rgb_float = None
                 effective_ev_value = None
                 print_info(_describe_source_gamma_info(source_gamma_info))
@@ -12365,9 +12307,6 @@ def run(args):
                         np_module=numpy_module,
                     )
                     joint_solution = _resolve_joint_auto_ev_solution(
-                        raw_handle=raw_handle,
-                        bits_per_color=bits_per_color,
-                        base_max_ev=base_max_ev,
                         auto_ev_options=auto_ev_options,
                         auto_adjust_dependencies=auto_adjust_dependencies,
                         base_rgb_float=base_rgb_float,
@@ -12388,34 +12327,13 @@ def run(args):
                     print_info(f"Exposure Misure EV ev_best: {evaluations.ev_best:+.1f} EV")
                     print_info(f"Exposure Misure EV ev_ettr: {evaluations.ev_ettr:+.1f} EV")
                     print_info(f"Exposure Misure EV ev_detail: {evaluations.ev_detail:+.1f} EV")
-                    safe_zero_max = _calculate_safe_ev_zero_max(base_max_ev)
                     if ev_zero_specified:
                         resolved_ev_zero = ev_zero
                     else:
                         resolved_ev_zero, _selected_source = _select_ev_zero_candidate(
                             evaluations=evaluations,
-                            safe_ev_zero_max=safe_zero_max,
                         )
-                    if abs(resolved_ev_zero) > (safe_zero_max + 1e-9):
-                        raise ValueError(
-                            "Unsupported --ev-zero value: "
-                            f"{resolved_ev_zero:g}; allowed range for input DNG is "
-                            f"{-safe_zero_max:g}..{safe_zero_max:g} "
-                            "(SAFE_ZERO_MAX = ((bits_per_color-8)/2)-1)"
-                        )
-                max_bracket = _derive_supported_ev_values(
-                    bits_per_color, ev_zero=resolved_ev_zero
-                )
                 print_info(f"Detected DNG bits per color: {bits_per_color}")
-                safe_zero_max = _calculate_safe_ev_zero_max(base_max_ev)
-                print_info(
-                    "Bit-derived EV ceilings: "
-                    f"BASE_MAX={base_max_ev:g} (formula: (bits_per_color-8)/2), "
-                    f"SAFE_ZERO_MAX={safe_zero_max:g} "
-                    "(formula: BASE_MAX-1), "
-                    f"MAX_BRACKET={max_bracket:g} "
-                    "(formula: BASE_MAX-abs(ev_zero))"
-                )
                 if auto_ev_enabled:
                     print_info("Using exposure mode: auto")
                     print_info(f"Using selected EV center (ev_zero): {resolved_ev_zero:g}")
@@ -12424,11 +12342,6 @@ def run(args):
                     print_info(f"Using selected EV center (ev_zero): {resolved_ev_zero:g}")
                     if ev_value is None:
                         raise ValueError("Missing static EV value")
-                    if ev_value > (max_bracket + 1e-9):
-                        raise ValueError(
-                            f"Unsupported --ev value: {ev_value:g}; allowed range for input DNG is 0..{max_bracket:g}"
-                            " (MAX_BRACKET = ((bits_per_color-8)/2)-abs(ev_zero))"
-                        )
                     effective_ev_value = ev_value
                 if effective_ev_value is None:
                     raise ValueError("Missing resolved EV delta")

@@ -2110,7 +2110,6 @@ def test_select_ev_zero_candidate_chooses_minimum_absolute_value() -> None:
             ev_ettr=0.3,
             ev_detail=-0.4,
         ),
-        safe_ev_zero_max=3.0,
     )
 
     assert selected_ev_zero == 0.3
@@ -2118,20 +2117,19 @@ def test_select_ev_zero_candidate_chooses_minimum_absolute_value() -> None:
 
 
 
-def test_select_ev_zero_candidate_clamps_to_safe_range() -> None:
-    """Default ev-zero selection must clamp candidates before comparing absolute value."""
+def test_select_ev_zero_candidate_uses_unclamped_values() -> None:
+    """Default ev-zero selection must compare raw candidate magnitudes without clamp."""
 
     selected_ev_zero, selected_source = dng2jpg_module._select_ev_zero_candidate(  # pylint: disable=protected-access
         evaluations=dng2jpg_module.AutoZeroEvaluation(
-            ev_best=-5.0,
+            ev_best=5.0,
             ev_ettr=2.0,
-            ev_detail=0.8,
+            ev_detail=3.0,
         ),
-        safe_ev_zero_max=1.0,
     )
 
-    assert selected_ev_zero == 0.8
-    assert selected_source == "ev_detail"
+    assert selected_ev_zero == 2.0
+    assert selected_source == "ev_ettr"
 
 
 
@@ -2141,9 +2139,6 @@ def test_resolve_joint_auto_ev_solution_iterates_until_clipping_threshold() -> N
     base_rgb_float = np.array([[[0.5, 0.5, 0.5], [0.25, 0.25, 0.25]]], dtype=np.float32)
 
     solution = dng2jpg_module._resolve_joint_auto_ev_solution(  # pylint: disable=protected-access
-        raw_handle=None,
-        bits_per_color=16,
-        base_max_ev=4.0,
         auto_ev_options=dng2jpg_module.AutoEvOptions(
             shadow_clipping_pct=5.0,
             highlight_clipping_pct=5.0,

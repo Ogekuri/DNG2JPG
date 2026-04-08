@@ -93,7 +93,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 ### 3.1 Design and Implementation
 - **DES-001**: MUST parse CLI arguments by deterministic token scanning supporting both `--option value` and `--option=value` syntaxes.
 - **DES-002**: MUST model runtime options with immutable dataclasses `AutoAdjustOptions`, `AutoBrightnessOptions`, `PostprocessOptions`, `LuminanceOptions`, and `AutoEvInputs`.
-- **DES-003**: MUST derive supported EV and EV-zero quantized values from detected DNG bit depth using `0.25` EV step constraints.
+- **DES-003**: MUST parse static EV selectors as finite numeric values without quantization-step enforcement or bit-depth-derived upper-bound contracts.
 - **DES-004**: MUST isolate intermediate processing artifacts in temporary directories and cleanup automatically after command completion.
 - **DES-005**: MUST preserve source EXIF payload into output JPEG, rebuild EXIF thumbnail from the exact final quantized RGB uint8 save buffer, preserve JPEG-display-equivalent thumbnail orientation, and write refreshed EXIF metadata before timestamp synchronization.
 - **DES-006**: MUST resolve backend-specific default postprocess factors from selected `--hdr-merge` mode, from resolved `Luminace-HDR` tone-mapping operator, and from resolved OpenCV merge algorithm.
@@ -146,9 +146,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-025**: MUST reject unsupported `--auto-adjust` values, accept only `enable` or `disable`, and default omitted `--auto-adjust` to `enable`.
 - **REQ-026**: MUST resolve DNG bit depth from `raw_image_visible.dtype.itemsize * 8` with fallback to `white_level.bit_length()`.
 - **REQ-027**: MUST enforce minimum supported bit depth as `9` bits per color.
-- **REQ-028**: MUST compute bracket EV ceiling only from bit-depth headroom `MAX_BRACKET=((bits_per_color-8)/2)-abs(ev_zero)`.
-- **REQ-029**: MUST compute EV-zero safe ceiling with `SAFE_ZERO_MAX=((bits_per_color-8)/2)-1`.
-- **REQ-030**: MUST accept any numeric `--ev` and `--ev-zero` values within the bit-depth-derived valid range without enforcing `0.25` EV step granularity.
+- **REQ-030**: MUST accept finite numeric `--ev` values `>=0` and finite numeric `--ev-zero` values without enforcing `0.25` EV step granularity or bit-depth-derived upper bounds.
 - **REQ-031**: MUST derive exposure-planning inputs from one shared neutral-linear HDR base image after applying `rawpy` camera white-balance gains normalized relative to the green coefficient in float domain.
 - **REQ-032**: MUST evaluate `ev_best`, `ev_ettr`, and `ev_detail` on the normalized linear gamma=`1` RGB image and MUST select default `ev_zero` as the minimum absolute-value candidate among those three values when `--ev-zero` is not specified.
 - **REQ-166**: MUST expose `--auto-ev-step` as a positive configurable EV increment for iterative bracket expansion, defaulting to `0.1`.
@@ -263,7 +261,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-002**: MUST verify `run` returns `1` for unsupported runtime OS and for missing `luminance-hdr-cli` dependency with deterministic diagnostics naming each missing executable.
 - **TST-003**: MUST verify successful `run` execution returns `0`, writes output JPG, and emits success message `HDR JPG created: <output>`.
 - **TST-004**: MUST verify default `ev_zero` selection chooses the minimum absolute-value candidate among `ev_best`, `ev_ettr`, and `ev_detail`, independent of whether static `--ev` or `--auto-ev` selected the mode.
-- **TST-005**: MUST verify static exposure resolution preserves any in-range manual `--ev` and `--ev-zero` values, rejects out-of-range values for the detected bit depth, and no longer requires `0.25` EV increments.
+- **TST-005**: MUST verify static exposure resolution preserves manual `--ev` and `--ev-zero` values, rejects negative or non-finite `--ev`, and does not enforce `0.25` EV increments or bit-depth-derived upper bounds.
 - **TST-006**: MUST verify `_run_luminance_hdr_cli` builds deterministic argument order and includes any `--tmo*` passthrough pairs unchanged.
 - **TST-007**: MUST verify `_extract_dng_exif_payload_and_timestamp` applies datetime priority `36867` then `36868` then `306` and extracts EXIF `ExposureTime` as positive seconds.
 - **TST-008**: MUST verify `_refresh_output_jpg_exif_thumbnail_after_save` preserves source orientation fields, rebuilds EXIF thumbnail bytes from the exact final quantized RGB uint8 save buffer, and emits display-oriented thumbnail pixels with thumbnail orientation `1`.
@@ -353,7 +351,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | CTN-006 | `scripts/d2j.sh`; excerpt: compares `${PROJECT_ROOT}` and `${BASE_DIR}` and exits `1` on mismatch. |
 | DES-001 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: deterministic token scan loop over args with explicit branch handling. |
 | DES-002 | `src/dng2jpg/dng2jpg.py` dataclasses; evidence: `AutoAdjustOptions`, `AutoBrightnessOptions`, `PostprocessOptions`, `LuminanceOptions`, `AutoEvInputs`. |
-| DES-003 | `src/dng2jpg/dng2jpg.py::_derive_supported_ev_values`, `_derive_supported_ev_zero_values`; excerpt: uses `EV_STEP = 0.25`. |
+| DES-003 | `src/dng2jpg/dng2jpg.py::_parse_ev_option`, `_parse_ev_zero_option`; excerpt: finite-number static EV parsing without quantization or bit-depth upper-bound contracts. |
 | DES-004 | `src/dng2jpg/dng2jpg.py::run`, `_run_luminance_hdr_cli`; excerpt: isolates intermediate artifacts under the command temporary workspace and backend-local subdirectories. |
 | DES-005 | `src/dng2jpg/dng2jpg.py::_extract_dng_exif_payload_and_timestamp`, `_refresh_output_jpg_exif_thumbnail_after_save`, `_build_oriented_thumbnail_jpeg_bytes`, `_encode_jpg`, `_sync_output_file_timestamps_from_exif`. |
 | DES-006 | `src/dng2jpg/dng2jpg.py::_resolve_default_postprocess`; excerpt: backend and TMO-specific defaults. |
@@ -389,10 +387,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-024 | `src/dng2jpg/dng2jpg.py::run`; excerpt: routes backend execution from resolved `--hdr-merge` mode. |
 | REQ-025 | `src/dng2jpg/dng2jpg.py::_parse_auto_adjust_option`, `_parse_run_options`; excerpt: validates `enable|disable` values and defaults omitted auto-adjust to `enable`. |
 | REQ-026 | `src/dng2jpg/dng2jpg.py::_detect_dng_bits_per_color`; excerpt: container bit depth primary path with white-level fallback. |
-| REQ-027 | `src/dng2jpg/dng2jpg.py::_calculate_max_ev_from_bits`; excerpt: raises on bit depth below `MIN_SUPPORTED_BITS_PER_COLOR=9`. |
-| REQ-028 | `src/dng2jpg/dng2jpg.py::_derive_supported_ev_values`; excerpt: uses `MAX_BRACKET=((bits_per_color-8)/2)-abs(ev_zero)`. |
-| REQ-029 | `src/dng2jpg/dng2jpg.py::_calculate_safe_ev_zero_max`; excerpt: `SAFE_ZERO_MAX = BASE_MAX - 1`. |
-| REQ-030 | `src/dng2jpg/dng2jpg.py::_is_ev_value_on_supported_step`; excerpt: quarter-step quantization validation. |
+| REQ-027 | `src/dng2jpg/dng2jpg.py::_validate_supported_bits_per_color`; excerpt: raises on bit depth below `MIN_SUPPORTED_BITS_PER_COLOR=9`. |
+| REQ-030 | `src/dng2jpg/dng2jpg.py::_parse_ev_option`, `_parse_ev_zero_option`; excerpt: finite static EV parsing enforces non-negative `--ev` only and omits bit-depth-derived upper-bound checks. |
 | REQ-031 | `src/dng2jpg/dng2jpg.py::_extract_base_rgb_linear_float`; excerpt: applies camera white-balance gains normalized relative to the green coefficient from `rawpy.camera_whitebalance` to the shared neutral base image before exposure planning. |
 | REQ-032 | `src/dng2jpg/dng2jpg.py::_build_joint_auto_ev_regularization_anchors`, `_optimize_joint_ev_zero_and_delta`; excerpt: converts the three automatic heuristics into soft center regularization for the joint solver. |
 | REQ-033 | `src/dng2jpg/dng2jpg.py::_parse_tmo_passthrough_value`, `_run_luminance_hdr_cli`; excerpt: parses and forwards `--tmo*` args unchanged. |
