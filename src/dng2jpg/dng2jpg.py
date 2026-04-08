@@ -25,7 +25,7 @@ import textwrap
 import warnings
 import math
 from io import BytesIO
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -680,7 +680,8 @@ class PostprocessOptions:
     @param contrast {float} Contrast enhancement factor.
     @param saturation {float} Saturation enhancement factor.
     @param jpg_compression {int} JPEG compression level in range `[0, 100]`.
-    @param auto_brightness_enabled {bool} `True` when the post-static auto-brightness stage is enabled.
+    @param auto_brightness_enabled {bool} `True` when the pre-bracketing auto-brightness stage is enabled.
+    @param auto_brightness_pre_applied {bool} `True` when auto-brightness already executed before `_encode_jpg(...)` and must be skipped inside post-merge encoding.
     @param auto_brightness_options {AutoBrightnessOptions} Auto-brightness stage knobs.
     @param auto_levels_enabled {bool} `True` when auto-levels stage is enabled.
     @param auto_levels_options {AutoLevelsOptions} Auto-levels stage knobs.
@@ -689,7 +690,8 @@ class PostprocessOptions:
     @param debug_enabled {bool} `True` when persistent debug TIFF checkpoints are enabled.
     @param merge_gamma_option {MergeGammaOption} Parsed merge-gamma request applied only by OpenCV and HDR+ backends.
     @param raw_white_balance_mode {str} RAW camera WB normalization mode in `{"GREEN","MAX","MIN","MEAN"}`.
-    @param white_balance_mode {str|None} Optional `--auto-white-balance` mode applied to bracket triplet before HDR merge backend execution.
+    @param white_balance_mode {str|None} Optional `--auto-white-balance` mode applied to the linear base image after auto-brightness and before auto-zero evaluation.
+    @param auto_white_balance_pre_applied {bool} `True` when auto-white-balance already executed before `_encode_jpg(...)` and must be skipped inside post-merge encoding.
     @param white_balance_analysis_source {str} `--white-balance-analysis-source` selector for auto-white-balance analysis payload in `{"ev-zero","linear-base"}`.
     @param white_balance_xphoto_domain {str} Xphoto estimation-domain selector in `{"linear","srgb","source-auto"}` applied only to xphoto gain estimation.
     @param opencv_tonemap_options {OpenCvTonemapOptions|None} Optional OpenCV-Tonemap backend selector and knob payload.
@@ -707,6 +709,7 @@ class PostprocessOptions:
         default_factory=PostGammaAutoOptions
     )
     auto_brightness_enabled: bool = False
+    auto_brightness_pre_applied: bool = False
     auto_brightness_options: AutoBrightnessOptions = field(
         default_factory=AutoBrightnessOptions
     )
@@ -718,6 +721,7 @@ class PostprocessOptions:
     merge_gamma_option: MergeGammaOption = field(default_factory=MergeGammaOption)
     raw_white_balance_mode: str = DEFAULT_RAW_WHITE_BALANCE_MODE
     white_balance_mode: str | None = None
+    auto_white_balance_pre_applied: bool = False
     white_balance_analysis_source: str = WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO
     white_balance_xphoto_domain: str = DEFAULT_WHITE_BALANCE_XPHOTO_DOMAIN
     opencv_tonemap_options: OpenCvTonemapOptions | None = None
@@ -1207,7 +1211,7 @@ def print_help(version):
     )
     _print_help_option(
         "--auto-white-balance=<mode>",
-        "Optional post-merge white-balance stage executed after auto-brightness and before static postprocess controls.",
+        "Optional pre-bracketing white-balance stage executed after auto-brightness and before auto-zero evaluation.",
         (
             "Allowed values: "
             + ", ".join(_WHITE_BALANCE_MODES)
@@ -1353,7 +1357,7 @@ def print_help(version):
     _print_help_section("Step 4 - Auto-brightness stage")
     _print_help_option(
         "--auto-brightness=<enable|disable>",
-        "Enable or disable the auto-brightness stage executed after HDR merge and before static postprocess.",
+        "Enable or disable the auto-brightness stage executed after linear-base extraction and before auto-zero evaluation/bracket generation.",
         ("Default: `enable`.",),
     )
     _print_help_option(
@@ -4623,7 +4627,7 @@ def _parse_run_options(args):
     step controls, optional RAW white-balance normalization selector
     (`--white-balance=<GREEN|MAX|MIN|MEAN>`),
     optional auto-white-balance selector (`--auto-white-balance=<mode>`) applied to
-    post-merge image after auto-brightness when enabled, optional xphoto estimation-domain selector
+    the linear base image after auto-brightness and before auto-zero evaluation, optional xphoto estimation-domain selector
     (`--white-balance-xphoto-domain=<linear|srgb|source-auto>`),
     optional postprocess controls including `--post-gamma=<value|auto>` and
     optional `--post-gamma-auto-*` knobs,
@@ -6483,21 +6487,24 @@ def _apply_auto_white_balance_stage_float(
     source_gamma_info=None,
     bits_per_color=16,
     auto_adjust_dependencies=None,
+    estimation_input_is_auto_brightness_preprocessed=False,
 ):
-    """@brief Apply post-merge auto-white-balance stage on one RGB float image.
+    """@brief Apply one auto-white-balance stage on one RGB float image.
 
     @details Keeps the stage disabled when `white_balance_mode` is `None`.
-    Otherwise computes one transient estimation image by applying the shared
-    auto-brightness algorithm to the stage input, derives one gain vector using
-    the configured white-balance mode, applies gains to the original stage
-    input, and emits one corrected RGB float output.
-    @param image_rgb_float {object} Post-merge RGB float stage input image.
+    Otherwise computes one transient estimation image from the stage input:
+    reuses the stage input directly when it is already auto-brightness-preprocessed,
+    else applies the shared auto-brightness preprocessing algorithm. Then derives
+    one gain vector using the configured white-balance mode, applies gains to the
+    original stage input, and emits one corrected RGB float output.
+    @param image_rgb_float {object} RGB float stage input image.
     @param white_balance_mode {str|None} Optional canonical white-balance mode selector.
     @param auto_brightness_options {AutoBrightnessOptions} Auto-brightness options reused for estimation preprocessing.
     @param white_balance_xphoto_domain {str} Xphoto estimation-domain selector in `{"linear","srgb","source-auto"}`.
     @param source_gamma_info {SourceGammaInfo|None} Source-gamma diagnostics used only when xphoto domain is `source-auto`.
     @param bits_per_color {int} Source DNG bit depth used for IA quantization settings.
     @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
+    @param estimation_input_is_auto_brightness_preprocessed {bool} `True` when stage input already includes auto-brightness and must be used directly as white-balance estimation payload.
     @return {object} RGB float image after optional auto-white-balance stage.
     @exception RuntimeError Raised when required dependencies are missing.
     @exception ValueError Raised when mode is unsupported.
@@ -6518,11 +6525,14 @@ def _apply_auto_white_balance_stage_float(
     ).astype(np_module.float32, copy=False)
     if white_balance_mode is None:
         return stage_input_rgb
-    estimation_image_rgb = _apply_auto_brightness_rgb_float(
-        np_module=np_module,
-        image_rgb_float=stage_input_rgb,
-        auto_brightness_options=auto_brightness_options,
-    )
+    if estimation_input_is_auto_brightness_preprocessed:
+        estimation_image_rgb = stage_input_rgb
+    else:
+        estimation_image_rgb = _apply_auto_brightness_rgb_float(
+            np_module=np_module,
+            image_rgb_float=stage_input_rgb,
+            auto_brightness_options=auto_brightness_options,
+        )
     if white_balance_mode in (
         WHITE_BALANCE_MODE_SIMPLE,
         WHITE_BALANCE_MODE_GRAYWORLD,
@@ -12142,8 +12152,9 @@ def _encode_jpg(
     """@brief Encode merged HDR float payload into final JPG output.
 
     @details Accepts one normalized RGB float image from the selected merge
-    backend, executes optional auto-brightness stage, optional post-merge
-    auto-white-balance stage, static postprocess stage (numeric
+    backend, executes optional auto-brightness stage unless pre-applied by the
+    caller, executes optional auto-white-balance stage unless pre-applied by the
+    caller, executes static postprocess stage (numeric
     gamma/brightness/contrast/saturation or auto-gamma replacement), optional
     auto-levels stage, optional auto-adjust stage, and then performs exactly one float-to-uint8
     conversion immediately before JPEG save. When debug context is present, the
@@ -12181,7 +12192,10 @@ def _encode_jpg(
         np_module=np_module,
         image_data=merged_image_float,
     )
-    if postprocess_options.auto_brightness_enabled:
+    if (
+        postprocess_options.auto_brightness_enabled
+        and not postprocess_options.auto_brightness_pre_applied
+    ):
         image_rgb_float = _apply_auto_brightness_rgb_float(
             np_module=np_module,
             image_rgb_float=image_rgb_float,
@@ -12195,7 +12209,10 @@ def _encode_jpg(
                 stage_suffix="_3.0_auto-brightness",
                 image_rgb_float=image_rgb_float,
             )
-    if postprocess_options.auto_white_balance_mode is not None:
+    if (
+        postprocess_options.auto_white_balance_mode is not None
+        and not postprocess_options.auto_white_balance_pre_applied
+    ):
         image_rgb_float = _apply_auto_white_balance_stage_float(
             image_rgb_float=image_rgb_float,
             white_balance_mode=postprocess_options.auto_white_balance_mode,
@@ -12590,7 +12607,6 @@ def run(args):
                 source_gamma_info = _extract_source_gamma_info(raw_handle)
                 bits_per_color = _detect_dng_bits_per_color(raw_handle)
                 _validate_supported_bits_per_color(bits_per_color)
-                base_rgb_float = None
                 effective_ev_value = None
                 print_info(_describe_source_gamma_info(source_gamma_info))
                 exif_gamma_tags = _extract_exif_gamma_tags(
@@ -12624,12 +12640,29 @@ def run(args):
                         evidence="cli-custom",
                     )
                 print_info(_describe_resolved_merge_gamma(resolved_merge_gamma))
-                if auto_ev_enabled:
-                    base_rgb_float = _extract_base_rgb_linear_float(
-                        raw_handle=raw_handle,
+                base_rgb_float = _extract_base_rgb_linear_float(
+                    raw_handle=raw_handle,
+                    np_module=numpy_module,
+                    raw_white_balance_mode=postprocess_options.raw_white_balance_mode,
+                )
+                if postprocess_options.auto_brightness_enabled:
+                    base_rgb_float = _apply_auto_brightness_rgb_float(
                         np_module=numpy_module,
-                        raw_white_balance_mode=postprocess_options.raw_white_balance_mode,
+                        image_rgb_float=base_rgb_float,
+                        auto_brightness_options=postprocess_options.auto_brightness_options,
                     )
+                if postprocess_options.auto_white_balance_mode is not None:
+                    base_rgb_float = _apply_auto_white_balance_stage_float(
+                        image_rgb_float=base_rgb_float,
+                        white_balance_mode=postprocess_options.auto_white_balance_mode,
+                        auto_brightness_options=postprocess_options.auto_brightness_options,
+                        white_balance_xphoto_domain=postprocess_options.auto_white_balance_xphoto_domain,
+                        source_gamma_info=source_gamma_info,
+                        bits_per_color=bits_per_color,
+                        auto_adjust_dependencies=auto_adjust_dependencies,
+                        estimation_input_is_auto_brightness_preprocessed=postprocess_options.auto_brightness_enabled,
+                    )
+                if auto_ev_enabled:
                     joint_solution = _resolve_joint_auto_ev_solution(
                         auto_ev_options=auto_ev_options,
                         auto_adjust_dependencies=auto_adjust_dependencies,
@@ -12638,12 +12671,6 @@ def run(args):
                     resolved_ev_zero = joint_solution.ev_zero
                     effective_ev_value = joint_solution.ev_delta
                 else:
-                    if base_rgb_float is None:
-                        base_rgb_float = _extract_base_rgb_linear_float(
-                            raw_handle=raw_handle,
-                            np_module=numpy_module,
-                            raw_white_balance_mode=postprocess_options.raw_white_balance_mode,
-                        )
                     evaluations = _calculate_auto_zero_evaluations(
                         cv2_module=None,
                         np_module=numpy_module,
@@ -12790,12 +12817,19 @@ def run(args):
                     merged_image_float=merged_image_float,
                     merge_debug_snapshots=merge_debug_snapshots,
                 )
+            encode_postprocess_options = replace(
+                postprocess_options,
+                auto_brightness_pre_applied=postprocess_options.auto_brightness_enabled,
+                auto_white_balance_pre_applied=(
+                    postprocess_options.auto_white_balance_mode is not None
+                ),
+            )
             _encode_jpg(
                 imageio_module=imageio_module,
                 pil_image_module=pil_image_module,
                 merged_image_float=merged_image_float,
                 output_jpg=output_jpg,
-                postprocess_options=postprocess_options,
+                postprocess_options=encode_postprocess_options,
                 auto_adjust_dependencies=auto_adjust_dependencies,
                 numpy_module=numpy_module,
                 bits_per_color=bits_per_color,

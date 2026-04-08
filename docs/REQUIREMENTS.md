@@ -120,8 +120,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-011**: MUST run `luminance-hdr-cli` with deterministic HDR/TMO arguments including `--ldrTiff 32b` for luminance backend, MUST print the full executed command syntax with parameters to runtime output, confine any required float32 TIFF intermediates to the backend step, and return normalized RGB float output.
 - **REQ-174**: MUST serialize luminance backend input bracket images from DNG2JPG RGB float `[0,1]` working format into TIFF float32 files before `luminance-hdr-cli` execution.
 - **REQ-175**: MUST import `luminance-hdr-cli` output TIFF float32 data and normalize it back to DNG2JPG RGB float `[0,1]` working format.
-- **REQ-012**: MUST exchange normalized OpenCV-compatible RGB float tensors `[0,1]` between merge, auto-brightness, auto-levels, static postprocess, auto-adjust, and final-save preparation stages.
-- **REQ-013**: MUST execute optional auto-brightness immediately after HDR-merge metadata/setup completion and before static postprocess, while static postprocess keeps order `gamma->brightness->contrast->saturation` with numeric or auto `--post-gamma`.
+- **REQ-012**: MUST exchange normalized OpenCV-compatible RGB float tensors `[0,1]` across linear-base extraction, auto-brightness, auto-white-balance, auto-zero evaluation, bracket generation, merge, static postprocess, auto-adjust, and final-save preparation stages.
+- **REQ-013**: MUST execute optional auto-brightness after `_extract_base_rgb_linear_float` and before `_calculate_auto_zero_evaluations`; static postprocess MUST keep `gamma->brightness->contrast->saturation`, and its brightness substage MUST apply only static/manual brightness.
 - **REQ-106**: MUST execute optional auto-adjust stage after static postprocess and before final JPEG quantization/write, preserve RGB float input/output interfaces, and confine any required float-to-uint16 or TIFF16 conversions to the auto-adjust step itself.
 - **REQ-014**: MUST synchronize output file timestamps from EXIF datetime only after refreshed EXIF metadata has been written when EXIF datetime metadata is available.
 - **REQ-015**: MUST return `1` on parse, validation, dependency, and processing errors, and return `0` on successful processing.
@@ -156,7 +156,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-207**: MUST implement `MEAN` normalization by dividing all RAW WB coefficients by their arithmetic mean so the normalized mean gain equals `1.0`.
 - **REQ-208**: MUST print one RAW WB normalization diagnostic before exposure planning containing rawpy-extracted RGB coefficients, selected normalization mode (`GREEN|MAX|MIN|MEAN`), and normalized RGB gains used for white-balance application.
 - **REQ-209**: MUST format every numeric coefficient in RAW WB normalization diagnostics as fixed-point float with exactly four fractional digits.
-- **REQ-032**: MUST evaluate `ev_best`, `ev_ettr`, and `ev_detail` on the normalized linear gamma=`1` RGB image and MUST select default `ev_zero` as the minimum absolute-value candidate among those three values when `--ev-zero` is not specified.
+- **REQ-032**: MUST evaluate `ev_best`, `ev_ettr`, and `ev_detail` on the normalized linear gamma=`1` RGB image after optional auto-brightness and auto-white-balance, and MUST select default `ev_zero` as the minimum absolute-value candidate when `--ev-zero` is not specified.
 - **REQ-166**: MUST expose `--auto-ev-step` as a positive configurable EV increment for iterative bracket expansion, defaulting to `0.1`.
 - **REQ-167**: MUST derive `ev_delta` by iterating from `auto_ev_step`, evaluating unclipped bracket images at `ev_zero-ev_delta` and `ev_zero+ev_delta`, and stopping at the first step where shadow clipping exceeds `--auto-ev-shadow-clipping` or highlight clipping reaches `--auto-ev-highlight-clipping`.
 - **REQ-168**: MUST measure highlight clipping as the percentage of pixels in the plus image with any channel `>=1` and shadow clipping as the percentage of pixels in the minus image with any channel `<=0`.
@@ -243,9 +243,9 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-149**: MUST preserve debug TIFF files after command completion while keeping temporary workspace cleanup behavior unchanged for non-debug intermediates.
 - **REQ-181**: MUST parse optional `--auto-white-balance=<Simple|GrayworldWB|IA|ColorConstancy|TTL>`, defaulting the auto-white-balance stage to disabled when omitted and rejecting unknown values.
 - **REQ-199**: MUST derive white-balance analysis exclusively from the current stage input image and MUST NOT use bracket tensors or `ev_zero` as analysis sources.
-- **REQ-182**: MUST execute auto-white-balance only when `--auto-white-balance` is specified, after auto-brightness and before static manual postprocess controls; omitted option MUST print `Auto-white-balance stage: disabled` and bypass the stage.
+- **REQ-182**: MUST execute auto-white-balance only when `--auto-white-balance` is specified, after auto-brightness and before `_calculate_auto_zero_evaluations`; omitted option MUST print `Auto-white-balance stage: disabled` and bypass the stage.
 - **REQ-183**: MUST estimate one auto-white-balance gain vector from a transient analysis image built from the stage input after applying shared auto-brightness preprocessing.
-- **REQ-200**: MUST apply auto-white-balance gains to the original stage input image and output one corrected RGB float image to downstream static/manual postprocess stages.
+- **REQ-200**: MUST apply auto-white-balance gains to the original stage input image and output one corrected RGB float image to downstream auto-zero evaluation, bracket generation, and static/manual postprocess stages.
 - **REQ-213**: MUST keep auto-brightness preprocessing used for white-point estimation internal to estimation and MUST NOT output that preprocessed image as stage output.
 - **REQ-184**: MUST implement `--auto-white-balance=Simple` via OpenCV xphoto `createSimpleWB` on a real analysis image using full resolution or anti-aliased pyramid downsampling with `INTER_AREA`, without fixed-size synthetic proxy payloads.
 - **REQ-185**: MUST implement `--auto-white-balance=GrayworldWB` via OpenCV xphoto `createGrayworldWB` on a real analysis image using full resolution or anti-aliased pyramid downsampling with `INTER_AREA`, without fixed-size synthetic proxy payloads.
@@ -330,7 +330,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-040**: MUST verify float-only OpenCV Mertens output applies OpenCV-equivalent `255x` exposure-fusion scaling before final `[0,1]` normalization.
 - **TST-060**: MUST verify `_parse_run_options` defaults auto-white-balance to disabled, defaults xphoto domain to `source-auto`, and accepts all supported auto-white-balance selectors.
 - **TST-061**: MUST verify `_parse_run_options` rejects missing or unsupported `--auto-white-balance` and `--white-balance-xphoto-domain` values with deterministic diagnostics.
-- **TST-062**: MUST verify `run` prints `Auto-white-balance stage: disabled`, skips auto-white-balance when `--auto-white-balance` is omitted, and forwards auto-brightness output unchanged to static/manual postprocess.
+- **TST-062**: MUST verify `run` prints `Auto-white-balance stage: disabled`, skips auto-white-balance when `--auto-white-balance` is omitted, executes auto-brightness after `_extract_base_rgb_linear_float` and before `_calculate_auto_zero_evaluations`, and keeps static-postprocess brightness manual-only.
 - **TST-063**: MUST verify `_apply_auto_white_balance_stage_float` applies one identical gain vector to one stage input image using transient estimation-only preprocessing.
 - **TST-064**: MUST verify `Simple` white-balance path invokes OpenCV xphoto `createSimpleWB` and uses real-image analysis payloads without fixed `(1,9,3)` proxy assumptions.
 - **TST-065**: MUST verify `GrayworldWB` white-balance path invokes OpenCV xphoto `createGrayworldWB` and uses real-image analysis payloads without fixed `(1,9,3)` proxy assumptions.
