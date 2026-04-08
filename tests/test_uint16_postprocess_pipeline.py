@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 import sys
@@ -3117,6 +3118,22 @@ def test_run_opencv_tonemap_backend_sanitizes_non_finite_outputs_for_all_algorit
             rtol=0.0,
             atol=0.0,
         )
+
+
+def test_to_uint16_image_array_replaces_non_finite_without_runtime_warning() -> None:
+    """`_to_uint16_image_array` must clear non-finite values without warnings."""
+
+    source = np.array([[np.nan]], dtype=np.float32)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        converted = dng2jpg_module._to_uint16_image_array(  # pylint: disable=protected-access
+            np_module=np,
+            image_data=source,
+        )
+
+    assert converted.dtype == np.uint16
+    np.testing.assert_array_equal(converted, np.array([[0]], dtype=np.uint16))
 
 
 def test_extract_bracket_images_float_uses_single_linear_base_pass() -> None:

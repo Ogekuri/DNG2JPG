@@ -8551,7 +8551,8 @@ def _to_uint8_image_array(np_module, image_data):
 
     @details Normalizes integer or float image payloads into `uint8` preserving
     relative brightness scale: `uint16` uses `/257`, normalized float arrays in
-    `[0,1]` use `*255`, and all paths clamp to inclusive byte range.
+    `[0,1]` use `*255`, non-finite float samples are replaced with `0.0`, and
+    all paths clamp to inclusive byte range.
     @param np_module {ModuleType} Imported numpy module.
     @param image_data {object} Numeric image tensor.
     @return {object} `uint8` image tensor.
@@ -8579,6 +8580,9 @@ def _to_uint8_image_array(np_module, image_data):
         for attr in ("array", "float64", "min", "max", "clip", "round", "uint8")
     ):
         numeric_data = np_module.array(image_data, dtype=np_module.float64)
+        if hasattr(np_module, "isfinite") and hasattr(np_module, "where"):
+            finite_mask = np_module.isfinite(numeric_data)
+            numeric_data = np_module.where(finite_mask, numeric_data, 0.0)
         minimum_value = float(np_module.min(numeric_data)) if numeric_data.size else 0.0
         maximum_value = float(np_module.max(numeric_data)) if numeric_data.size else 0.0
         if minimum_value >= 0.0 and maximum_value <= 1.0:
@@ -8598,7 +8602,8 @@ def _to_uint16_image_array(np_module, image_data):
 
     @details Normalizes integer or float image payloads into `uint16` preserving
     relative brightness scale: `uint8` uses `*257`, normalized float arrays in
-    `[0,1]` use `*65535`, and all paths clamp to inclusive 16-bit range.
+    `[0,1]` use `*65535`, non-finite float samples are replaced with `0.0`, and
+    all paths clamp to inclusive 16-bit range.
     @param np_module {ModuleType} Imported numpy module.
     @param image_data {object} Numeric image tensor.
     @return {object} `uint16` image tensor.
@@ -8626,6 +8631,9 @@ def _to_uint16_image_array(np_module, image_data):
         for attr in ("array", "float64", "min", "max", "clip", "round", "uint16")
     ):
         numeric_data = np_module.array(image_data, dtype=np_module.float64)
+        if hasattr(np_module, "isfinite") and hasattr(np_module, "where"):
+            finite_mask = np_module.isfinite(numeric_data)
+            numeric_data = np_module.where(finite_mask, numeric_data, 0.0)
         minimum_value = float(np_module.min(numeric_data)) if numeric_data.size else 0.0
         maximum_value = float(np_module.max(numeric_data)) if numeric_data.size else 0.0
         if minimum_value >= 0.0 and maximum_value <= 1.0:
