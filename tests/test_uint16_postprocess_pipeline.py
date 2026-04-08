@@ -1137,11 +1137,27 @@ def test_parse_run_options_accepts_white_balance_modes_and_analysis_source_defau
         ["input.dng", "output.jpg", "--ev=1"]
     )
     assert parsed_default is not None
+    assert (
+        parsed_default[4].raw_white_balance_mode
+        == dng2jpg_module.DEFAULT_RAW_WHITE_BALANCE_MODE
+    )
     assert parsed_default[4].white_balance_mode is None
     assert (
         parsed_default[4].white_balance_analysis_source
         == dng2jpg_module.WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO
     )
+
+    for raw_white_balance_mode in ("GREEN", "MAX", "MIN", "MEAN"):
+        parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+            [
+                "input.dng",
+                "output.jpg",
+                "--ev=1",
+                f"--white-balance={raw_white_balance_mode}",
+            ]
+        )
+        assert parsed is not None
+        assert parsed[4].raw_white_balance_mode == raw_white_balance_mode
 
     for white_balance_mode in (
         "Simple",
@@ -1184,6 +1200,10 @@ def test_parse_run_options_accepts_white_balance_modes_and_analysis_source_defau
 def test_parse_run_options_rejects_invalid_white_balance_mode_or_analysis_source() -> None:
     """Parser must reject unsupported white-balance mode or analysis source."""
 
+    invalid_raw_white_balance = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--ev=1", "--white-balance=invalid-mode"]
+    )
+    assert invalid_raw_white_balance is None
     parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         ["input.dng", "output.jpg", "--ev=1", "--auto-white-balance=invalid-mode"]
     )
@@ -1621,6 +1641,9 @@ def test_print_help_orders_sections_by_pipeline_step(capsys) -> None:
     assert output.index("--auto-levels=<enable|disable>") < output.index(
         "--al-clip-pct=<value>"
     )
+    assert output.index("--white-balance=<GREEN|MAX|MIN|MEAN>") < output.index(
+        "--auto-white-balance=<mode>"
+    )
     assert output.index("--auto-white-balance=<mode>") < output.index(
         "--hdr-merge=<Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>"
     )
@@ -1654,6 +1677,7 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
         "--auto-ev-shadow-clipping=<0..100>",
         "--auto-ev-highlight-clipping=<0..100>",
         "--auto-ev-step=<value>",
+        "--white-balance=<GREEN|MAX|MIN|MEAN>",
         "--auto-white-balance=<mode>",
         "--hdr-merge=<Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>",
         "--opencv-merge-algorithm=<name>",
@@ -1726,6 +1750,7 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
     assert "Only accepted value: `linear`." in output
     assert "Allowed values: Debevec, Robertson, Mertens." in output
     assert "Allowed values: rggb, bt709, mean." in output
+    assert "Allowed values: GREEN, MAX, MIN, MEAN." in output
     assert "Allowed values: Simple, GrayworldWB, IA, ColorConstancy, TTL." in output
     assert "Effective only when `--hdr-merge=OpenCV-Merge`." in output
     assert "Effective only when `--hdr-merge=OpenCV-Tonemap`" in output
@@ -2742,7 +2767,7 @@ def test_run_opencv_tonemap_backend_preserves_dynamic_range_without_clipping() -
 
 
 def test_extract_bracket_images_float_uses_single_linear_base_pass() -> None:
-    """Bracket extraction must use one neutral RAW pass plus green-anchored WB base."""
+    """Bracket extraction must use one neutral RAW pass plus mode-normalized WB base."""
 
     base_rgb_u16 = np.array(
         [
@@ -2810,11 +2835,8 @@ def test_extract_bracket_images_float_uses_single_linear_base_pass() -> None:
         float(fake_raw.white_level) - float(np.mean(np.array(fake_raw.black_level_per_channel)))
     )
     base_rgb_float = base_rgb_u16.astype(np.float32) / dynamic_range_max
-    green_coefficient = np.float32(1.0)
-    normalized_gains = np.array(
-        [1.6 / green_coefficient, 1.0 / green_coefficient, 1.4 / green_coefficient],
-        dtype=np.float32,
-    )
+    mean_coefficient = np.float32(np.mean(np.array([1.6, 1.0, 1.4], dtype=np.float32)))
+    normalized_gains = np.array([1.6, 1.0, 1.4], dtype=np.float32) / mean_coefficient
     balanced_base = base_rgb_float * normalized_gains.reshape((1, 1, 3))
     for bracket_image, multiplier in zip(bracket_images, multipliers):
         np.testing.assert_allclose(
@@ -2826,7 +2848,7 @@ def test_extract_bracket_images_float_uses_single_linear_base_pass() -> None:
 
 
 def test_extract_base_rgb_linear_float_uses_neutral_raw_postprocess_and_normalized_camera_wb() -> None:
-    """Base extraction must normalize by dynamic range then anchor WB gains to green."""
+    """Base extraction must normalize by dynamic range then apply default MEAN WB."""
 
     base_rgb_u16 = np.array(
         [
@@ -2891,14 +2913,62 @@ def test_extract_base_rgb_linear_float_uses_neutral_raw_postprocess_and_normaliz
         float(fake_raw.white_level) - float(np.mean(np.array(fake_raw.black_level_per_channel)))
     )
     neutral_base = base_rgb_u16.astype(np.float32) / dynamic_range_max
-    green_coefficient = np.float32(1.0)
-    expected_gains = np.array(
-        [1.6 / green_coefficient, 1.0 / green_coefficient, 1.4 / green_coefficient],
-        dtype=np.float32,
-    )
+    mean_coefficient = np.float32(np.mean(np.array([1.6, 1.0, 1.4], dtype=np.float32)))
+    expected_gains = np.array([1.6, 1.0, 1.4], dtype=np.float32) / mean_coefficient
     expected = neutral_base * expected_gains.reshape((1, 1, 3))
     np.testing.assert_allclose(output, expected.astype(np.float32), rtol=1e-6, atol=1e-6)
-    assert float(expected_gains[1]) == 1.0
+    np.testing.assert_allclose(float(np.mean(expected_gains)), 1.0, rtol=1e-6, atol=1e-6)
+
+
+def test_normalize_white_balance_gains_rgb_supports_all_modes() -> None:
+    """WB normalization helper must apply GREEN/MAX/MIN/MEAN formulas."""
+
+    camera_wb = (1.6, 1.0, 1.4)
+    gains_green = dng2jpg_module._normalize_white_balance_gains_rgb(  # pylint: disable=protected-access
+        np_module=np,
+        camera_wb_rgb=camera_wb,
+        raw_white_balance_mode="GREEN",
+    )
+    np.testing.assert_allclose(gains_green, np.array([1.6, 1.0, 1.4], dtype=np.float64))
+
+    gains_max = dng2jpg_module._normalize_white_balance_gains_rgb(  # pylint: disable=protected-access
+        np_module=np,
+        camera_wb_rgb=camera_wb,
+        raw_white_balance_mode="MAX",
+    )
+    np.testing.assert_allclose(gains_max, np.array([1.0, 0.625, 0.875], dtype=np.float64))
+    np.testing.assert_allclose(float(np.max(gains_max)), 1.0, rtol=1e-12, atol=1e-12)
+
+    gains_min = dng2jpg_module._normalize_white_balance_gains_rgb(  # pylint: disable=protected-access
+        np_module=np,
+        camera_wb_rgb=camera_wb,
+        raw_white_balance_mode="MIN",
+    )
+    np.testing.assert_allclose(gains_min, np.array([1.6, 1.0, 1.4], dtype=np.float64))
+    np.testing.assert_allclose(float(np.min(gains_min)), 1.0, rtol=1e-12, atol=1e-12)
+
+    gains_mean = dng2jpg_module._normalize_white_balance_gains_rgb(  # pylint: disable=protected-access
+        np_module=np,
+        camera_wb_rgb=camera_wb,
+        raw_white_balance_mode="MEAN",
+    )
+    np.testing.assert_allclose(gains_mean, np.array([1.2, 0.75, 1.05], dtype=np.float64))
+    np.testing.assert_allclose(float(np.mean(gains_mean)), 1.0, rtol=1e-12, atol=1e-12)
+
+
+def test_normalize_white_balance_gains_rgb_green_mode_rejects_non_unit_green() -> None:
+    """GREEN mode must fail when raw green WB coefficient is not exactly 1.0."""
+
+    try:
+        dng2jpg_module._normalize_white_balance_gains_rgb(  # pylint: disable=protected-access
+            np_module=np,
+            camera_wb_rgb=(1.6, 1.1, 1.4),
+            raw_white_balance_mode="GREEN",
+        )
+    except ValueError as exc:
+        assert "GREEN mode requires camera green coefficient equal to 1.0" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for GREEN mode with non-unit green")
 
 
 def test_parse_run_options_defaults_gamma_to_auto() -> None:

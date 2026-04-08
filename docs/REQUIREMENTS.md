@@ -114,7 +114,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-008**: MUST compute `ev_best`, `ev_ettr`, and `ev_detail` from the normalized linear HDR base image whenever exposure planning executes, independent of whether `--ev` or `--auto-ev` selected the mode.
 - **REQ-009**: MUST compute one symmetric triplet centered on `ev_zero` and use one bracketing half-span `ev_delta` derived only from the iterative clipping-threshold process.
 - **REQ-010**: MUST extract one maximum-resolution demosaiced RGB base image using one neutral linear `rawpy.postprocess` call with `gamma=(1,1)`, `no_auto_bright=True`, `output_bps=16`, `use_camera_wb=False`, `user_wb=[1,1,1,1]`, `output_color=raw`, and `no_auto_scale=True`.
-- **REQ-158**: MUST normalize neutral base extraction using sensor dynamic range `(white_level - mean(black_level_per_channel))`, then apply camera white-balance gains normalized relative to the green coefficient before any bracket arithmetic.
+- **REQ-158**: MUST normalize neutral base extraction using sensor dynamic range `(white_level - mean(black_level_per_channel))`, then apply camera white-balance gains normalized by the resolved RAW white-balance normalization mode before any bracket arithmetic.
 - **REQ-159**: MUST derive `ev_minus`, `ev_zero`, and `ev_plus` only by EV scaling and `[0,1]` clipping of the normalized HDR base image.
 - **REQ-160**: MUST preserve the ordered float triplet `(ev_minus, ev_zero, ev_plus)` as the only cross-stage HDR bracket contract.
 - **REQ-011**: MUST run `luminance-hdr-cli` with deterministic HDR/TMO arguments including `--ldrTiff 32b` for luminance backend, MUST print the full executed command syntax with parameters to runtime output, confine any required float32 TIFF intermediates to the backend step, and return normalized RGB float output.
@@ -148,7 +148,12 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-026**: MUST resolve DNG bit depth from `raw_image_visible.dtype.itemsize * 8` with fallback to `white_level.bit_length()`.
 - **REQ-027**: MUST enforce minimum supported bit depth as `9` bits per color.
 - **REQ-030**: MUST accept finite numeric `--ev` values `>=0` and finite numeric `--ev-zero` values without enforcing `0.25` EV step granularity or bit-depth-derived upper bounds.
-- **REQ-031**: MUST derive exposure-planning inputs from one shared neutral-linear HDR base image after applying `rawpy` camera white-balance gains normalized relative to the green coefficient in float domain.
+- **REQ-031**: MUST derive exposure-planning inputs from one shared neutral-linear HDR base image after applying float-domain `rawpy` camera white-balance gains normalized by the resolved RAW white-balance normalization mode.
+- **REQ-203**: MUST parse optional `--white-balance=<GREEN|MAX|MIN|MEAN>`, defaulting to `MEAN`, and MUST reject unknown values.
+- **REQ-204**: MUST implement `GREEN` normalization by dividing all RAW WB coefficients by the green coefficient and MUST terminate with explicit error when the normalized green gain is not exactly `1.0`.
+- **REQ-205**: MUST implement `MAX` normalization by dividing all RAW WB coefficients by the maximum coefficient so the maximum normalized gain equals `1.0`.
+- **REQ-206**: MUST implement `MIN` normalization by dividing all RAW WB coefficients by the minimum coefficient so the minimum normalized gain equals `1.0`.
+- **REQ-207**: MUST implement `MEAN` normalization by dividing all RAW WB coefficients by their arithmetic mean so the normalized mean gain equals `1.0`.
 - **REQ-032**: MUST evaluate `ev_best`, `ev_ettr`, and `ev_detail` on the normalized linear gamma=`1` RGB image and MUST select default `ev_zero` as the minimum absolute-value candidate among those three values when `--ev-zero` is not specified.
 - **REQ-166**: MUST expose `--auto-ev-step` as a positive configurable EV increment for iterative bracket expansion, defaulting to `0.1`.
 - **REQ-167**: MUST derive `ev_delta` by iterating from `auto_ev_step`, evaluating unclipped bracket images at `ev_zero-ev_delta` and `ev_zero+ev_delta`, and stopping at the first step where shadow clipping exceeds `--auto-ev-shadow-clipping` or highlight clipping reaches `--auto-ev-highlight-clipping`.

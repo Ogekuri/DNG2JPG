@@ -120,6 +120,11 @@ WHITE_BALANCE_MODE_GRAYWORLD = "GrayworldWB"
 WHITE_BALANCE_MODE_IA = "IA"
 WHITE_BALANCE_MODE_COLOR_CONSTANCY = "ColorConstancy"
 WHITE_BALANCE_MODE_TTL = "TTL"
+RAW_WHITE_BALANCE_MODE_GREEN = "GREEN"
+RAW_WHITE_BALANCE_MODE_MAX = "MAX"
+RAW_WHITE_BALANCE_MODE_MIN = "MIN"
+RAW_WHITE_BALANCE_MODE_MEAN = "MEAN"
+DEFAULT_RAW_WHITE_BALANCE_MODE = RAW_WHITE_BALANCE_MODE_MEAN
 WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO = "ev-zero"
 WHITE_BALANCE_ANALYSIS_SOURCE_LINEAR_BASE = "linear-base"
 OPENCV_TONEMAP_MAP_DRAGO = "drago"
@@ -273,6 +278,12 @@ _WHITE_BALANCE_MODES = (
 _WHITE_BALANCE_ANALYSIS_SOURCES = (
     WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO,
     WHITE_BALANCE_ANALYSIS_SOURCE_LINEAR_BASE,
+)
+_RAW_WHITE_BALANCE_MODES = (
+    RAW_WHITE_BALANCE_MODE_GREEN,
+    RAW_WHITE_BALANCE_MODE_MAX,
+    RAW_WHITE_BALANCE_MODE_MIN,
+    RAW_WHITE_BALANCE_MODE_MEAN,
 )
 _OPENCV_MERGE_ALGORITHMS = (
     OPENCV_MERGE_ALGORITHM_DEBEVEC,
@@ -670,11 +681,12 @@ class PostprocessOptions:
     @param auto_adjust_options {AutoAdjustOptions} Knobs for the sole auto-adjust implementation.
     @param debug_enabled {bool} `True` when persistent debug TIFF checkpoints are enabled.
     @param merge_gamma_option {MergeGammaOption} Parsed merge-gamma request applied only by OpenCV and HDR+ backends.
+    @param raw_white_balance_mode {str} RAW camera WB normalization mode in `{"GREEN","MAX","MIN","MEAN"}`.
     @param white_balance_mode {str|None} Optional white-balance mode applied to bracket triplet before HDR merge backend execution.
     @param white_balance_analysis_source {str} White-balance analysis image selector in `{"ev-zero","linear-base"}`.
     @param opencv_tonemap_options {OpenCvTonemapOptions|None} Optional OpenCV-Tonemap backend selector and knob payload.
     @return {None} Immutable dataclass container.
-    @satisfies REQ-020, REQ-050, REQ-065, REQ-066, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-088, REQ-089, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-146, REQ-176, REQ-179, REQ-181, REQ-182, REQ-190, REQ-194, REQ-195, REQ-196, REQ-199
+    @satisfies REQ-020, REQ-050, REQ-065, REQ-066, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-088, REQ-089, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-146, REQ-176, REQ-179, REQ-181, REQ-182, REQ-190, REQ-194, REQ-195, REQ-196, REQ-199, REQ-203
     """
 
     post_gamma: float
@@ -696,6 +708,7 @@ class PostprocessOptions:
     auto_adjust_options: AutoAdjustOptions = field(default_factory=AutoAdjustOptions)
     debug_enabled: bool = False
     merge_gamma_option: MergeGammaOption = field(default_factory=MergeGammaOption)
+    raw_white_balance_mode: str = DEFAULT_RAW_WHITE_BALANCE_MODE
     white_balance_mode: str | None = None
     white_balance_analysis_source: str = WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO
     opencv_tonemap_options: OpenCvTonemapOptions | None = None
@@ -1032,7 +1045,7 @@ def print_help(version):
     characters. Side effects: stdout writes only.
     @param version {str} CLI version label to append in usage output.
     @return {None} Writes help text to stdout.
-    @satisfies DES-008, REQ-017, REQ-018, REQ-019, REQ-020, REQ-021, REQ-022, REQ-023, REQ-024, REQ-025, REQ-033, REQ-100, REQ-101, REQ-102, REQ-107, REQ-111, REQ-124, REQ-125, REQ-127, REQ-128, REQ-135, REQ-141, REQ-143, REQ-146, REQ-155, REQ-156, REQ-176, REQ-179, REQ-181, REQ-182, REQ-189, REQ-190, REQ-194, REQ-195, REQ-196
+    @satisfies DES-008, REQ-017, REQ-018, REQ-019, REQ-020, REQ-021, REQ-022, REQ-023, REQ-024, REQ-025, REQ-033, REQ-100, REQ-101, REQ-102, REQ-107, REQ-111, REQ-124, REQ-125, REQ-127, REQ-128, REQ-135, REQ-141, REQ-143, REQ-146, REQ-155, REQ-156, REQ-176, REQ-179, REQ-181, REQ-182, REQ-189, REQ-190, REQ-194, REQ-195, REQ-196, REQ-203
     """
 
     postprocess_default_rows = (
@@ -1131,6 +1144,14 @@ def print_help(version):
     _print_help_option(
         "--auto-ev-step=<value>",
         f"Positive EV increment used by iterative bracket expansion. Default: `{DEFAULT_AUTO_EV_STEP:g}`.",
+    )
+    _print_help_option(
+        "--white-balance=<GREEN|MAX|MIN|MEAN>",
+        "RAW camera white-balance normalization mode used during linear-base extraction before bracket arithmetic.",
+        (
+            "Allowed values: " + ", ".join(_RAW_WHITE_BALANCE_MODES) + ".",
+            f"Default: `{DEFAULT_RAW_WHITE_BALANCE_MODE}`.",
+        ),
     )
 
     _print_help_section(
@@ -2069,29 +2090,63 @@ def _extract_camera_whitebalance_rgb_triplet(raw_handle):
     return (triplet[0], triplet[1], triplet[2])
 
 
-def _normalize_white_balance_gains_rgb(np_module, camera_wb_rgb):
-    """@brief Normalize one RGB white-balance gain triplet relative to green.
+def _normalize_white_balance_gains_rgb(
+    np_module,
+    camera_wb_rgb,
+    raw_white_balance_mode=DEFAULT_RAW_WHITE_BALANCE_MODE,
+):
+    """@brief Normalize one RAW camera WB gain triplet by selected mode.
 
-    @details Converts one camera white-balance RGB triplet to float64, divides
-    all channels by the green coefficient, and returns gains preserving camera
-    chromatic ratios with green anchored to `1.0`. Invalid or non-positive green
-    coefficients resolve to unit gains. Complexity: O(1). Side effects: none.
+    @details Converts one camera white-balance RGB triplet to float64 and
+    normalizes coefficients by one mode-specific divisor: `GREEN` uses the
+    green coefficient and requires `G==1.0`, `MAX` uses the triplet maximum,
+    `MIN` uses the triplet minimum, and `MEAN` uses the arithmetic mean.
+    Invalid vectors resolve to unit gains. Complexity: O(1). Side effects:
+    none.
     @param np_module {ModuleType} Imported numpy module.
     @param camera_wb_rgb {tuple[float, float, float]} Positive finite camera WB RGB triplet.
-    @return {object} Float64 RGB gain vector normalized by green-channel coefficient.
-    @satisfies REQ-031, REQ-158, REQ-183
+    @param raw_white_balance_mode {str} RAW WB normalization mode selector.
+    @return {object} Float64 RGB gain vector normalized by selected mode divisor.
+    @exception ValueError Raised when `GREEN` mode receives a green WB coefficient not equal to `1.0` or an unsupported mode selector.
+    @satisfies REQ-031, REQ-158, REQ-183, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207
     """
 
     wb_vector = np_module.asarray(camera_wb_rgb, dtype=np_module.float64)
     if wb_vector.shape != (3,):
         return np_module.asarray([1.0, 1.0, 1.0], dtype=np_module.float64)
-    green_coefficient = float(wb_vector[1])
-    if not math.isfinite(green_coefficient) or green_coefficient <= 0.0:
+    if not bool(np_module.all(np_module.isfinite(wb_vector))):
         return np_module.asarray([1.0, 1.0, 1.0], dtype=np_module.float64)
-    normalized = wb_vector / green_coefficient
+    if not bool(np_module.all(wb_vector > 0.0)):
+        return np_module.asarray([1.0, 1.0, 1.0], dtype=np_module.float64)
+
+    resolved_mode = str(raw_white_balance_mode).strip().upper()
+    if resolved_mode == RAW_WHITE_BALANCE_MODE_GREEN:
+        normalization_divisor = float(wb_vector[1])
+        if normalization_divisor != 1.0:
+            raise ValueError(
+                "RAW WB GREEN mode requires camera green coefficient equal to 1.0; "
+                f"received {normalization_divisor!r}"
+            )
+    elif resolved_mode == RAW_WHITE_BALANCE_MODE_MAX:
+        normalization_divisor = float(np_module.max(wb_vector))
+    elif resolved_mode == RAW_WHITE_BALANCE_MODE_MIN:
+        normalization_divisor = float(np_module.min(wb_vector))
+    elif resolved_mode == RAW_WHITE_BALANCE_MODE_MEAN:
+        normalization_divisor = float(np_module.mean(wb_vector))
+    else:
+        raise ValueError(f"Unsupported --white-balance value: {raw_white_balance_mode}")
+
+    if not math.isfinite(normalization_divisor) or normalization_divisor <= 0.0:
+        return np_module.asarray([1.0, 1.0, 1.0], dtype=np_module.float64)
+    normalized = wb_vector / normalization_divisor
     if not np_module.all(np_module.isfinite(normalized)):
         return np_module.asarray([1.0, 1.0, 1.0], dtype=np_module.float64)
     normalized = np_module.maximum(normalized, 1e-12)
+    if resolved_mode == RAW_WHITE_BALANCE_MODE_GREEN and float(normalized[1]) != 1.0:
+        raise ValueError(
+            "RAW WB GREEN mode produced non-unit normalized green gain; "
+            f"received {float(normalized[1])!r}"
+        )
     return normalized.astype(np_module.float64, copy=False)
 
 
@@ -2218,19 +2273,25 @@ def _extract_sensor_dynamic_range_max(raw_handle, np_module):
     return float(dynamic_range_max)
 
 
-def _extract_base_rgb_linear_float(raw_handle, np_module):
+def _extract_base_rgb_linear_float(
+    raw_handle,
+    np_module,
+    raw_white_balance_mode=DEFAULT_RAW_WHITE_BALANCE_MODE,
+):
     """@brief Extract one linear normalized RGB base image from one RAW handle.
 
     @details Executes exactly one neutral linear `rawpy.postprocess` call with
     deterministic no-auto/no-camera-WB parameters, converts output to float,
     normalizes by sensor dynamic range `white_level - mean(black_level_per_channel)`,
-    extracts camera WB metadata gains, normalizes gains relative to green, and
-    applies those gains in float domain without explicit clipping. Complexity:
-    O(H*W). Side effects: one RAW postprocess invocation.
+    extracts camera WB metadata gains, normalizes gains by one selected mode
+    (`GREEN`, `MAX`, `MIN`, `MEAN`), and applies those gains in float domain
+    without explicit clipping. Complexity: O(H*W). Side effects: one RAW
+    postprocess invocation.
     @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
     @param np_module {ModuleType} Imported numpy module.
+    @param raw_white_balance_mode {str} RAW WB normalization mode selector.
     @return {object} White-balanced RGB float tensor derived from neutral extraction.
-    @satisfies REQ-010, REQ-031, REQ-158
+    @satisfies REQ-010, REQ-031, REQ-158, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207
     @see _extract_normalized_preview_luminance_stats
     """
 
@@ -2246,6 +2307,7 @@ def _extract_base_rgb_linear_float(raw_handle, np_module):
     normalized_gains_rgb = _normalize_white_balance_gains_rgb(
         np_module=np_module,
         camera_wb_rgb=camera_wb_rgb,
+        raw_white_balance_mode=raw_white_balance_mode,
     )
     return _apply_normalized_white_balance_to_rgb_float(
         np_module=np_module,
@@ -3794,6 +3856,34 @@ def _parse_auto_adjust_option(auto_adjust_raw):
     return None
 
 
+def _parse_raw_white_balance_mode_option(raw_white_balance_mode_raw):
+    """@brief Parse RAW white-balance normalization mode selector option value.
+
+    @details Accepts case-insensitive RAW white-balance normalization mode
+    selectors and normalizes them to canonical runtime names.
+    @param raw_white_balance_mode_raw {str} Raw `--white-balance` selector token.
+    @return {str|None} Canonical RAW white-balance normalization mode or `None` on parse failure.
+    @satisfies REQ-203
+    """
+
+    mode_text = str(raw_white_balance_mode_raw).strip()
+    if not mode_text:
+        print_error("Invalid --white-balance value: empty value")
+        return None
+    mapping = {
+        RAW_WHITE_BALANCE_MODE_GREEN.lower(): RAW_WHITE_BALANCE_MODE_GREEN,
+        RAW_WHITE_BALANCE_MODE_MAX.lower(): RAW_WHITE_BALANCE_MODE_MAX,
+        RAW_WHITE_BALANCE_MODE_MIN.lower(): RAW_WHITE_BALANCE_MODE_MIN,
+        RAW_WHITE_BALANCE_MODE_MEAN.lower(): RAW_WHITE_BALANCE_MODE_MEAN,
+    }
+    resolved_mode = mapping.get(mode_text.lower())
+    if resolved_mode is not None:
+        return resolved_mode
+    print_error(f"Invalid --white-balance value: {raw_white_balance_mode_raw}")
+    print_error("Allowed values: " + ", ".join(_RAW_WHITE_BALANCE_MODES))
+    return None
+
+
 def _parse_white_balance_mode_option(white_balance_raw):
     """@brief Parse white-balance mode selector option value.
 
@@ -4420,7 +4510,8 @@ def _parse_run_options(args):
     (`--ev=<value>`/`--ev <value>` plus optional `--ev-zero=<value>`),
     automatic exposure selector (`--auto-ev[=<enable|disable>]`) with explicit
     mutual exclusion against `--ev`, optional automatic exposure clipping and
-    step controls,
+    step controls, optional RAW white-balance normalization selector
+    (`--white-balance=<GREEN|MAX|MIN|MEAN>`),
     optional white-balance selector (`--auto-white-balance=<mode>`) applied to
     bracket triplet before backend merge when enabled,
     optional postprocess controls including `--post-gamma=<value|auto>` and
@@ -4438,7 +4529,7 @@ def _parse_run_options(args):
     invalid arity.
     @param args {list[str]} Raw command argument vector.
     @return {tuple[Path, Path, float|None, bool, PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, bool, AutoEvOptions]|None} Parsed `(input, output, ev, auto_ev, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, ev_zero_specified, auto_ev_options)` tuple; `None` on parse failure.
-    @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-020, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146, REQ-176, REQ-179, REQ-180, REQ-181, REQ-183, REQ-189, REQ-190, REQ-191, REQ-194, REQ-195, REQ-196
+    @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-020, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146, REQ-176, REQ-179, REQ-180, REQ-181, REQ-183, REQ-189, REQ-190, REQ-191, REQ-194, REQ-195, REQ-196, REQ-203
     """
 
     positional = []
@@ -4465,6 +4556,7 @@ def _parse_run_options(args):
     auto_adjust_raw_values = {}
     post_gamma_auto_raw_values = {}
     debug_enabled = False
+    raw_white_balance_mode = DEFAULT_RAW_WHITE_BALANCE_MODE
     white_balance_mode = None
     white_balance_analysis_source = WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO
     hdr_merge_mode = HDR_MERGE_MODE_OPENCV_MERGE
@@ -4632,6 +4724,16 @@ def _parse_run_options(args):
                 print_error(f"Unknown option: {option_name}")
                 return None
             auto_adjust_raw_values[option_name] = option_value
+            idx += 1
+            continue
+
+        if token.startswith("--white-balance="):
+            parsed_raw_white_balance_mode = _parse_raw_white_balance_mode_option(
+                token.split("=", 1)[1]
+            )
+            if parsed_raw_white_balance_mode is None:
+                return None
+            raw_white_balance_mode = parsed_raw_white_balance_mode
             idx += 1
             continue
 
@@ -5036,6 +5138,7 @@ def _parse_run_options(args):
             auto_adjust_options=auto_adjust_options,
             debug_enabled=debug_enabled,
             merge_gamma_option=merge_gamma_option,
+            raw_white_balance_mode=raw_white_balance_mode,
             white_balance_mode=white_balance_mode,
             white_balance_analysis_source=white_balance_analysis_source,
             opencv_tonemap_options=opencv_tonemap_options,
@@ -6100,6 +6203,7 @@ def _extract_bracket_images_float(
     np_module,
     multipliers,
     base_rgb_float=None,
+    raw_white_balance_mode=DEFAULT_RAW_WHITE_BALANCE_MODE,
 ):
     """@brief Extract three normalized RGB float brackets from one RAW handle.
 
@@ -6113,8 +6217,9 @@ def _extract_bracket_images_float(
     @param np_module {ModuleType} Imported numpy module.
     @param multipliers {tuple[float, float, float]} Ordered exposure multipliers.
     @param base_rgb_float {object|None} Optional precomputed normalized linear RGB float base tensor.
+    @param raw_white_balance_mode {str} RAW WB normalization mode selector used when base extraction executes in this function.
     @return {list[object]} Ordered RGB float bracket tensors.
-    @satisfies REQ-010, REQ-157, REQ-158, REQ-159, REQ-160
+    @satisfies REQ-010, REQ-157, REQ-158, REQ-159, REQ-160, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207
     """
 
     labels = ("ev_minus", "ev_zero", "ev_plus")
@@ -6122,6 +6227,7 @@ def _extract_bracket_images_float(
         base_rgb_float = _extract_base_rgb_linear_float(
             raw_handle=raw_handle,
             np_module=np_module,
+            raw_white_balance_mode=raw_white_balance_mode,
         )
     bracket_images_float = _build_bracket_images_from_linear_base_float(
         np_module=np_module,
@@ -11663,16 +11769,17 @@ def run(args):
 
     @details Parses command options, validates dependencies, detects source DNG
     bits-per-color from RAW metadata, resolves manual or automatic EV-zero
-    center, resolves static or adaptive EV selector, extracts one linear HDR base image and derives
-    three normalized RGB float brackets, executes the selected HDR backend with
-    float input/output interfaces,
+    center, resolves static or adaptive EV selector, extracts one linear HDR
+    base image using selected RAW WB normalization mode and derives three
+    normalized RGB float brackets, executes the selected HDR backend with float
+    input/output interfaces,
     executes the float-interface post-merge pipeline, optionally emits
     persistent debug TIFF checkpoints for executed stages, writes the final
     JPG, and guarantees temporary artifact cleanup through isolated temporary
     directory lifecycle.
     @param args {list[str]} Command argument vector excluding command token.
     @return {int} `0` on success; `1` on parse/validation/dependency/processing failure.
-    @satisfies PRJ-001, CTN-001, CTN-004, CTN-005, REQ-010, REQ-011, REQ-012, REQ-013, REQ-014, REQ-015, REQ-050, REQ-052, REQ-100, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-127, REQ-128, REQ-129, REQ-131, REQ-132, REQ-133, REQ-134, REQ-138, REQ-139, REQ-140, REQ-146, REQ-147, REQ-148, REQ-149, REQ-157, REQ-158, REQ-159, REQ-160, REQ-181, REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188, REQ-189, REQ-190, REQ-191, REQ-192, REQ-193, REQ-194, REQ-195, REQ-196, REQ-197, REQ-198
+    @satisfies PRJ-001, CTN-001, CTN-004, CTN-005, REQ-010, REQ-011, REQ-012, REQ-013, REQ-014, REQ-015, REQ-050, REQ-052, REQ-100, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-127, REQ-128, REQ-129, REQ-131, REQ-132, REQ-133, REQ-134, REQ-138, REQ-139, REQ-140, REQ-146, REQ-147, REQ-148, REQ-149, REQ-157, REQ-158, REQ-159, REQ-160, REQ-181, REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188, REQ-189, REQ-190, REQ-191, REQ-192, REQ-193, REQ-194, REQ-195, REQ-196, REQ-197, REQ-198, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207
     """
 
     if not _is_supported_runtime_os():
@@ -11777,6 +11884,10 @@ def run(args):
         f"auto-levels={'enabled' if postprocess_options.auto_levels_enabled else 'disabled'}, "
         f"auto-adjust={'enabled' if postprocess_options.auto_adjust_enabled else 'disabled'}, "
         f"debug={'enabled' if postprocess_options.debug_enabled else 'disabled'}"
+    )
+    print_info(
+        "RAW WB normalization: "
+        f"mode={postprocess_options.raw_white_balance_mode}"
     )
     if postprocess_options.white_balance_mode is None:
         print_info("White-balance stage: disabled")
@@ -11942,6 +12053,7 @@ def run(args):
                     base_rgb_float = _extract_base_rgb_linear_float(
                         raw_handle=raw_handle,
                         np_module=numpy_module,
+                        raw_white_balance_mode=postprocess_options.raw_white_balance_mode,
                     )
                     joint_solution = _resolve_joint_auto_ev_solution(
                         auto_ev_options=auto_ev_options,
@@ -11955,6 +12067,7 @@ def run(args):
                         base_rgb_float = _extract_base_rgb_linear_float(
                             raw_handle=raw_handle,
                             np_module=numpy_module,
+                            raw_white_balance_mode=postprocess_options.raw_white_balance_mode,
                         )
                     evaluations = _calculate_auto_zero_evaluations(
                         cv2_module=None,
@@ -12026,6 +12139,7 @@ def run(args):
                     np_module=numpy_module,
                     multipliers=multipliers,
                     base_rgb_float=base_rgb_float,
+                    raw_white_balance_mode=postprocess_options.raw_white_balance_mode,
                 )
                 if postprocess_options.white_balance_mode is not None:
                     if (
