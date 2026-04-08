@@ -1073,14 +1073,14 @@ def test_encode_jpg_writes_debug_checkpoints_with_progressive_suffixes(
         debug_context=debug_context,
     )
 
-    assert call_trace == ["static", "auto-brightness", "auto-levels"]
+    assert call_trace == ["auto-brightness", "static", "auto-levels"]
     written_paths = [Path(path) for path, _image in imageio_module.writes]
     assert written_paths == [
-        tmp_path / "sample_3.1_static_correction_gamma.tiff",
-        tmp_path / "sample_3.2_static_correction_brightness.tiff",
-        tmp_path / "sample_3.3_static_correction_contrast.tiff",
-        tmp_path / "sample_3.4_static_correction_saturation.tiff",
-        tmp_path / "sample_4.0_auto-brightness.tiff",
+        tmp_path / "sample_3.0_auto-brightness.tiff",
+        tmp_path / "sample_4.1_static_correction_gamma.tiff",
+        tmp_path / "sample_4.2_static_correction_brightness.tiff",
+        tmp_path / "sample_4.3_static_correction_contrast.tiff",
+        tmp_path / "sample_4.4_static_correction_saturation.tiff",
         tmp_path / "sample_5.0_auto-levels.tiff",
     ]
     for _path, image in imageio_module.writes:
@@ -1331,11 +1331,6 @@ def test_apply_auto_brightness_rgb_float_executes_original_stage_order(
     call_trace: list[str] = []
     image_rgb_float = np.array([[[1024, 2048, 4096]]], dtype=np.float32) / 65535.0
 
-    def _fake_to_linear(*, np_module, image_srgb):
-        del np_module, image_srgb  # Unused by fake stage.
-        call_trace.append("to_linear")
-        return np.full((1, 1, 3), 0.25, dtype=np.float64)
-
     def _fake_luminance(*, np_module, linear_rgb):
         del np_module, linear_rgb  # Unused by fake stage.
         call_trace.append("compute_luminance")
@@ -1361,12 +1356,6 @@ def test_apply_auto_brightness_rgb_float_executes_original_stage_order(
         call_trace.append("desaturate")
         return np.full((1, 1, 3), 0.35, dtype=np.float64)
 
-    def _fake_from_linear(*, np_module, image_linear):
-        del np_module, image_linear  # Unused by fake stage.
-        call_trace.append("from_linear")
-        return np.full((1, 1, 3), 0.5, dtype=np.float64)
-
-    monkeypatch.setattr(dng2jpg_module, "_to_linear_srgb", _fake_to_linear)
     monkeypatch.setattr(
         dng2jpg_module,
         "_compute_bt709_luminance",
@@ -1384,7 +1373,6 @@ def test_apply_auto_brightness_rgb_float_executes_original_stage_order(
         "_luminance_preserving_desaturate_to_fit",
         _fake_desaturate,
     )
-    monkeypatch.setattr(dng2jpg_module, "_from_linear_srgb", _fake_from_linear)
 
     output = dng2jpg_module._apply_auto_brightness_rgb_float(  # pylint: disable=protected-access
         np_module=np,
@@ -1396,13 +1384,11 @@ def test_apply_auto_brightness_rgb_float_executes_original_stage_order(
 
     assert output.dtype == np.float32
     assert call_trace == [
-        "to_linear",
         "compute_luminance",
         "analyze",
         "choose",
         "reinhard",
         "desaturate",
-        "from_linear",
     ]
 
 
@@ -1676,12 +1662,12 @@ def test_print_help_orders_sections_by_pipeline_step(capsys) -> None:
         "Step 3 - Optional white-balance stage and HDR backend selection"
     ) < output.index("Step 4 - Auto-brightness stage")
     assert output.index("Step 4 - Auto-brightness stage") < output.index(
-        "Step 5 - Auto-levels stage"
+        "Step 5 - Static postprocess stage"
     )
-    assert output.index("Step 5 - Auto-levels stage") < output.index(
-        "Step 6 - Static postprocess stage"
+    assert output.index("Step 5 - Static postprocess stage") < output.index(
+        "Step 6 - Auto-levels stage"
     )
-    assert output.index("Step 6 - Static postprocess stage") < output.index(
+    assert output.index("Step 6 - Auto-levels stage") < output.index(
         "Step 7 - Auto-adjust stage"
     )
     assert output.index("Step 7 - Auto-adjust stage") < output.index(

@@ -121,7 +121,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-174**: MUST serialize luminance backend input bracket images from DNG2JPG RGB float `[0,1]` working format into TIFF float32 files before `luminance-hdr-cli` execution.
 - **REQ-175**: MUST import `luminance-hdr-cli` output TIFF float32 data and normalize it back to DNG2JPG RGB float `[0,1]` working format.
 - **REQ-012**: MUST exchange normalized OpenCV-compatible RGB float tensors `[0,1]` between merge, auto-brightness, auto-levels, static postprocess, auto-adjust, and final-save preparation stages.
-- **REQ-013**: MUST execute static postprocess in order `gamma->brightness->contrast->saturation`, where `gamma` is numeric `--post-gamma=<value>` or auto `--post-gamma=auto`, before optional auto-brightness and optional auto-levels.
+- **REQ-013**: MUST execute optional auto-brightness immediately after HDR-merge metadata/setup completion and before static postprocess, while static postprocess keeps order `gamma->brightness->contrast->saturation` with numeric or auto `--post-gamma`.
 - **REQ-106**: MUST execute optional auto-adjust stage after static postprocess and before final JPEG quantization/write, preserve RGB float input/output interfaces, and confine any required float-to-uint16 or TIFF16 conversions to the auto-adjust step itself.
 - **REQ-014**: MUST synchronize output file timestamps from EXIF datetime only after refreshed EXIF metadata has been written when EXIF datetime metadata is available.
 - **REQ-015**: MUST return `1` on parse, validation, dependency, and processing errors, and return `0` on successful processing.
@@ -176,13 +176,13 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-047**: MUST publish release assets from `dist/**/*` using `softprops/action-gh-release@v2` with `fail_on_unmatched_files: true`.
 - **REQ-048**: MUST include project script entrypoints `dng2jpg` and `d2j` mapped to `dng2jpg.core:main`.
 - **REQ-049**: SHOULD provide both `dng2jpg` and `d2j` as equivalent user-invokable CLI aliases.
-- **REQ-050**: MUST implement `/tmp/auto-brightness.py` auto-brightness step order on normalized RGB float input/output: normalize sRGB, linearize, compute BT.709 luminance, tonemap luminance, rescale RGB, optionally desaturate, then re-encode sRGB.
+- **REQ-050**: MUST implement `/tmp/auto-brightness.py` auto-brightness on normalized RGB float `[0,1]` in linear gamma `1.0`: compute BT.709 luminance, tonemap luminance, rescale RGB, optionally desaturate overflow, and return linear gamma `1.0` output without sRGB encode/decode.
 - **REQ-051**: MUST support exactly one auto-adjust pipeline with one validated knob model containing shared controls and CLAHE-luma controls.
 - **REQ-052**: MUST print deterministic runtime diagnostics for input path, gamma, postprocess factors, backend, exposure mode, `Exposure Misure EV` values, selected `ev_zero`, iterative bracket-step clipping metrics, final `ev_delta`, EV triplet, and OpenCV radiance exposure calculations/results.
 - **REQ-103**: MUST classify normalized BT.709 luminance as `low-key` when `median<0.35 && p95<0.85`, `high-key` when `median>0.65 && p05>0.15`, else `normal-key`.
 - **REQ-104**: MUST map luminance with `L=(a/Lw_bar)*Y`, percentile-derived robust `Lwhite`, and burn-out compression `Ld=(L*(1+L/Lwhite^2))/(1+L)` before linear-domain chromaticity-preserving RGB scaling.
 - **REQ-105**: MUST desaturate only overflowing linear RGB pixels by blending toward `(Ld,Ld,Ld)` with the minimal factor that restores `max(R,G,B)<=1` while preserving luminance.
-- **REQ-100**: MUST execute auto-levels after static postprocess and optional auto-brightness when `--auto-levels` resolves to `enable`, preserving RGB float input/output buffers and float internal calculations across histogram analysis and tonal transformation.
+- **REQ-100**: MUST execute auto-levels after static postprocess when `--auto-levels` resolves to `enable`, preserving RGB float input/output buffers and float internal calculations across histogram analysis and tonal transformation.
 - **REQ-101**: MUST parse `--auto-levels <enable|disable>`, `--al-clip-pct`, `--al-clip-out-of-gamut`, `--al-highlight-reconstruction`, `--al-highlight-reconstruction-method`, and `--al-gain-threshold`, requiring resolved auto-levels state `enable` before any `--al-*` option.
 - **REQ-102**: MUST accept highlight reconstruction methods `Luminance Recovery`, `CIELab Blending`, `Blend`, `Color Propagation`, and `Inpaint Opposed`.
 - **REQ-116**: MUST default auto-levels knobs to `clip_pct=0.02`, `clip_out_of_gamut=true`, `highlight_reconstruction=disabled`, `highlight_reconstruction_method=Inpaint Opposed`, and `gain_threshold=1.0`.
@@ -239,7 +239,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-180**: MUST reject `--post-gamma-auto-*` options unless `--post-gamma=auto` is selected.
 - **REQ-146**: MUST accept `--debug` as a flag that enables persistent TIFF checkpoint emission for executed pipeline stages without changing the final JPG destination.
 - **REQ-147**: MUST write each debug TIFF from normalized RGB float `[0,1]` data using filename `<input-dng-stem><stage-suffix>.tiff` in the resolved output JPG directory.
-- **REQ-148**: MUST use monotonically increasing numeric stage suffixes with phase labels covering bracket extraction (`ev_min`, `ev_zero`, `ev_max`), HDR merge, static postprocess, auto-brightness, auto-levels, and auto-adjust checkpoints when those stages execute.
+- **REQ-148**: MUST use monotonically increasing numeric stage suffixes with phase labels covering bracket extraction (`ev_min`, `ev_zero`, `ev_max`), HDR merge, auto-brightness, static postprocess, auto-levels, and auto-adjust checkpoints when those stages execute.
 - **REQ-149**: MUST preserve debug TIFF files after command completion while keeping temporary workspace cleanup behavior unchanged for non-debug intermediates.
 - **REQ-181**: MUST parse optional `--auto-white-balance=<Simple|GrayworldWB|IA|ColorConstancy|TTL>`, defaulting the auto-white-balance stage to disabled when omitted and rejecting unknown values.
 - **REQ-199**: MUST parse optional `--white-balance-analysis-source=<ev-zero|linear-base>`, defaulting to `ev-zero`, and MUST reject unknown values.
@@ -312,7 +312,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-035**: MUST verify OpenCV radiance exposure derivation uses EXIF exposure seconds with non-zero extracted `ev_zero` and propagates calibrated response into Debevec/Robertson merge calls.
 - **TST-036**: MUST verify OpenCV backend preserves RGB float input/output boundaries and avoids backend-local `uint8` or `uint16` conversions.
 - **TST-037**: MUST verify `_parse_run_options` accepts `--debug` and enables persistent debug checkpoint configuration without changing existing positional or backend parsing.
-- **TST-038**: MUST verify debug checkpoint writers emit progressive TIFF filenames for extraction, merge, static postprocess, auto-brightness, auto-levels, and auto-adjust outputs in the output directory.
+- **TST-038**: MUST verify debug checkpoint writers emit progressive TIFF filenames for extraction, merge, auto-brightness, static postprocess, auto-levels, and auto-adjust outputs in the output directory.
 - **TST-039**: MUST verify Debevec and Robertson OpenCV inputs are consumed directly from the linear HDR bracket contract without gamma-inversion preprocessing.
 - **TST-043**: MUST verify `_extract_bracket_images_float` executes exactly one neutral RAW postprocess call, normalizes base RGB using `(white_level - mean(black_level_per_channel))`, applies normalized camera white-balance gains without explicit clipping, and derives clipped EV brackets.
 - **TST-044**: MUST verify CLI help documents `--gamma`, parser defaults to `--gamma=auto`, parser accepts `--gamma=<a,b>`, parser rejects invalid gamma payloads, and HDR bracket extraction remains linear.
@@ -383,7 +383,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-174 | `src/dng2jpg/dng2jpg.py::_materialize_bracket_tiffs_from_float`, `_write_rgb_float_tiff32`; excerpt: serializes DNG2JPG RGB float `[0,1]` brackets as TIFF float32 files. |
 | REQ-175 | `src/dng2jpg/dng2jpg.py::_run_luminance_hdr_cli`; excerpt: imports `luminance-hdr-cli` output TIFF float32 and normalizes to RGB float `[0,1]`. |
 | REQ-012 | `src/dng2jpg/dng2jpg.py::_encode_jpg`, `_apply_static_postprocess_float`; excerpt: keeps merge/postprocess/auto-adjust/final-save buffers on normalized RGB float interfaces. |
-| REQ-013 | `src/dng2jpg/dng2jpg.py::_encode_jpg`, `_apply_static_postprocess_float`; excerpt: executes static order `gamma->brightness->contrast->saturation` where gamma is numeric or auto-gamma, before optional auto-brightness/auto-levels. |
+| REQ-013 | `src/dng2jpg/dng2jpg.py::_encode_jpg`, `_apply_static_postprocess_float`; excerpt: executes optional auto-brightness before static order `gamma->brightness->contrast->saturation`, then optional auto-levels. |
 | REQ-014 | `src/dng2jpg/dng2jpg.py::_encode_jpg`, `_sync_output_file_timestamps_from_exif`; excerpt: writes refreshed EXIF metadata before applying `os.utime` from EXIF timestamp. |
 | REQ-015 | `src/dng2jpg/dng2jpg.py::run`; excerpt: parse/dependency/processing failures return `1`, success returns `0`. |
 | REQ-016 | `src/dng2jpg/core.py::_check_online_version`, `_write_version_cache`; excerpt: GitHub latest-release check uses idle-time cache JSON and prints status or error output. |
@@ -419,13 +419,13 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-047 | `.github/workflows/release-uvx.yml`; excerpt: `softprops/action-gh-release@v2` uploads `dist/**/*` with unmatched-file failure enabled. |
 | REQ-048 | `pyproject.toml`; excerpt: `[project.scripts] dng2jpg = "dng2jpg.core:main"` and `d2j = "dng2jpg.core:main"`. |
 | REQ-049 | `pyproject.toml`; excerpt: both `dng2jpg` and `d2j` map to identical entrypoint. |
-| REQ-050 | `src/dng2jpg/dng2jpg.py::_apply_auto_brightness_rgb_float`; excerpt: executes the original auto-brightness step order on normalized RGB float I/O with optional luminance-preserving desaturation before final sRGB re-encoding. |
+| REQ-050 | `src/dng2jpg/dng2jpg.py::_apply_auto_brightness_rgb_float`; excerpt: executes linear-domain auto-brightness on normalized RGB float I/O and preserves gamma `1.0` output without sRGB re-encoding. |
 | REQ-051 | `src/dng2jpg/dng2jpg.py::AutoAdjustOptions`, `_apply_validated_auto_adjust_pipeline`; excerpt: supports one float-domain auto-adjust implementation with one validated knob container including CLAHE-luma controls. |
 | REQ-052 | `src/dng2jpg/dng2jpg.py::run`; excerpt: deterministic `print_info` diagnostic lines for exposure mode, automatic anchors, selected joint solution, EV triplet, and OpenCV radiance timing calculations/results. |
 | REQ-103 | `src/dng2jpg/dng2jpg.py::_analyze_luminance_key`; excerpt: classifies `low-key`/`normal-key`/`high-key` with the original median and percentile thresholds. |
 | REQ-104 | `src/dng2jpg/dng2jpg.py::_reinhard_global_tonemap_luminance`, `_apply_auto_brightness_rgb_float`; excerpt: percentile robust `Lwhite` and burn-out compression before RGB scaling. |
 | REQ-105 | `src/dng2jpg/dng2jpg.py::_luminance_preserving_desaturate_to_fit`; excerpt: overflow-only luminance-preserving grayscale blending with minimal factor selection. |
-| REQ-100 | `src/dng2jpg/dng2jpg.py::_encode_jpg`, `_apply_auto_levels_float`, `_apply_static_postprocess_float`, `_apply_auto_brightness_rgb_float`; excerpt: executes auto-levels only when resolved state is `enable`, after static postprocess and optional auto-brightness. |
+| REQ-100 | `src/dng2jpg/dng2jpg.py::_encode_jpg`, `_apply_auto_levels_float`, `_apply_static_postprocess_float`, `_apply_auto_brightness_rgb_float`; excerpt: executes auto-levels only when resolved state is `enable`, after static postprocess. |
 | REQ-101 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `_parse_auto_levels_options`; excerpt: parses `--auto-levels <enable|disable>` and validates `--al-*` coupling. |
 | REQ-102 | `src/dng2jpg/dng2jpg.py::_parse_auto_levels_hr_method_option`, `_apply_auto_levels_float`; excerpt: validates and executes the full RawTherapee-aligned highlight reconstruction method set. |
 | REQ-116 | `src/dng2jpg/dng2jpg.py::AutoLevelsOptions`, `_parse_auto_levels_options`; excerpt: sets parser defaults for clip percentage, gamut clipping, highlight method, and gain threshold. |
@@ -490,7 +490,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | DES-009 | `src/dng2jpg/dng2jpg.py::DebugArtifactContext`, `_write_debug_rgb_float_tiff`; excerpt: serializes float checkpoints as persistent TIFF16 outputs outside the temporary workspace. |
 | REQ-146 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `print_help`, `run`; excerpt: parses `--debug`, documents the flag, and enables persistent checkpoint orchestration. |
 | REQ-147 | `src/dng2jpg/dng2jpg.py::_write_debug_rgb_float_tiff`, `run`; excerpt: writes `<input-dng-stem><stage-suffix>.tiff` into the output JPG directory from normalized RGB float payloads. |
-| REQ-148 | `src/dng2jpg/dng2jpg.py::run`, `_apply_static_postprocess_float`, `_encode_jpg`, `_apply_validated_auto_adjust_pipeline`; excerpt: emits progressive numeric stage suffixes across extraction, merge, postprocess, and optional stage checkpoints. |
+| REQ-148 | `src/dng2jpg/dng2jpg.py::run`, `_apply_static_postprocess_float`, `_encode_jpg`, `_apply_validated_auto_adjust_pipeline`; excerpt: emits progressive numeric stage suffixes across extraction, merge, auto-brightness, postprocess, and optional stage checkpoints. |
 | REQ-149 | `src/dng2jpg/dng2jpg.py::run`; excerpt: keeps debug TIFF outputs outside `TemporaryDirectory(...)` while still cleaning the temporary workspace after execution. |
 | TST-001 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; branches for exposure-mode exclusivity, hdr-merge parsing, and deterministic parse failures. |
 | TST-002 | `src/dng2jpg/dng2jpg.py::run`; branches for unsupported OS and dependency failures returning `1`. |

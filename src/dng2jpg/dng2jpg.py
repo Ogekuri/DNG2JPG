@@ -1363,7 +1363,7 @@ def print_help(version):
     _print_help_section("Step 4 - Auto-brightness stage")
     _print_help_option(
         "--auto-brightness=<enable|disable>",
-        "Enable or disable the auto-brightness stage executed after static postprocess and before auto-levels.",
+        "Enable or disable the auto-brightness stage executed after HDR merge and before static postprocess.",
         ("Default: `enable`.",),
     )
     _print_help_option(
@@ -1400,46 +1400,7 @@ def print_help(version):
         f"Positive numerical guard for logarithms and divisions. Effective only when auto-brightness resolves to enable. Default: `{DEFAULT_AB_EPS:g}`.",
     )
 
-    _print_help_section("Step 5 - Auto-levels stage")
-    _print_help_option(
-        "--auto-levels=<enable|disable>",
-        "Enable or disable the auto-levels stage executed after static postprocess and optional auto-brightness.",
-        ("Default: `enable`.",),
-    )
-    _print_help_option(
-        "--al-clip-pct=<value>",
-        f"Histogram clipping percentage; `>= 0`. Effective only when auto-levels resolves to enable. Default: `{DEFAULT_AL_CLIP_PERCENT:g}`.",
-    )
-    _print_help_option(
-        "--al-clip-out-of-gamut[=<bool>]",
-        "Normalize overflowing RGB triplets after auto-levels tonal transformation and optional highlight reconstruction. Effective only when auto-levels resolves to enable.",
-        (
-            f"Default: `{'true' if DEFAULT_AL_CLIP_OUT_OF_GAMUT else 'false'}`.",
-            "Bare flag form is equivalent to `true`.",
-        ),
-    )
-    _print_help_option(
-        "--al-highlight-reconstruction[=<bool>]",
-        "Enable or disable highlight reconstruction after the auto-levels tonal transformation. Effective only when auto-levels resolves to enable.",
-        (
-            "Bare flag form is equivalent to `true`.",
-            "Default: `false`.",
-        ),
-    )
-    _print_help_option(
-        "--al-highlight-reconstruction-method=<name>",
-        "Select one RawTherapee-aligned highlight reconstruction method. Effective only when auto-levels resolves to enable.",
-        (
-            "Allowed values: " + ", ".join(_AUTO_LEVELS_HIGHLIGHT_METHODS) + ".",
-            "Default when omitted: `Inpaint Opposed`.",
-        ),
-    )
-    _print_help_option(
-        "--al-gain-threshold=<value>",
-        f"Inpaint Opposed gain threshold; `> 0`. Effective only when auto-levels resolves to enable. Default: `{DEFAULT_AL_GAIN_THRESHOLD:g}`.",
-    )
-
-    _print_help_section("Step 6 - Static postprocess stage")
+    _print_help_section("Step 5 - Static postprocess stage")
     _print_help_option(
         "--post-gamma=<value|auto>",
         "Postprocess gamma selector. Use a positive float for numeric static gamma or `auto` to replace numeric static gamma/brightness/contrast/saturation with one dedicated auto-gamma stage.",
@@ -1479,10 +1440,49 @@ def print_help(version):
         postprocess_default_rows,
     )
 
+    _print_help_section("Step 6 - Auto-levels stage")
+    _print_help_option(
+        "--auto-levels=<enable|disable>",
+        "Enable or disable the auto-levels stage executed after static postprocess.",
+        ("Default: `enable`.",),
+    )
+    _print_help_option(
+        "--al-clip-pct=<value>",
+        f"Histogram clipping percentage; `>= 0`. Effective only when auto-levels resolves to enable. Default: `{DEFAULT_AL_CLIP_PERCENT:g}`.",
+    )
+    _print_help_option(
+        "--al-clip-out-of-gamut[=<bool>]",
+        "Normalize overflowing RGB triplets after auto-levels tonal transformation and optional highlight reconstruction. Effective only when auto-levels resolves to enable.",
+        (
+            f"Default: `{'true' if DEFAULT_AL_CLIP_OUT_OF_GAMUT else 'false'}`.",
+            "Bare flag form is equivalent to `true`.",
+        ),
+    )
+    _print_help_option(
+        "--al-highlight-reconstruction[=<bool>]",
+        "Enable or disable highlight reconstruction after the auto-levels tonal transformation. Effective only when auto-levels resolves to enable.",
+        (
+            "Bare flag form is equivalent to `true`.",
+            "Default: `false`.",
+        ),
+    )
+    _print_help_option(
+        "--al-highlight-reconstruction-method=<name>",
+        "Select one RawTherapee-aligned highlight reconstruction method. Effective only when auto-levels resolves to enable.",
+        (
+            "Allowed values: " + ", ".join(_AUTO_LEVELS_HIGHLIGHT_METHODS) + ".",
+            "Default when omitted: `Inpaint Opposed`.",
+        ),
+    )
+    _print_help_option(
+        "--al-gain-threshold=<value>",
+        f"Inpaint Opposed gain threshold; `> 0`. Effective only when auto-levels resolves to enable. Default: `{DEFAULT_AL_GAIN_THRESHOLD:g}`.",
+    )
+
     _print_help_section("Step 7 - Auto-adjust stage")
     _print_help_option(
         "--auto-adjust=<enable|disable>",
-        "Enable or disable the auto-adjust stage executed after static postprocess and before final JPEG quantization.",
+        "Enable or disable the auto-adjust stage executed after static postprocess and optional auto-levels, before final JPEG quantization.",
         ("Default: `enable`.",),
     )
     _print_help_option(
@@ -8658,7 +8658,7 @@ def _apply_static_postprocess_float(
                 imageio_module=imageio_module,
                 np_module=np_module,
                 debug_context=debug_context,
-                stage_suffix="_3.0_static_correction_auto_gamma",
+                stage_suffix="_4.0_static_correction_auto_gamma",
                 image_rgb_float=processed,
             )
     elif gamma_value != 1.0:
@@ -8673,7 +8673,7 @@ def _apply_static_postprocess_float(
                 imageio_module=imageio_module,
                 np_module=np_module,
                 debug_context=debug_context,
-                stage_suffix="_3.1_static_correction_gamma",
+                stage_suffix="_4.1_static_correction_gamma",
                 image_rgb_float=processed,
             )
     static_stage_enabled = gamma_stage_executed or any(
@@ -8697,7 +8697,7 @@ def _apply_static_postprocess_float(
                 imageio_module=imageio_module,
                 np_module=np_module,
                 debug_context=debug_context,
-                stage_suffix="_3.2_static_correction_brightness",
+                stage_suffix="_4.2_static_correction_brightness",
                 image_rgb_float=processed,
             )
     if contrast_factor != 1.0:
@@ -8711,7 +8711,7 @@ def _apply_static_postprocess_float(
                 imageio_module=imageio_module,
                 np_module=np_module,
                 debug_context=debug_context,
-                stage_suffix="_3.3_static_correction_contrast",
+                stage_suffix="_4.3_static_correction_contrast",
                 image_rgb_float=processed,
             )
     if saturation_factor != 1.0:
@@ -8725,7 +8725,7 @@ def _apply_static_postprocess_float(
                 imageio_module=imageio_module,
                 np_module=np_module,
                 debug_context=debug_context,
-                stage_suffix="_3.4_static_correction_saturation",
+                stage_suffix="_4.4_static_correction_saturation",
                 image_rgb_float=processed,
             )
     return processed
@@ -11425,13 +11425,13 @@ def _apply_auto_brightness_rgb_float(
 ):
     """@brief Apply original photographic auto-brightness flow on RGB float tensor.
 
-    @details Executes `/tmp/auto-brightness.py` step order over normalized RGB
-    float input: linearize sRGB, derive BT.709 luminance, classify key using
+    @details Executes `/tmp/auto-brightness.py` step order directly on linear
+    gamma `1.0` RGB float input: derive BT.709 luminance, classify key using
     normalized distribution thresholds, choose or override key value `a`,
     apply Reinhard global tonemap with robust percentile white-point, preserve
     chromaticity by luminance scaling, optionally desaturate only overflowing
-    linear RGB pixels, then re-encode to sRGB without any CLAHE substep or
-    final stage-local `[0,1]` output clipping.
+    RGB pixels, and preserve linear gamma `1.0` output without any CLAHE
+    substep or stage-local `[0,1]` output clipping.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} RGB float tensor.
     @param auto_brightness_options {AutoBrightnessOptions} Parsed auto-brightness parameters.
@@ -11439,11 +11439,10 @@ def _apply_auto_brightness_rgb_float(
     @satisfies REQ-050, REQ-103, REQ-104, REQ-105, REQ-121, REQ-122
     """
 
-    image_srgb = _normalize_float_rgb_image(
+    image_linear = _ensure_three_channel_float_array_no_range_adjust(
         np_module=np_module,
         image_data=image_rgb_float,
-    ).astype(np_module.float64)
-    image_linear = _to_linear_srgb(np_module=np_module, image_srgb=image_srgb)
+    )
     luminance = _compute_bt709_luminance(np_module=np_module, linear_rgb=image_linear)
     key_analysis = _analyze_luminance_key(
         np_module=np_module,
@@ -11474,8 +11473,7 @@ def _apply_auto_brightness_rgb_float(
             luminance=luminance_mapped,
             eps=auto_brightness_options.eps,
         )
-    bright_srgb = _from_linear_srgb(np_module=np_module, image_linear=bright_linear)
-    return bright_srgb.astype(np_module.float32)
+    return bright_linear.astype(np_module.float32)
 
 
 
@@ -11957,10 +11955,10 @@ def _encode_jpg(
     """@brief Encode merged HDR float payload into final JPG output.
 
     @details Accepts one normalized RGB float image from the selected merge
-    backend, executes static postprocess stage (numeric
-    gamma/brightness/contrast/saturation or auto-gamma replacement),
-    optional auto-brightness stage, optional auto-levels stage, optional
-    auto-adjust stage, and then performs exactly one float-to-uint8
+    backend, executes optional auto-brightness stage, static postprocess stage
+    (numeric gamma/brightness/contrast/saturation or auto-gamma replacement),
+    optional auto-levels stage, optional auto-adjust stage, and then performs
+    exactly one float-to-uint8
     conversion immediately before JPEG save. When debug context is present, the
     function emits persistent TIFF16 checkpoints after each executed stage.
     @param imageio_module {ModuleType} Imported imageio module with `imread` and `imwrite`.
@@ -11994,6 +11992,20 @@ def _encode_jpg(
         np_module=np_module,
         image_data=merged_image_float,
     )
+    if postprocess_options.auto_brightness_enabled:
+        image_rgb_float = _apply_auto_brightness_rgb_float(
+            np_module=np_module,
+            image_rgb_float=image_rgb_float,
+            auto_brightness_options=postprocess_options.auto_brightness_options,
+        )
+        if debug_context is not None:
+            _write_debug_rgb_float_tiff(
+                imageio_module=imageio_module,
+                np_module=np_module,
+                debug_context=debug_context,
+                stage_suffix="_3.0_auto-brightness",
+                image_rgb_float=image_rgb_float,
+            )
     image_rgb_float = _apply_static_postprocess_float(
         np_module=np_module,
         image_rgb_float=image_rgb_float,
@@ -12007,21 +12019,6 @@ def _encode_jpg(
             else {}
         ),
     )
-
-    if postprocess_options.auto_brightness_enabled:
-        image_rgb_float = _apply_auto_brightness_rgb_float(
-            np_module=np_module,
-            image_rgb_float=image_rgb_float,
-            auto_brightness_options=postprocess_options.auto_brightness_options,
-        )
-        if debug_context is not None:
-            _write_debug_rgb_float_tiff(
-                imageio_module=imageio_module,
-                np_module=np_module,
-                debug_context=debug_context,
-                stage_suffix="_4.0_auto-brightness",
-                image_rgb_float=image_rgb_float,
-            )
     if postprocess_options.auto_levels_enabled:
         image_rgb_float = _apply_auto_levels_float(
             np_module=np_module,
