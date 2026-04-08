@@ -116,7 +116,7 @@
           - `_parse_positive_float_option(...)`: parse OpenCV tone-map gamma [`src/dng2jpg/dng2jpg.py`]
             - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
           - `_resolve_default_opencv_tonemap_gamma(...)`: map OpenCV merge algorithm to default tone-map gamma (`Debevec=1.0`, `Robertson=0.9`, `Mertens=0.8`) [`src/dng2jpg/dng2jpg.py`]
-        - `_parse_opencv_tonemap_backend_options(...)`: build OpenCV-Tonemap options dataclass from mandatory selector (`drago|reinhard|mantiuk`) and algorithm-coupled optional knobs [`src/dng2jpg/dng2jpg.py`]
+        - `_parse_opencv_tonemap_backend_options(...)`: build OpenCV-Tonemap options dataclass from mandatory selector `--tonemap=<drago|reinhard|mantiuk>` and algorithm-coupled optional knobs [`src/dng2jpg/dng2jpg.py`]
           - `_parse_positive_float_option(...)`: parse positive OpenCV-Tonemap knob controls [`src/dng2jpg/dng2jpg.py`]
           - `_parse_non_negative_float_option(...)`: parse non-negative Reinhard intensity knob [`src/dng2jpg/dng2jpg.py`]
           - `_parse_float_in_range_option(...)`: parse bounded `[0,1]` Drago/Reinhard adaptation knobs [`src/dng2jpg/dng2jpg.py`]

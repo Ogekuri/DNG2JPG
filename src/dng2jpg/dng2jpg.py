@@ -244,9 +244,7 @@ _OPENCV_KNOB_OPTIONS = (
     "--opencv-tonemap-gamma",
 )
 _OPENCV_TONEMAP_SELECTOR_OPTIONS = (
-    "--tonemap-drago",
-    "--tonemap-reinhard",
-    "--tonemap-mantiuk",
+    "--tonemap",
 )
 _OPENCV_TONEMAP_KNOB_OPTIONS = (
     "--tonemap-drago-saturation",
@@ -1213,44 +1211,36 @@ def print_help(version):
         ),
     )
     _print_help_option(
-        "--tonemap-drago",
-        f"Select OpenCV Drago tone mapping for `{HDR_MERGE_MODE_OPENCV_TONEMAP}`. Exactly one OpenCV-Tonemap selector is required.",
-    )
-    _print_help_option(
-        "--tonemap-reinhard",
-        f"Select OpenCV Reinhard tone mapping for `{HDR_MERGE_MODE_OPENCV_TONEMAP}`. Exactly one OpenCV-Tonemap selector is required.",
-    )
-    _print_help_option(
-        "--tonemap-mantiuk",
-        f"Select OpenCV Mantiuk tone mapping for `{HDR_MERGE_MODE_OPENCV_TONEMAP}`. Exactly one OpenCV-Tonemap selector is required.",
+        "--tonemap=<drago|reinhard|mantiuk>",
+        f"Select OpenCV-Tonemap algorithm for `{HDR_MERGE_MODE_OPENCV_TONEMAP}`. Exactly one `--tonemap` selector is required.",
     )
     _print_help_option(
         "--tonemap-drago-saturation=<value>",
-        f"Drago saturation parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-drago` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_DRAGO_SATURATION:g}`.",
+        f"Drago saturation parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap=drago` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_DRAGO_SATURATION:g}`.",
     )
     _print_help_option(
         "--tonemap-drago-bias=<0..1>",
-        f"Drago bias parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-drago` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_DRAGO_BIAS:g}`.",
+        f"Drago bias parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap=drago` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_DRAGO_BIAS:g}`.",
     )
     _print_help_option(
         "--tonemap-reinhard-intensity=<value>",
-        f"Reinhard intensity parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-reinhard` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_REINHARD_INTENSITY:g}`.",
+        f"Reinhard intensity parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap=reinhard` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_REINHARD_INTENSITY:g}`.",
     )
     _print_help_option(
         "--tonemap-reinhard-light_adapt=<0..1>",
-        f"Reinhard light adaptation parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-reinhard` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_REINHARD_LIGHT_ADAPT:g}`.",
+        f"Reinhard light adaptation parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap=reinhard` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_REINHARD_LIGHT_ADAPT:g}`.",
     )
     _print_help_option(
         "--tonemap-reinhard-color_adapt=<0..1>",
-        f"Reinhard color adaptation parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-reinhard` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_REINHARD_COLOR_ADAPT:g}`.",
+        f"Reinhard color adaptation parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap=reinhard` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_REINHARD_COLOR_ADAPT:g}`.",
     )
     _print_help_option(
         "--tonemap-mantiuk-scale=<value>",
-        f"Mantiuk scale parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-mantiuk` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_MANTIUK_SCALE:g}`.",
+        f"Mantiuk scale parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap=mantiuk` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_MANTIUK_SCALE:g}`.",
     )
     _print_help_option(
         "--tonemap-mantiuk-saturation=<value>",
-        f"Mantiuk saturation parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-mantiuk` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_MANTIUK_SATURATION:g}`.",
+        f"Mantiuk saturation parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap=mantiuk` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_MANTIUK_SATURATION:g}`.",
     )
     _print_help_option(
         "--hdrplus-proxy-mode=<name>",
@@ -1840,11 +1830,11 @@ def _parse_opencv_tonemap_backend_options(
 ):
     """@brief Parse and validate OpenCV-Tonemap backend selector and knobs.
 
-    @details Requires exactly one selector in `--tonemap-drago`,
-    `--tonemap-reinhard`, `--tonemap-mantiuk`, applies deterministic defaults
+    @details Requires exactly one selector in
+    `--tonemap=<drago|reinhard|mantiuk>`, applies deterministic defaults
     for optional algorithm-specific knobs, and rejects knobs that do not belong
     to the selected algorithm.
-    @param tonemap_selector_options {list[str]} Ordered list of selected OpenCV-Tonemap selector options.
+    @param tonemap_selector_options {list[str]} Ordered list of selected OpenCV-Tonemap selector tokens.
     @param tonemap_knob_raw_values {dict[str, str]} Raw `--tonemap-*` knob payloads keyed by option name.
     @return {OpenCvTonemapOptions|None} Parsed OpenCV-Tonemap options or `None` on validation failure.
     @satisfies REQ-190, REQ-194, REQ-195, REQ-196
@@ -1852,21 +1842,24 @@ def _parse_opencv_tonemap_backend_options(
 
     selector_count = len(tonemap_selector_options)
     if selector_count != 1:
+        selector_option = _OPENCV_TONEMAP_SELECTOR_OPTIONS[0]
         print_error(
             "OpenCV-Tonemap requires exactly one selector: "
-            + ", ".join(_OPENCV_TONEMAP_SELECTOR_OPTIONS)
+            + f"{selector_option}=<{'|'.join(_OPENCV_TONEMAP_MAPS)}>"
         )
         return None
 
-    selector = tonemap_selector_options[0]
-    selector_map = {
-        "--tonemap-drago": OPENCV_TONEMAP_MAP_DRAGO,
-        "--tonemap-reinhard": OPENCV_TONEMAP_MAP_REINHARD,
-        "--tonemap-mantiuk": OPENCV_TONEMAP_MAP_MANTIUK,
-    }
-    tonemap_map = selector_map.get(selector)
-    if tonemap_map is None:
-        print_error(f"Unknown OpenCV-Tonemap selector: {selector}")
+    selector_option = _OPENCV_TONEMAP_SELECTOR_OPTIONS[0]
+    selector_token = tonemap_selector_options[0]
+    selector_prefix = f"{selector_option}="
+    if not selector_token.startswith(selector_prefix):
+        print_error(f"Unknown OpenCV-Tonemap selector: {selector_token}")
+        return None
+    tonemap_map = selector_token[len(selector_prefix) :]
+    if tonemap_map not in _OPENCV_TONEMAP_MAPS:
+        print_error(
+            f"Invalid OpenCV-Tonemap value for {selector_option}: {tonemap_map}"
+        )
         return None
 
     options = OpenCvTonemapOptions(tonemap_map=tonemap_map)
@@ -1946,42 +1939,42 @@ def _parse_opencv_tonemap_backend_options(
             "--tonemap-reinhard-"
         ):
             print_error(
-                f"OpenCV-Tonemap knob {knob_name} requires --tonemap-reinhard selector"
+                f"OpenCV-Tonemap knob {knob_name} requires --tonemap=reinhard selector"
             )
             return None
         if tonemap_map == OPENCV_TONEMAP_MAP_DRAGO and knob_name.startswith(
             "--tonemap-mantiuk-"
         ):
             print_error(
-                f"OpenCV-Tonemap knob {knob_name} requires --tonemap-mantiuk selector"
+                f"OpenCV-Tonemap knob {knob_name} requires --tonemap=mantiuk selector"
             )
             return None
         if tonemap_map == OPENCV_TONEMAP_MAP_REINHARD and knob_name.startswith(
             "--tonemap-drago-"
         ):
             print_error(
-                f"OpenCV-Tonemap knob {knob_name} requires --tonemap-drago selector"
+                f"OpenCV-Tonemap knob {knob_name} requires --tonemap=drago selector"
             )
             return None
         if tonemap_map == OPENCV_TONEMAP_MAP_REINHARD and knob_name.startswith(
             "--tonemap-mantiuk-"
         ):
             print_error(
-                f"OpenCV-Tonemap knob {knob_name} requires --tonemap-mantiuk selector"
+                f"OpenCV-Tonemap knob {knob_name} requires --tonemap=mantiuk selector"
             )
             return None
         if tonemap_map == OPENCV_TONEMAP_MAP_MANTIUK and knob_name.startswith(
             "--tonemap-drago-"
         ):
             print_error(
-                f"OpenCV-Tonemap knob {knob_name} requires --tonemap-drago selector"
+                f"OpenCV-Tonemap knob {knob_name} requires --tonemap=drago selector"
             )
             return None
         if tonemap_map == OPENCV_TONEMAP_MAP_MANTIUK and knob_name.startswith(
             "--tonemap-reinhard-"
         ):
             print_error(
-                f"OpenCV-Tonemap knob {knob_name} requires --tonemap-reinhard selector"
+                f"OpenCV-Tonemap knob {knob_name} requires --tonemap=reinhard selector"
             )
             return None
 
@@ -4635,7 +4628,11 @@ def _parse_run_options(args):
             idx += 1
             continue
 
-        if token in _OPENCV_TONEMAP_SELECTOR_OPTIONS:
+        if token == _OPENCV_TONEMAP_SELECTOR_OPTIONS[0]:
+            print_error(f"Missing value for {token}")
+            return None
+
+        if token.startswith(f"{_OPENCV_TONEMAP_SELECTOR_OPTIONS[0]}="):
             opencv_tonemap_selector_options.append(token)
             idx += 1
             continue

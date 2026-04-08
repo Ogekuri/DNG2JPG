@@ -1529,7 +1529,7 @@ def test_parse_run_options_defaults_hdr_merge_to_opencv() -> None:
 
 def test_parse_run_options_accepts_opencv_tonemap_backend_and_requires_single_selector(
 ) -> None:
-    """Parser must accept OpenCV-Tonemap and require exactly one tonemap selector."""
+    """Parser must accept OpenCV-Tonemap and require exactly one `--tonemap` selector."""
 
     parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         [
@@ -1537,7 +1537,7 @@ def test_parse_run_options_accepts_opencv_tonemap_backend_and_requires_single_se
             "output.jpg",
             "--ev=1",
             "--hdr-merge=OpenCV-Tonemap",
-            "--tonemap-drago",
+            "--tonemap=drago",
         ]
     )
     assert parsed is not None
@@ -1559,8 +1559,8 @@ def test_parse_run_options_accepts_opencv_tonemap_backend_and_requires_single_se
             "output.jpg",
             "--ev=1",
             "--hdr-merge=OpenCV-Tonemap",
-            "--tonemap-drago",
-            "--tonemap-reinhard",
+            "--tonemap=drago",
+            "--tonemap=reinhard",
         ]
     )
     assert multiple_selectors is None
@@ -1651,7 +1651,7 @@ def test_print_help_orders_sections_by_pipeline_step(capsys) -> None:
         "--opencv-merge-algorithm=<name>"
     )
     assert output.index("--hdr-merge=<Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>") < output.index(
-        "--tonemap-drago"
+        "--tonemap=<drago|reinhard|mantiuk>"
     )
     assert output.index("--hdr-merge=<Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>") < output.index(
         "--hdrplus-proxy-mode=<name>"
@@ -1683,9 +1683,7 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
         "--opencv-merge-algorithm=<name>",
         "--opencv-tonemap=<bool>",
         "--opencv-tonemap-gamma=<value>",
-        "--tonemap-drago",
-        "--tonemap-reinhard",
-        "--tonemap-mantiuk",
+        "--tonemap=<drago|reinhard|mantiuk>",
         "--tonemap-drago-saturation=<value>",
         "--tonemap-drago-bias=<0..1>",
         "--tonemap-reinhard-intensity=<value>",
@@ -2341,7 +2339,7 @@ def test_parse_run_options_rejects_tonemap_options_without_opencv_tonemap_backen
             "output.jpg",
             "--ev=1",
             "--hdr-merge=OpenCV-Merge",
-            "--tonemap-drago",
+            "--tonemap=drago",
         ]
     )
     assert invalid_selector is None
@@ -2363,7 +2361,7 @@ def test_parse_run_options_rejects_tonemap_options_without_opencv_tonemap_backen
             "output.jpg",
             "--ev=1",
             "--hdr-merge=OpenCV-Tonemap",
-            "--tonemap-drago",
+            "--tonemap=drago",
             "--tonemap-reinhard-intensity=0.2",
         ]
     )
