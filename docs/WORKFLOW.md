@@ -274,7 +274,7 @@
       - `_run_opencv_tonemap_backend(...)`: execute selected OpenCV advanced tonemap (`drago|reinhard|mantiuk`) on `ev_zero` only with fixed `gamma=1.0`, then apply resolved merge-gamma as backend-final step without backend-local clipping [`src/dng2jpg/dng2jpg.py`]
         - `_ensure_three_channel_float_array_no_clip(...)`: normalize `ev_zero` payload to RGB float without upper clipping before OpenCV tonemap invocation [`src/dng2jpg/dng2jpg.py`]
         - `_apply_merge_gamma_float_no_clip(...)`: apply resolved merge-output transfer without backend-local clipping for OpenCV-Tonemap output [`src/dng2jpg/dng2jpg.py`]
-          - `_ensure_three_channel_float_array_no_bounds(...)`: normalize RGB tensor shape while preserving full finite float dynamic range [`src/dng2jpg/dng2jpg.py`]
+          - `_ensure_three_channel_float_array_no_bounds(...)`: normalize RGB tensor shape without clipping bounds while replacing non-finite payload samples with `0.0` [`src/dng2jpg/dng2jpg.py`]
       - `_write_debug_rgb_float_tiff(...)`: persist merged HDR checkpoint as TIFF16 in the output directory when debug mode is enabled [`src/dng2jpg/dng2jpg.py`]
         - `_write_rgb_float_tiff16(...)`: clip RGB float to `[0,1]` and convert to TIFF16 artifact [`src/dng2jpg/dng2jpg.py`]
       - `_run_hdr_plus_merge(...)`: merge in-memory float brackets through HDR+ temporal/spatial tile backend and return normalized RGB float32 output [`src/dng2jpg/dng2jpg.py`]

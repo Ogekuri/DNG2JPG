@@ -1197,11 +1197,11 @@ explicit curve-segment parameters, and evidence token.
 
 ### fn `def _ensure_three_channel_float_array_no_bounds(np_module, image_data)` `priv` (L4450-4479)
 - @brief Normalize one image payload to RGB float tensor without clipping bounds.
-- @details Converts numeric image payloads into RGB `float64`, preserves finite values on the full float range without lower/upper clipping, expands grayscale/single-channel data to RGB, drops alpha, and raises on non-finite payloads to avoid silent range mutations.
+- @details Converts numeric image payloads into RGB `float64`, preserves finite values on the full float range without lower/upper clipping, replaces non-finite payload samples with `0.0`, expands grayscale/single- channel data to RGB, and drops alpha.
 - @param np_module {ModuleType} Imported numpy module.
 - @param image_data {object} Numeric image payload.
 - @return {object} RGB `float64` tensor with shape `(H,W,3)` and unbounded finite range.
-- @exception ValueError Raised when image shape is unsupported or contains non-finite values.
+- @exception ValueError Raised when image shape is unsupported.
 - @satisfies REQ-198
 
 ### fn `def _apply_merge_gamma_float(np_module, image_rgb_float, resolved_merge_gamma)` `priv` (L4480-4532)

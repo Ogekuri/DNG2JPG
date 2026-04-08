@@ -2766,6 +2766,90 @@ def test_run_opencv_tonemap_backend_preserves_dynamic_range_without_clipping() -
     assert float(result[0, 0, 0]) > 1.0
 
 
+def test_run_opencv_tonemap_backend_sanitizes_non_finite_outputs_for_all_algorithms() -> None:
+    """OpenCV-Tonemap backend must sanitize non-finite outputs for every selector."""
+
+    class _FakeNonFiniteAdvancedTonemap(_FakeAdvancedTonemap):
+        """Fake tonemap that always returns non-finite payload values."""
+
+        def __init__(self, kind: str) -> None:
+            super().__init__(kind=kind, gamma=1.0)
+
+        def process(self, image: np.ndarray) -> np.ndarray:
+            del image
+            return np.array([[[np.nan, np.inf, -np.inf]]], dtype=np.float32)
+
+    class _FakeNonFiniteOpenCvModule(_FakeOpenCvModule):
+        """OpenCV shim that emits non-finite payloads on all advanced tonemap paths."""
+
+        def createTonemapDrago(
+            self,
+            *,
+            gamma: float,
+            saturation: float,
+            bias: float,
+        ) -> _FakeAdvancedTonemap:
+            del gamma, saturation, bias
+            return _FakeNonFiniteAdvancedTonemap(kind="drago")
+
+        def createTonemapReinhard(
+            self,
+            *,
+            gamma: float,
+            intensity: float,
+            light_adapt: float,
+            color_adapt: float,
+        ) -> _FakeAdvancedTonemap:
+            del gamma, intensity, light_adapt, color_adapt
+            return _FakeNonFiniteAdvancedTonemap(kind="reinhard")
+
+        def createTonemapMantiuk(
+            self,
+            *,
+            gamma: float,
+            scale: float,
+            saturation: float,
+        ) -> _FakeAdvancedTonemap:
+            del gamma, scale, saturation
+            return _FakeNonFiniteAdvancedTonemap(kind="mantiuk")
+
+    fake_cv2 = _FakeNonFiniteOpenCvModule()
+    bracket_images_float = [
+        np.full((1, 1, 3), 0.1, dtype=np.float32),
+        np.full((1, 1, 3), 0.5, dtype=np.float32),
+        np.full((1, 1, 3), 0.9, dtype=np.float32),
+    ]
+    options_list = (
+        dng2jpg_module.OpenCvTonemapOptions(tonemap_map="drago"),
+        dng2jpg_module.OpenCvTonemapOptions(tonemap_map="reinhard"),
+        dng2jpg_module.OpenCvTonemapOptions(tonemap_map="mantiuk"),
+    )
+
+    for tonemap_options in options_list:
+        result = dng2jpg_module._run_opencv_tonemap_backend(  # pylint: disable=protected-access
+            bracket_images_float=bracket_images_float,
+            opencv_tonemap_options=tonemap_options,
+            auto_adjust_dependencies=(fake_cv2, np),
+            resolved_merge_gamma=dng2jpg_module.ResolvedMergeGamma(
+                request=dng2jpg_module.MergeGammaOption(mode="auto"),
+                transfer="linear",
+                label="Linear",
+                param_a=None,
+                param_b=None,
+                evidence="default-linear",
+            ),
+        )
+        assert result.shape == (1, 1, 3)
+        assert result.dtype == np.float32
+        assert bool(np.all(np.isfinite(result)))
+        np.testing.assert_allclose(
+            result,
+            np.zeros((1, 1, 3), dtype=np.float32),
+            rtol=0.0,
+            atol=0.0,
+        )
+
+
 def test_extract_bracket_images_float_uses_single_linear_base_pass() -> None:
     """Bracket extraction must use one neutral RAW pass plus mode-normalized WB base."""
 

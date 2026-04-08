@@ -4452,18 +4452,18 @@ def _ensure_three_channel_float_array_no_bounds(np_module, image_data):
 
     @details Converts numeric image payloads into RGB `float64`, preserves
     finite values on the full float range without lower/upper clipping,
-    expands grayscale/single-channel data to RGB, drops alpha, and raises on
-    non-finite payloads to avoid silent range mutations.
+    replaces non-finite payload samples with `0.0`, expands grayscale/single-
+    channel data to RGB, and drops alpha.
     @param np_module {ModuleType} Imported numpy module.
     @param image_data {object} Numeric image payload.
     @return {object} RGB `float64` tensor with shape `(H,W,3)` and unbounded finite range.
-    @exception ValueError Raised when image shape is unsupported or contains non-finite values.
+    @exception ValueError Raised when image shape is unsupported.
     @satisfies REQ-198
     """
 
     numeric_data = np_module.asarray(image_data, dtype=np_module.float64)
-    if not bool(np_module.all(np_module.isfinite(numeric_data))):
-        raise ValueError("OpenCV-Tonemap backend received non-finite float values")
+    finite_mask = np_module.isfinite(numeric_data)
+    numeric_data = np_module.where(finite_mask, numeric_data, 0.0)
     if len(numeric_data.shape) == 2:
         numeric_data = numeric_data[:, :, None]
     if len(numeric_data.shape) == 3 and numeric_data.shape[2] == 1:
