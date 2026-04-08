@@ -1075,7 +1075,7 @@ def print_help(version):
 
     print(f"Usage: {PROGRAM} <input.dng> <output.jpg> [options] ({version})")
     print(
-        "       Value options accept both `--option value` and `--option=value` forms."
+        "       Value options MUST use the `--option=value` form; the separated `--option value` form is rejected."
     )
     print(
         "       Optional-boolean knobs accept bare flag form as `true` or explicit `0|1|false|true|no|yes|off|on`."
@@ -1137,7 +1137,7 @@ def print_help(version):
         "Step 3 - Optional white-balance stage and HDR backend selection"
     )
     _print_help_option(
-        "--white-balance <mode>",
+        "--auto-white-balance=<mode>",
         "Optional bracket white-balance stage executed after bracket extraction and before HDR merge backend selection.",
         (
             "Allowed values: "
@@ -1147,7 +1147,7 @@ def print_help(version):
         ),
     )
     _print_help_option(
-        "--white-balance-analysis-source <source>",
+        "--white-balance-analysis-source=<source>",
         "Optional white-balance analysis payload selector used when white-balance stage is enabled.",
         (
             "Allowed values: "
@@ -1157,7 +1157,7 @@ def print_help(version):
         ),
     )
     _print_help_option(
-        f"--hdr-merge <{HDR_MERGE_MODE_LUMINANCE}|{HDR_MERGE_MODE_OPENCV_MERGE}|{HDR_MERGE_MODE_OPENCV_TONEMAP}|{HDR_MERGE_MODE_HDR_PLUS}>",
+        f"--hdr-merge=<{HDR_MERGE_MODE_LUMINANCE}|{HDR_MERGE_MODE_OPENCV_MERGE}|{HDR_MERGE_MODE_OPENCV_TONEMAP}|{HDR_MERGE_MODE_HDR_PLUS}>",
         f"Select HDR merge backend. Default: `{HDR_MERGE_MODE_OPENCV_MERGE}`.",
     )
     _print_help_option(
@@ -1171,7 +1171,7 @@ def print_help(version):
     )
     _print_help_option(
         "--opencv-merge-algorithm=<name>",
-        f"OpenCV merge algorithm. Effective only when `--hdr-merge {HDR_MERGE_MODE_OPENCV_MERGE}`.",
+        f"OpenCV merge algorithm. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_MERGE}`.",
         (
             f"Allowed values: {', '.join(_OPENCV_MERGE_ALGORITHMS)}.",
             f"Default: `{DEFAULT_OPENCV_MERGE_ALGORITHM}`.",
@@ -1205,35 +1205,35 @@ def print_help(version):
     )
     _print_help_option(
         "--tonemap-drago-saturation=<value>",
-        f"Drago saturation parameter. Effective only when `--hdr-merge {HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-drago` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_DRAGO_SATURATION:g}`.",
+        f"Drago saturation parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-drago` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_DRAGO_SATURATION:g}`.",
     )
     _print_help_option(
         "--tonemap-drago-bias=<0..1>",
-        f"Drago bias parameter. Effective only when `--hdr-merge {HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-drago` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_DRAGO_BIAS:g}`.",
+        f"Drago bias parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-drago` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_DRAGO_BIAS:g}`.",
     )
     _print_help_option(
         "--tonemap-reinhard-intensity=<value>",
-        f"Reinhard intensity parameter. Effective only when `--hdr-merge {HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-reinhard` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_REINHARD_INTENSITY:g}`.",
+        f"Reinhard intensity parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-reinhard` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_REINHARD_INTENSITY:g}`.",
     )
     _print_help_option(
         "--tonemap-reinhard-light_adapt=<0..1>",
-        f"Reinhard light adaptation parameter. Effective only when `--hdr-merge {HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-reinhard` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_REINHARD_LIGHT_ADAPT:g}`.",
+        f"Reinhard light adaptation parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-reinhard` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_REINHARD_LIGHT_ADAPT:g}`.",
     )
     _print_help_option(
         "--tonemap-reinhard-color_adapt=<0..1>",
-        f"Reinhard color adaptation parameter. Effective only when `--hdr-merge {HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-reinhard` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_REINHARD_COLOR_ADAPT:g}`.",
+        f"Reinhard color adaptation parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-reinhard` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_REINHARD_COLOR_ADAPT:g}`.",
     )
     _print_help_option(
         "--tonemap-mantiuk-scale=<value>",
-        f"Mantiuk scale parameter. Effective only when `--hdr-merge {HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-mantiuk` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_MANTIUK_SCALE:g}`.",
+        f"Mantiuk scale parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-mantiuk` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_MANTIUK_SCALE:g}`.",
     )
     _print_help_option(
         "--tonemap-mantiuk-saturation=<value>",
-        f"Mantiuk saturation parameter. Effective only when `--hdr-merge {HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-mantiuk` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_MANTIUK_SATURATION:g}`.",
+        f"Mantiuk saturation parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap-mantiuk` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_MANTIUK_SATURATION:g}`.",
     )
     _print_help_option(
         "--hdrplus-proxy-mode=<name>",
-        "HDR+ scalar proxy mode. Effective only when `--hdr-merge HDR-Plus`.",
+        "HDR+ scalar proxy mode. Effective only when `--hdr-merge=HDR-Plus`.",
         (
             f"Allowed values: {', '.join(_HDRPLUS_PROXY_MODES)}.",
             f"Default: `{DEFAULT_HDRPLUS_PROXY_MODE}`.",
@@ -1241,41 +1241,41 @@ def print_help(version):
     )
     _print_help_option(
         "--hdrplus-search-radius=<value>",
-        f"HDR+ per-layer alignment search radius; integer `> 0`. Effective only when `--hdr-merge HDR-Plus`. Default: `{DEFAULT_HDRPLUS_SEARCH_RADIUS}`.",
+        f"HDR+ per-layer alignment search radius; integer `> 0`. Effective only when `--hdr-merge=HDR-Plus`. Default: `{DEFAULT_HDRPLUS_SEARCH_RADIUS}`.",
     )
     _print_help_option(
         "--hdrplus-temporal-factor=<value>",
-        f"HDR+ temporal inverse-distance stretch factor; `> 0`. Effective only when `--hdr-merge HDR-Plus`. Default: `{DEFAULT_HDRPLUS_TEMPORAL_FACTOR:g}`.",
+        f"HDR+ temporal inverse-distance stretch factor; `> 0`. Effective only when `--hdr-merge=HDR-Plus`. Default: `{DEFAULT_HDRPLUS_TEMPORAL_FACTOR:g}`.",
     )
     _print_help_option(
         "--hdrplus-temporal-min-dist=<value>",
-        f"HDR+ temporal weight floor; `>= 0`. Effective only when `--hdr-merge HDR-Plus`. Default: `{DEFAULT_HDRPLUS_TEMPORAL_MIN_DIST:g}`.",
+        f"HDR+ temporal weight floor; `>= 0`. Effective only when `--hdr-merge=HDR-Plus`. Default: `{DEFAULT_HDRPLUS_TEMPORAL_MIN_DIST:g}`.",
     )
     _print_help_option(
         "--hdrplus-temporal-max-dist=<value>",
-        f"HDR+ temporal cutoff threshold; must be `> --hdrplus-temporal-min-dist`. Effective only when `--hdr-merge HDR-Plus`. Default: `{DEFAULT_HDRPLUS_TEMPORAL_MAX_DIST:g}`.",
+        f"HDR+ temporal cutoff threshold; must be `> --hdrplus-temporal-min-dist`. Effective only when `--hdr-merge=HDR-Plus`. Default: `{DEFAULT_HDRPLUS_TEMPORAL_MAX_DIST:g}`.",
     )
     _print_help_option(
         "--luminance-hdr-model=<name>",
-        f"Luminance HDR model text forwarded to `luminance-hdr-cli`. Effective only when `--hdr-merge {HDR_MERGE_MODE_LUMINANCE}`. Default: `{DEFAULT_LUMINANCE_HDR_MODEL}`.",
+        f"Luminance HDR model text forwarded to `luminance-hdr-cli`. Effective only when `--hdr-merge={HDR_MERGE_MODE_LUMINANCE}`. Default: `{DEFAULT_LUMINANCE_HDR_MODEL}`.",
     )
     _print_help_option(
         "--luminance-hdr-weight=<name>",
-        f"Luminance weighting function text forwarded to `luminance-hdr-cli`. Effective only when `--hdr-merge {HDR_MERGE_MODE_LUMINANCE}`. Default: `{DEFAULT_LUMINANCE_HDR_WEIGHT}`.",
+        f"Luminance weighting function text forwarded to `luminance-hdr-cli`. Effective only when `--hdr-merge={HDR_MERGE_MODE_LUMINANCE}`. Default: `{DEFAULT_LUMINANCE_HDR_WEIGHT}`.",
     )
     _print_help_option(
         "--luminance-hdr-response-curve=<name>",
         "Luminance response-curve selector constrained to the repository "
-        f"linear HDR contract. Effective only when `--hdr-merge {HDR_MERGE_MODE_LUMINANCE}`. "
+        f"linear HDR contract. Effective only when `--hdr-merge={HDR_MERGE_MODE_LUMINANCE}`. "
         f"Only accepted value: `{DEFAULT_LUMINANCE_HDR_RESPONSE_CURVE}`.",
     )
     _print_help_option(
         "--luminance-tmo=<name>",
-        f"Luminance tone-mapping operator. Effective only when `--hdr-merge {HDR_MERGE_MODE_LUMINANCE}`. Default: `{DEFAULT_LUMINANCE_TMO}`.",
+        f"Luminance tone-mapping operator. Effective only when `--hdr-merge={HDR_MERGE_MODE_LUMINANCE}`. Default: `{DEFAULT_LUMINANCE_TMO}`.",
     )
     _print_help_option(
-        "--tmo* <value> | --tmo*=<value>",
-        f"Forward explicit `luminance-hdr-cli --tmo*` parameters unchanged. Effective only when `--hdr-merge {HDR_MERGE_MODE_LUMINANCE}`.",
+        "--tmo*=<value>",
+        f"Forward explicit `luminance-hdr-cli --tmo*` parameters unchanged. Effective only when `--hdr-merge={HDR_MERGE_MODE_LUMINANCE}`.",
     )
     print()
     print("  Luminance operators:")
@@ -1356,7 +1356,7 @@ def print_help(version):
         ),
     )
     _print_help_option(
-        "--al-highlight-reconstruction-method <name>",
+        "--al-highlight-reconstruction-method=<name>",
         "Select one RawTherapee-aligned highlight reconstruction method. Effective only when auto-levels resolves to enable.",
         (
             "Allowed values: " + ", ".join(_AUTO_LEVELS_HIGHLIGHT_METHODS) + ".",
@@ -3799,14 +3799,14 @@ def _parse_white_balance_mode_option(white_balance_raw):
 
     @details Accepts case-insensitive white-balance selector names and
     normalizes them to canonical runtime mode names.
-    @param white_balance_raw {str} Raw `--white-balance` selector token.
+    @param white_balance_raw {str} Raw `--auto-white-balance` selector token.
     @return {str|None} Canonical white-balance mode or `None` on parse failure.
     @satisfies REQ-181, REQ-183
     """
 
     white_balance_text = str(white_balance_raw).strip()
     if not white_balance_text:
-        print_error("Invalid --white-balance value: empty value")
+        print_error("Invalid --auto-white-balance value: empty value")
         return None
     mapping = {
         WHITE_BALANCE_MODE_SIMPLE.lower(): WHITE_BALANCE_MODE_SIMPLE,
@@ -3818,7 +3818,7 @@ def _parse_white_balance_mode_option(white_balance_raw):
     resolved_mode = mapping.get(white_balance_text.lower())
     if resolved_mode is not None:
         return resolved_mode
-    print_error(f"Invalid --white-balance value: {white_balance_raw}")
+    print_error(f"Invalid --auto-white-balance value: {white_balance_raw}")
     print_error("Allowed values: " + ", ".join(_WHITE_BALANCE_MODES))
     return None
 
@@ -4421,7 +4421,7 @@ def _parse_run_options(args):
     automatic exposure selector (`--auto-ev[=<enable|disable>]`) with explicit
     mutual exclusion against `--ev`, optional automatic exposure clipping and
     step controls,
-    optional white-balance selector (`--white-balance=<mode>`) applied to
+    optional white-balance selector (`--auto-white-balance=<mode>`) applied to
     bracket triplet before backend merge when enabled,
     optional postprocess controls including `--post-gamma=<value|auto>` and
     optional `--post-gamma-auto-*` knobs,
@@ -4484,20 +4484,6 @@ def _parse_run_options(args):
 
     while idx < len(args):
         token = args[idx]
-        if token == "--hdr-merge":
-            if idx + 1 >= len(args):
-                print_error("Missing value for --hdr-merge")
-                return None
-            if args[idx + 1].startswith("--"):
-                print_error("Missing value for --hdr-merge")
-                return None
-            parsed_hdr_merge_mode = _parse_hdr_merge_option(args[idx + 1])
-            if parsed_hdr_merge_mode is None:
-                return None
-            hdr_merge_mode = parsed_hdr_merge_mode
-            idx += 2
-            continue
-
         if token.startswith("--hdr-merge="):
             parsed_hdr_merge_mode = _parse_hdr_merge_option(token.split("=", 1)[1])
             if parsed_hdr_merge_mode is None:
@@ -4507,47 +4493,27 @@ def _parse_run_options(args):
             continue
 
         if token.startswith("--hdrplus-"):
-            option_name = token
-            option_value = None
-            consume_count = 1
-            if "=" in token:
-                option_name, option_value = token.split("=", 1)
-            else:
-                if idx + 1 >= len(args):
-                    print_error(f"Missing value for {token}")
-                    return None
-                option_value = args[idx + 1]
-                if option_value.startswith("--"):
-                    print_error(f"Missing value for {token}")
-                    return None
-                consume_count = 2
+            if "=" not in token:
+                print_error(f"Missing value for {token}")
+                return None
+            option_name, option_value = token.split("=", 1)
             if option_name not in _HDRPLUS_KNOB_OPTIONS:
                 print_error(f"Unknown option: {option_name}")
                 return None
             hdrplus_raw_values[option_name] = option_value
-            idx += consume_count
+            idx += 1
             continue
 
         if token.startswith("--opencv-"):
-            option_name = token
-            option_value = None
-            consume_count = 1
-            if "=" in token:
-                option_name, option_value = token.split("=", 1)
-            else:
-                if idx + 1 >= len(args):
-                    print_error(f"Missing value for {token}")
-                    return None
-                option_value = args[idx + 1]
-                if option_value.startswith("--"):
-                    print_error(f"Missing value for {token}")
-                    return None
-                consume_count = 2
+            if "=" not in token:
+                print_error(f"Missing value for {token}")
+                return None
+            option_name, option_value = token.split("=", 1)
             if option_name not in _OPENCV_KNOB_OPTIONS:
                 print_error(f"Unknown option: {option_name}")
                 return None
             opencv_raw_values[option_name] = option_value
-            idx += consume_count
+            idx += 1
             continue
 
         if token in _OPENCV_TONEMAP_SELECTOR_OPTIONS:
@@ -4556,41 +4522,20 @@ def _parse_run_options(args):
             continue
 
         if token.startswith("--tonemap-"):
-            option_name = token
-            option_value = None
-            consume_count = 1
-            if "=" in token:
-                option_name, option_value = token.split("=", 1)
-            else:
-                if idx + 1 >= len(args):
-                    print_error(f"Missing value for {token}")
-                    return None
-                option_value = args[idx + 1]
-                if option_value.startswith("--"):
-                    print_error(f"Missing value for {token}")
-                    return None
-                consume_count = 2
+            if "=" not in token:
+                print_error(f"Missing value for {token}")
+                return None
+            option_name, option_value = token.split("=", 1)
             if option_name not in _OPENCV_TONEMAP_KNOB_OPTIONS:
                 print_error(f"Unknown option: {option_name}")
                 return None
             opencv_tonemap_knob_raw_values[option_name] = option_value
-            idx += consume_count
+            idx += 1
             continue
 
         if token == "--debug":
             debug_enabled = True
             idx += 1
-            continue
-
-        if token == "--auto-adjust":
-            if idx + 1 >= len(args) or args[idx + 1].startswith("--"):
-                print_error("Missing value for --auto-adjust")
-                return None
-            parsed_auto_adjust_enabled = _parse_auto_adjust_option(args[idx + 1])
-            if parsed_auto_adjust_enabled is None:
-                return None
-            auto_adjust_enabled = parsed_auto_adjust_enabled
-            idx += 2
             continue
 
         if token.startswith("--auto-adjust="):
@@ -4601,17 +4546,6 @@ def _parse_run_options(args):
                 return None
             auto_adjust_enabled = parsed_auto_adjust_enabled
             idx += 1
-            continue
-
-        if token == "--auto-brightness":
-            if idx + 1 >= len(args) or args[idx + 1].startswith("--"):
-                print_error("Missing value for --auto-brightness")
-                return None
-            parsed_auto_brightness = _parse_auto_brightness_option(args[idx + 1])
-            if parsed_auto_brightness is None:
-                return None
-            auto_brightness_enabled = parsed_auto_brightness
-            idx += 2
             continue
 
         if token.startswith("--auto-brightness="):
@@ -4626,43 +4560,23 @@ def _parse_run_options(args):
 
         if token.startswith("--ab-"):
             if token == "--ab-enable-luminance-preserving-desat":
-                if idx + 1 < len(args) and not args[idx + 1].startswith("--"):
-                    auto_brightness_raw_values[token] = args[idx + 1]
-                    idx += 2
-                    continue
                 auto_brightness_raw_values[token] = "true"
                 idx += 1
                 continue
-            option_name = token
-            option_value = None
-            consume_count = 1
-            if "=" in token:
+            if token.startswith("--ab-enable-luminance-preserving-desat="):
                 option_name, option_value = token.split("=", 1)
-            else:
-                if idx + 1 >= len(args):
-                    print_error(f"Missing value for {token}")
-                    return None
-                option_value = args[idx + 1]
-                if option_value.startswith("--"):
-                    print_error(f"Missing value for {token}")
-                    return None
-                consume_count = 2
+                auto_brightness_raw_values[option_name] = option_value
+                idx += 1
+                continue
+            if "=" not in token:
+                print_error(f"Missing value for {token}")
+                return None
+            option_name, option_value = token.split("=", 1)
             if option_name not in _AUTO_BRIGHTNESS_KNOB_OPTIONS:
                 print_error(f"Unknown option: {option_name}")
                 return None
             auto_brightness_raw_values[option_name] = option_value
-            idx += consume_count
-            continue
-
-        if token == "--auto-levels":
-            if idx + 1 >= len(args) or args[idx + 1].startswith("--"):
-                print_error("Missing value for --auto-levels")
-                return None
-            parsed_auto_levels = _parse_auto_levels_option(args[idx + 1])
-            if parsed_auto_levels is None:
-                return None
-            auto_levels_enabled = parsed_auto_levels
-            idx += 2
+            idx += 1
             continue
 
         if token.startswith("--auto-levels="):
@@ -4678,80 +4592,50 @@ def _parse_run_options(args):
                 "--al-clip-out-of-gamut",
                 "--al-highlight-reconstruction",
             ):
-                if idx + 1 < len(args) and not args[idx + 1].startswith("--"):
-                    auto_levels_raw_values[token] = args[idx + 1]
-                    idx += 2
-                    continue
                 auto_levels_raw_values[token] = "true"
                 idx += 1
                 continue
-            option_name = token
-            option_value = None
-            consume_count = 1
-            if "=" in token:
+            if token.startswith("--al-clip-out-of-gamut=") or token.startswith(
+                "--al-highlight-reconstruction="
+            ):
                 option_name, option_value = token.split("=", 1)
-            else:
-                if idx + 1 >= len(args):
-                    print_error(f"Missing value for {token}")
-                    return None
-                option_value = args[idx + 1]
-                if option_value.startswith("--"):
-                    print_error(f"Missing value for {token}")
-                    return None
-                consume_count = 2
+                auto_levels_raw_values[option_name] = option_value
+                idx += 1
+                continue
+            if "=" not in token:
+                print_error(f"Missing value for {token}")
+                return None
+            option_name, option_value = token.split("=", 1)
             if option_name not in _AUTO_LEVELS_KNOB_OPTIONS:
                 print_error(f"Unknown option: {option_name}")
                 return None
             auto_levels_raw_values[option_name] = option_value
-            idx += consume_count
+            idx += 1
             continue
 
         if token.startswith("--aa-"):
             if token == "--aa-enable-local-contrast":
-                if idx + 1 < len(args) and not args[idx + 1].startswith("--"):
-                    auto_adjust_raw_values[token] = args[idx + 1]
-                    idx += 2
-                    continue
                 auto_adjust_raw_values[token] = "true"
                 idx += 1
                 continue
-            option_name = token
-            option_value = None
-            consume_count = 1
-            if "=" in token:
+            if token.startswith("--aa-enable-local-contrast="):
                 option_name, option_value = token.split("=", 1)
-            else:
-                if idx + 1 >= len(args):
-                    print_error(f"Missing value for {token}")
-                    return None
-                option_value = args[idx + 1]
-                if option_value.startswith("--"):
-                    print_error(f"Missing value for {token}")
-                    return None
-                consume_count = 2
+                auto_adjust_raw_values[option_name] = option_value
+                idx += 1
+                continue
+            if "=" not in token:
+                print_error(f"Missing value for {token}")
+                return None
+            option_name, option_value = token.split("=", 1)
 
             if option_name not in _AUTO_ADJUST_KNOB_OPTIONS:
                 print_error(f"Unknown option: {option_name}")
                 return None
             auto_adjust_raw_values[option_name] = option_value
-            idx += consume_count
+            idx += 1
             continue
 
-        if token == "--white-balance":
-            if idx + 1 >= len(args):
-                print_error("Missing value for --white-balance")
-                return None
-            if args[idx + 1].startswith("--"):
-                print_error("Missing value for --white-balance")
-                return None
-            parsed_white_balance_mode = _parse_white_balance_mode_option(args[idx + 1])
-            if parsed_white_balance_mode is None:
-                return None
-            white_balance_mode = parsed_white_balance_mode
-            idx += 2
-            continue
-
-        if token.startswith("--white-balance="):
+        if token.startswith("--auto-white-balance="):
             parsed_white_balance_mode = _parse_white_balance_mode_option(
                 token.split("=", 1)[1]
             )
@@ -4759,22 +4643,6 @@ def _parse_run_options(args):
                 return None
             white_balance_mode = parsed_white_balance_mode
             idx += 1
-            continue
-
-        if token == "--white-balance-analysis-source":
-            if idx + 1 >= len(args):
-                print_error("Missing value for --white-balance-analysis-source")
-                return None
-            if args[idx + 1].startswith("--"):
-                print_error("Missing value for --white-balance-analysis-source")
-                return None
-            parsed_white_balance_analysis_source = (
-                _parse_white_balance_analysis_source_option(args[idx + 1])
-            )
-            if parsed_white_balance_analysis_source is None:
-                return None
-            white_balance_analysis_source = parsed_white_balance_analysis_source
-            idx += 2
             continue
 
         if token.startswith("--white-balance-analysis-source="):
@@ -4789,20 +4657,6 @@ def _parse_run_options(args):
             idx += 1
             continue
 
-        if token == "--luminance-hdr-model":
-            if idx + 1 >= len(args):
-                print_error("Missing value for --luminance-hdr-model")
-                return None
-            parsed_value = _parse_luminance_text_option(
-                "--luminance-hdr-model", args[idx + 1]
-            )
-            if parsed_value is None:
-                return None
-            luminance_hdr_model = parsed_value
-            luminance_option_specified = True
-            idx += 2
-            continue
-
         if token.startswith("--luminance-hdr-model="):
             parsed_value = _parse_luminance_text_option(
                 "--luminance-hdr-model", token.split("=", 1)[1]
@@ -4812,20 +4666,6 @@ def _parse_run_options(args):
             luminance_hdr_model = parsed_value
             luminance_option_specified = True
             idx += 1
-            continue
-
-        if token == "--luminance-hdr-weight":
-            if idx + 1 >= len(args):
-                print_error("Missing value for --luminance-hdr-weight")
-                return None
-            parsed_value = _parse_luminance_text_option(
-                "--luminance-hdr-weight", args[idx + 1]
-            )
-            if parsed_value is None:
-                return None
-            luminance_hdr_weight = parsed_value
-            luminance_option_specified = True
-            idx += 2
             continue
 
         if token.startswith("--luminance-hdr-weight="):
@@ -4839,18 +4679,6 @@ def _parse_run_options(args):
             idx += 1
             continue
 
-        if token == "--luminance-hdr-response-curve":
-            if idx + 1 >= len(args):
-                print_error("Missing value for --luminance-hdr-response-curve")
-                return None
-            parsed_value = _parse_luminance_response_curve_option(args[idx + 1])
-            if parsed_value is None:
-                return None
-            luminance_hdr_response_curve = parsed_value
-            luminance_option_specified = True
-            idx += 2
-            continue
-
         if token.startswith("--luminance-hdr-response-curve="):
             parsed_value = _parse_luminance_response_curve_option(
                 token.split("=", 1)[1]
@@ -4860,20 +4688,6 @@ def _parse_run_options(args):
             luminance_hdr_response_curve = parsed_value
             luminance_option_specified = True
             idx += 1
-            continue
-
-        if token == "--luminance-tmo":
-            if idx + 1 >= len(args):
-                print_error("Missing value for --luminance-tmo")
-                return None
-            parsed_value = _parse_luminance_text_option(
-                "--luminance-tmo", args[idx + 1]
-            )
-            if parsed_value is None:
-                return None
-            luminance_tmo = parsed_value
-            luminance_option_specified = True
-            idx += 2
             continue
 
         if token.startswith("--luminance-tmo="):
@@ -4892,38 +4706,17 @@ def _parse_run_options(args):
                 print_error("Unknown option: --tmo")
                 return None
 
-            option_name = token
-            option_value = None
-            consume_count = 1
-            if "=" in token:
-                option_name, option_value = token.split("=", 1)
-            else:
-                if idx + 1 >= len(args):
-                    print_error(f"Missing value for {token}")
-                    return None
-                option_value = args[idx + 1]
-                if option_value.startswith("--"):
-                    print_error(f"Missing value for {token}")
-                    return None
-                consume_count = 2
+            if "=" not in token:
+                print_error(f"Missing value for {token}")
+                return None
+            option_name, option_value = token.split("=", 1)
 
             parsed_value = _parse_tmo_passthrough_value(option_name, option_value)
             if parsed_value is None:
                 return None
             luminance_tmo_extra_args.extend((option_name, parsed_value))
             luminance_option_specified = True
-            idx += consume_count
-            continue
-
-        if token == "--ev":
-            if idx + 1 >= len(args):
-                print_error("Missing value for --ev")
-                return None
-            parsed_ev = _parse_ev_option(args[idx + 1])
-            if parsed_ev is None:
-                return None
-            ev_value = parsed_ev
-            idx += 2
+            idx += 1
             continue
 
         if token.startswith("--ev="):
@@ -4932,18 +4725,6 @@ def _parse_run_options(args):
                 return None
             ev_value = parsed_ev
             idx += 1
-            continue
-
-        if token == "--auto-ev":
-            if idx + 1 >= len(args) or args[idx + 1].startswith("--"):
-                print_error("Missing value for --auto-ev")
-                return None
-            parsed_auto_ev = _parse_auto_ev_option(args[idx + 1])
-            if parsed_auto_ev is None:
-                return None
-            auto_ev_enabled = parsed_auto_ev
-            auto_ev_option_specified = True
-            idx += 2
             continue
 
         if token.startswith("--auto-ev="):
@@ -4977,23 +4758,6 @@ def _parse_run_options(args):
             print_error(f"Removed option: {token.split('=', 1)[0]}")
             return None
 
-        if token == "--auto-ev-shadow-clipping":
-            if idx + 1 >= len(args):
-                print_error("Missing value for --auto-ev-shadow-clipping")
-                return None
-            parsed_threshold = _parse_percentage_option(
-                "--auto-ev-shadow-clipping", args[idx + 1]
-            )
-            if parsed_threshold is None:
-                return None
-            auto_ev_options = AutoEvOptions(
-                shadow_clipping_pct=parsed_threshold,
-                highlight_clipping_pct=auto_ev_options.highlight_clipping_pct,
-                step=auto_ev_options.step,
-            )
-            idx += 2
-            continue
-
         if token.startswith("--auto-ev-shadow-clipping="):
             parsed_threshold = _parse_percentage_option(
                 "--auto-ev-shadow-clipping", token.split("=", 1)[1]
@@ -5006,23 +4770,6 @@ def _parse_run_options(args):
                 step=auto_ev_options.step,
             )
             idx += 1
-            continue
-
-        if token == "--auto-ev-highlight-clipping":
-            if idx + 1 >= len(args):
-                print_error("Missing value for --auto-ev-highlight-clipping")
-                return None
-            parsed_threshold = _parse_percentage_option(
-                "--auto-ev-highlight-clipping", args[idx + 1]
-            )
-            if parsed_threshold is None:
-                return None
-            auto_ev_options = AutoEvOptions(
-                shadow_clipping_pct=auto_ev_options.shadow_clipping_pct,
-                highlight_clipping_pct=parsed_threshold,
-                step=auto_ev_options.step,
-            )
-            idx += 2
             continue
 
         if token.startswith("--auto-ev-highlight-clipping="):
@@ -5039,21 +4786,6 @@ def _parse_run_options(args):
             idx += 1
             continue
 
-        if token == "--auto-ev-step":
-            if idx + 1 >= len(args):
-                print_error("Missing value for --auto-ev-step")
-                return None
-            parsed_step = _parse_positive_float_option("--auto-ev-step", args[idx + 1])
-            if parsed_step is None:
-                return None
-            auto_ev_options = AutoEvOptions(
-                shadow_clipping_pct=auto_ev_options.shadow_clipping_pct,
-                highlight_clipping_pct=auto_ev_options.highlight_clipping_pct,
-                step=parsed_step,
-            )
-            idx += 2
-            continue
-
         if token.startswith("--auto-ev-step="):
             parsed_step = _parse_positive_float_option(
                 "--auto-ev-step", token.split("=", 1)[1]
@@ -5068,18 +4800,6 @@ def _parse_run_options(args):
             idx += 1
             continue
 
-        if token == "--ev-zero":
-            if idx + 1 >= len(args):
-                print_error("Missing value for --ev-zero")
-                return None
-            parsed_ev_zero = _parse_ev_zero_option(args[idx + 1])
-            if parsed_ev_zero is None:
-                return None
-            ev_zero = parsed_ev_zero
-            ev_zero_specified = True
-            idx += 2
-            continue
-
         if token.startswith("--ev-zero="):
             parsed_ev_zero = _parse_ev_zero_option(token.split("=", 1)[1])
             if parsed_ev_zero is None:
@@ -5089,33 +4809,11 @@ def _parse_run_options(args):
             idx += 1
             continue
 
-        if token == "--gamma":
-            if idx + 1 >= len(args):
-                print_error("Missing value for --gamma")
-                return None
-            merge_gamma_option = _parse_gamma_option(args[idx + 1])
-            if merge_gamma_option is None:
-                return None
-            idx += 2
-            continue
-
         if token.startswith("--gamma="):
             merge_gamma_option = _parse_gamma_option(token.split("=", 1)[1])
             if merge_gamma_option is None:
                 return None
             idx += 1
-            continue
-
-        if token == "--post-gamma":
-            if idx + 1 >= len(args):
-                print_error("Missing value for --post-gamma")
-                return None
-            parsed_post_gamma_selector = _parse_post_gamma_selector_option(args[idx + 1])
-            if parsed_post_gamma_selector is None:
-                return None
-            post_gamma, post_gamma_mode = parsed_post_gamma_selector
-            post_gamma_set = True
-            idx += 2
             continue
 
         if token.startswith("--post-gamma="):
@@ -5130,39 +4828,15 @@ def _parse_run_options(args):
             continue
 
         if token.startswith("--post-gamma-auto-"):
-            option_name = token
-            option_value = None
-            consume_count = 1
-            if "=" in token:
-                option_name, option_value = token.split("=", 1)
-            else:
-                if idx + 1 >= len(args):
-                    print_error(f"Missing value for {token}")
-                    return None
-                option_value = args[idx + 1]
-                if option_value.startswith("--"):
-                    print_error(f"Missing value for {token}")
-                    return None
-                consume_count = 2
+            if "=" not in token:
+                print_error(f"Missing value for {token}")
+                return None
+            option_name, option_value = token.split("=", 1)
             if option_name not in _POST_GAMMA_AUTO_KNOB_OPTIONS:
                 print_error(f"Unknown option: {option_name}")
                 return None
             post_gamma_auto_raw_values[option_name] = option_value
-            idx += consume_count
-            continue
-
-        if token == "--brightness":
-            if idx + 1 >= len(args):
-                print_error("Missing value for --brightness")
-                return None
-            parsed_brightness = _parse_positive_float_option(
-                "--brightness", args[idx + 1]
-            )
-            if parsed_brightness is None:
-                return None
-            brightness = parsed_brightness
-            brightness_set = True
-            idx += 2
+            idx += 1
             continue
 
         if token.startswith("--brightness="):
@@ -5176,18 +4850,6 @@ def _parse_run_options(args):
             idx += 1
             continue
 
-        if token == "--contrast":
-            if idx + 1 >= len(args):
-                print_error("Missing value for --contrast")
-                return None
-            parsed_contrast = _parse_positive_float_option("--contrast", args[idx + 1])
-            if parsed_contrast is None:
-                return None
-            contrast = parsed_contrast
-            contrast_set = True
-            idx += 2
-            continue
-
         if token.startswith("--contrast="):
             parsed_contrast = _parse_positive_float_option(
                 "--contrast", token.split("=", 1)[1]
@@ -5199,20 +4861,6 @@ def _parse_run_options(args):
             idx += 1
             continue
 
-        if token == "--saturation":
-            if idx + 1 >= len(args):
-                print_error("Missing value for --saturation")
-                return None
-            parsed_saturation = _parse_positive_float_option(
-                "--saturation", args[idx + 1]
-            )
-            if parsed_saturation is None:
-                return None
-            saturation = parsed_saturation
-            saturation_set = True
-            idx += 2
-            continue
-
         if token.startswith("--saturation="):
             parsed_saturation = _parse_positive_float_option(
                 "--saturation", token.split("=", 1)[1]
@@ -5222,17 +4870,6 @@ def _parse_run_options(args):
             saturation = parsed_saturation
             saturation_set = True
             idx += 1
-            continue
-
-        if token == "--jpg-compression":
-            if idx + 1 >= len(args):
-                print_error("Missing value for --jpg-compression")
-                return None
-            parsed_compression = _parse_jpg_compression_option(args[idx + 1])
-            if parsed_compression is None:
-                return None
-            jpg_compression = parsed_compression
-            idx += 2
             continue
 
         if token.startswith("--jpg-compression="):
@@ -6450,7 +6087,7 @@ def _apply_white_balance_to_bracket_triplet(
             analysis_image_rgb_float=analysis_rgb,
         )
     else:
-        raise ValueError(f"Unsupported --white-balance mode: {white_balance_mode}")
+        raise ValueError(f"Unsupported --auto-white-balance mode: {white_balance_mode}")
     return _apply_channel_gains_to_white_balance_triplet(
         np_module=np_module,
         bracket_triplet_rgb_float=normalized_triplet,

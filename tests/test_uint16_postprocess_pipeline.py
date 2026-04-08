@@ -1155,7 +1155,7 @@ def test_parse_run_options_accepts_white_balance_modes_and_analysis_source_defau
                 "input.dng",
                 "output.jpg",
                 "--ev=1",
-                f"--white-balance={white_balance_mode}",
+                f"--auto-white-balance={white_balance_mode}",
             ]
         )
         assert parsed is not None
@@ -1170,7 +1170,7 @@ def test_parse_run_options_accepts_white_balance_modes_and_analysis_source_defau
             "input.dng",
             "output.jpg",
             "--ev=1",
-            "--white-balance=Simple",
+            "--auto-white-balance=Simple",
             "--white-balance-analysis-source=linear-base",
         ]
     )
@@ -1185,11 +1185,11 @@ def test_parse_run_options_rejects_invalid_white_balance_mode_or_analysis_source
     """Parser must reject unsupported white-balance mode or analysis source."""
 
     parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--ev=1", "--white-balance=invalid-mode"]
+        ["input.dng", "output.jpg", "--ev=1", "--auto-white-balance=invalid-mode"]
     )
     assert parsed is None
     missing = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--ev=1", "--white-balance"]
+        ["input.dng", "output.jpg", "--ev=1", "--auto-white-balance"]
     )
     assert missing is None
     invalid_analysis_source = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
@@ -1197,7 +1197,7 @@ def test_parse_run_options_rejects_invalid_white_balance_mode_or_analysis_source
             "input.dng",
             "output.jpg",
             "--ev=1",
-            "--white-balance=Simple",
+            "--auto-white-balance=Simple",
             "--white-balance-analysis-source=invalid",
         ]
     )
@@ -1621,19 +1621,19 @@ def test_print_help_orders_sections_by_pipeline_step(capsys) -> None:
     assert output.index("--auto-levels=<enable|disable>") < output.index(
         "--al-clip-pct=<value>"
     )
-    assert output.index("--white-balance <mode>") < output.index(
-        "--hdr-merge <Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>"
+    assert output.index("--auto-white-balance=<mode>") < output.index(
+        "--hdr-merge=<Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>"
     )
-    assert output.index("--hdr-merge <Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>") < output.index(
+    assert output.index("--hdr-merge=<Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>") < output.index(
         "--opencv-merge-algorithm=<name>"
     )
-    assert output.index("--hdr-merge <Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>") < output.index(
+    assert output.index("--hdr-merge=<Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>") < output.index(
         "--tonemap-drago"
     )
-    assert output.index("--hdr-merge <Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>") < output.index(
+    assert output.index("--hdr-merge=<Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>") < output.index(
         "--hdrplus-proxy-mode=<name>"
     )
-    assert output.index("--hdr-merge <Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>") < output.index(
+    assert output.index("--hdr-merge=<Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>") < output.index(
         "--luminance-hdr-model=<name>"
     )
 
@@ -1654,8 +1654,8 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
         "--auto-ev-shadow-clipping=<0..100>",
         "--auto-ev-highlight-clipping=<0..100>",
         "--auto-ev-step=<value>",
-        "--white-balance <mode>",
-        "--hdr-merge <Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>",
+        "--auto-white-balance=<mode>",
+        "--hdr-merge=<Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>",
         "--opencv-merge-algorithm=<name>",
         "--opencv-tonemap=<bool>",
         "--opencv-tonemap-gamma=<value>",
@@ -1678,7 +1678,7 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
         "--luminance-hdr-weight=<name>",
         "--luminance-hdr-response-curve=<name>",
         "--luminance-tmo=<name>",
-        "--tmo* <value> | --tmo*=<value>",
+        "--tmo*=<value>",
         "--auto-brightness=<enable|disable>",
         "--ab-key-value=<value>",
         "--ab-white-point-pct=<(0,100)>",
@@ -1690,7 +1690,7 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
         "--auto-levels=<enable|disable>",
         "--al-clip-pct=<value>",
         "--al-clip-out-of-gamut[=<bool>]",
-        "--al-highlight-reconstruction-method <name>",
+        "--al-highlight-reconstruction-method=<name>",
         "--al-gain-threshold=<value>",
         "--post-gamma=<value|auto>",
         "--post-gamma-auto-target-gray=<value>",
@@ -1722,15 +1722,15 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
     assert "--auto-zero=<enable|disable>" not in output
     assert "--auto-zero-pct=<0..100>" not in output
 
-    assert "Value options accept both `--option value` and `--option=value` forms." in output
+    assert "Value options MUST use the `--option=value` form; the separated `--option value` form is rejected." in output
     assert "Only accepted value: `linear`." in output
     assert "Allowed values: Debevec, Robertson, Mertens." in output
     assert "Allowed values: rggb, bt709, mean." in output
     assert "Allowed values: Simple, GrayworldWB, IA, ColorConstancy, TTL." in output
-    assert "Effective only when `--hdr-merge OpenCV-Merge`." in output
-    assert "Effective only when `--hdr-merge OpenCV-Tonemap`" in output
-    assert "Effective only when `--hdr-merge HDR-Plus`." in output
-    assert "Effective only when `--hdr-merge Luminace-HDR`." in output
+    assert "Effective only when `--hdr-merge=OpenCV-Merge`." in output
+    assert "Effective only when `--hdr-merge=OpenCV-Tonemap`" in output
+    assert "Effective only when `--hdr-merge=HDR-Plus`." in output
+    assert "Effective only when `--hdr-merge=Luminace-HDR`." in output
     assert "Default: `OpenCV-Merge`." in output
     assert output.count("Default:\n                                    `20`.") >= 2
     assert "Default: `Robertson`." in output
@@ -3563,8 +3563,7 @@ def test_parse_run_options_accepts_extended_auto_levels_knobs() -> None:
             "--al-clip-pct=0.5",
             "--al-clip-out-of-gamut=false",
             "--al-highlight-reconstruction",
-            "--al-highlight-reconstruction-method",
-            "Inpaint Opposed",
+            "--al-highlight-reconstruction-method=Inpaint Opposed",
             "--al-gain-threshold=1.25",
             "--hdr-merge=OpenCV-Merge",
         ]
@@ -4688,7 +4687,7 @@ def test_run_static_ev_uses_manual_center_and_reports_static_mode(
 
 
 def test_run_skips_white_balance_when_mode_not_specified(monkeypatch, tmp_path) -> None:
-    """Runtime must skip white-balance stage when `--white-balance` is omitted."""
+    """Runtime must skip white-balance stage when `--auto-white-balance` is omitted."""
 
     input_dng = tmp_path / "scene.dng"
     input_dng.write_bytes(b"fake-dng")
@@ -4910,7 +4909,7 @@ def test_run_passes_linear_base_white_balance_analysis_when_selected(
             str(output_jpg),
             "--ev=1",
             "--ev-zero=1",
-            "--white-balance=TTL",
+            "--auto-white-balance=TTL",
             "--white-balance-analysis-source=linear-base",
             "--hdr-merge=OpenCV-Merge",
         ]

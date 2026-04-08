@@ -91,7 +91,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 ## 3. Requirements
 
 ### 3.1 Design and Implementation
-- **DES-001**: MUST parse CLI arguments by deterministic token scanning supporting both `--option value` and `--option=value` syntaxes.
+- **DES-001**: MUST parse CLI arguments by deterministic token scanning accepting exclusively the `--option=value` syntax and rejecting the separated `--option value` form for every value-bearing option.
+- **REQ-202**: MUST reject any value-bearing CLI option whose value is not embedded via the `=` separator in the same token, emitting deterministic diagnostics and returning a parse failure.
 - **DES-002**: MUST model runtime options with immutable dataclasses `AutoAdjustOptions`, `AutoBrightnessOptions`, `PostprocessOptions`, `LuminanceOptions`, and `AutoEvInputs`.
 - **DES-003**: MUST parse static EV selectors as finite numeric values without quantization-step enforcement or bit-depth-derived upper-bound contracts.
 - **DES-004**: MUST isolate intermediate processing artifacts in temporary directories and cleanup automatically after command completion.
@@ -233,20 +234,20 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-147**: MUST write each debug TIFF from normalized RGB float `[0,1]` data using filename `<input-dng-stem><stage-suffix>.tiff` in the resolved output JPG directory.
 - **REQ-148**: MUST use monotonically increasing numeric stage suffixes with phase labels covering bracket extraction (`ev_min`, `ev_zero`, `ev_max`), HDR merge, static postprocess, auto-brightness, auto-levels, and auto-adjust checkpoints when those stages execute.
 - **REQ-149**: MUST preserve debug TIFF files after command completion while keeping temporary workspace cleanup behavior unchanged for non-debug intermediates.
-- **REQ-181**: MUST parse optional `--white-balance <Simple|GrayworldWB|IA|ColorConstancy|TTL>`, defaulting to disabled when omitted and rejecting unknown values.
-- **REQ-199**: MUST parse optional `--white-balance-analysis-source <ev-zero|linear-base>`, defaulting to `ev-zero` and rejecting unknown values.
-- **REQ-182**: MUST execute white-balance only when `--white-balance` is specified, after bracket triplet extraction and before HDR backend merge; omitted option MUST skip the stage without altering existing merge behavior.
+- **REQ-181**: MUST parse optional `--auto-white-balance=<Simple|GrayworldWB|IA|ColorConstancy|TTL>`, defaulting to disabled when omitted and rejecting unknown values.
+- **REQ-199**: MUST parse optional `--white-balance-analysis-source=<ev-zero|linear-base>`, defaulting to `ev-zero` and rejecting unknown values.
+- **REQ-182**: MUST execute white-balance only when `--auto-white-balance` is specified, after bracket triplet extraction and before HDR backend merge; omitted option MUST skip the stage without altering existing merge behavior.
 - **REQ-183**: MUST estimate white-balance correction parameters from one configured analysis image, apply one identical gain vector to all three brackets, and preserve normalized float RGB tensors as canonical triplet contracts.
 - **REQ-200**: MUST derive `linear-base` white-balance analysis from the unclipped linear base image scaled by `2^ev_zero` before bracket clipping.
-- **REQ-184**: MUST implement `--white-balance Simple` via OpenCV xphoto `createSimpleWB` on a real analysis image path using full resolution or structured pyramid downsampling, without fixed-size synthetic proxy payloads.
-- **REQ-185**: MUST implement `--white-balance GrayworldWB` via OpenCV xphoto `createGrayworldWB` on a real analysis image path using full resolution or structured pyramid downsampling, without fixed-size synthetic proxy payloads.
-- **REQ-186**: MUST implement `--white-balance IA` via OpenCV xphoto `createLearningBasedWB` with `setHistBinNum(256)` on a real analysis image path using full resolution or structured pyramid downsampling.
+- **REQ-184**: MUST implement `--auto-white-balance=Simple` via OpenCV xphoto `createSimpleWB` on a real analysis image path using full resolution or structured pyramid downsampling, without fixed-size synthetic proxy payloads.
+- **REQ-185**: MUST implement `--auto-white-balance=GrayworldWB` via OpenCV xphoto `createGrayworldWB` on a real analysis image path using full resolution or structured pyramid downsampling, without fixed-size synthetic proxy payloads.
+- **REQ-186**: MUST implement `--auto-white-balance=IA` via OpenCV xphoto `createLearningBasedWB` with `setHistBinNum(256)` on a real analysis image path using full resolution or structured pyramid downsampling.
 - **REQ-201**: MUST confine xphoto quantization to backend-local estimation boundaries while keeping bracket processing and gain application on float RGB tensors.
-- **REQ-187**: MUST implement `--white-balance ColorConstancy` with robust masked statistics that exclude near-black and near-saturated analysis pixels before channel and luminance mean computation.
-- **REQ-188**: MUST implement `--white-balance TTL` with robust masked statistics that exclude near-black and near-saturated analysis pixels before `avg_gray/avg_channel` gain computation.
-- **REQ-189**: MUST accept `--hdr-merge OpenCV-Tonemap` as HDR backend selector and execute OpenCV-Tonemap backend behavior only when selected.
-- **REQ-190**: MUST require exactly one selector in `--tonemap-drago`, `--tonemap-reinhard`, `--tonemap-mantiuk` when `--hdr-merge OpenCV-Tonemap` is selected.
-- **REQ-191**: MUST reject any `--tonemap-*` option unless `--hdr-merge OpenCV-Tonemap` is selected.
+- **REQ-187**: MUST implement `--auto-white-balance=ColorConstancy` with robust masked statistics that exclude near-black and near-saturated analysis pixels before channel and luminance mean computation.
+- **REQ-188**: MUST implement `--auto-white-balance=TTL` with robust masked statistics that exclude near-black and near-saturated analysis pixels before `avg_gray/avg_channel` gain computation.
+- **REQ-189**: MUST accept `--hdr-merge=OpenCV-Tonemap` as HDR backend selector and execute OpenCV-Tonemap backend behavior only when selected.
+- **REQ-190**: MUST require exactly one selector in `--tonemap-drago`, `--tonemap-reinhard`, `--tonemap-mantiuk` when `--hdr-merge=OpenCV-Tonemap` is selected.
+- **REQ-191**: MUST reject any `--tonemap-*` option unless `--hdr-merge=OpenCV-Tonemap` is selected.
 - **REQ-192**: MUST execute OpenCV-Tonemap only on `ev_zero` and MUST ignore `ev_minus` and `ev_plus` bracket images.
 - **REQ-193**: MUST invoke OpenCV `createTonemapDrago`, `createTonemapReinhard`, or `createTonemapMantiuk` with fixed `gamma=1.0` on linear RGB float input and keep the selected algorithm as the only active implementation.
 - **REQ-194**: MUST expose OpenCV-Tonemap Drago knobs `--tonemap-drago-saturation` and `--tonemap-drago-bias`, defaulting to `1.0` and `0.85`.
@@ -317,8 +318,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-059**: MUST verify auto-gamma LUT-domain mapping runs in float space without quantized intermediates and without stage-local clipping.
 - **TST-040**: MUST verify float-only OpenCV Mertens output applies OpenCV-equivalent `255x` exposure-fusion scaling before final `[0,1]` normalization.
 - **TST-060**: MUST verify `_parse_run_options` defaults white-balance to disabled, defaults white-balance analysis source to `ev-zero`, and accepts all supported white-balance modes and analysis-source selectors.
-- **TST-061**: MUST verify `_parse_run_options` rejects missing or unsupported `--white-balance` values and unsupported `--white-balance-analysis-source` values with deterministic diagnostics.
-- **TST-062**: MUST verify `run` skips white-balance stage when `--white-balance` is omitted and forwards extracted bracket tensors unchanged to selected HDR backend.
+- **TST-061**: MUST verify `_parse_run_options` rejects missing or unsupported `--auto-white-balance` values and unsupported `--white-balance-analysis-source` values with deterministic diagnostics.
+- **TST-062**: MUST verify `run` skips white-balance stage when `--auto-white-balance` is omitted and forwards extracted bracket tensors unchanged to selected HDR backend.
 - **TST-063**: MUST verify `_apply_white_balance_to_bracket_triplet` applies one identical gain vector to all three brackets and consumes configured analysis-image payload instead of forcing bracket index `1`.
 - **TST-064**: MUST verify `Simple` white-balance path invokes OpenCV xphoto `createSimpleWB` and uses real-image analysis payloads without fixed `(1,9,3)` proxy assumptions.
 - **TST-065**: MUST verify `GrayworldWB` white-balance path invokes OpenCV xphoto `createGrayworldWB` and uses real-image analysis payloads without fixed `(1,9,3)` proxy assumptions.
@@ -327,8 +328,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-068**: MUST verify `TTL` white-balance path applies robust masked statistics that exclude near-black and near-saturated pixels before `avg_gray/avg_channel` gain computation.
 - **TST-075**: MUST verify `linear-base` analysis source uses unclipped base-derived analysis scaling with non-zero `ev_zero` and avoids clipped `ev_zero`-only estimation bias.
 - **TST-076**: MUST verify xphoto gain extraction accepts real-image analysis payloads with non-fixed shape and remains deterministic with structured downsampling.
-- **TST-069**: MUST verify `_parse_run_options` accepts `--hdr-merge OpenCV-Tonemap`, requires exactly one `--tonemap-<map>` selector, and rejects missing-selector or multi-selector invocations.
-- **TST-070**: MUST verify `_parse_run_options` rejects `--tonemap-*` options unless `--hdr-merge OpenCV-Tonemap` is selected and rejects algorithm-specific knob misuse outside the selected map.
+- **TST-069**: MUST verify `_parse_run_options` accepts `--hdr-merge=OpenCV-Tonemap`, requires exactly one `--tonemap-<map>` selector, and rejects missing-selector or multi-selector invocations.
+- **TST-070**: MUST verify `_parse_run_options` rejects `--tonemap-*` options unless `--hdr-merge=OpenCV-Tonemap` is selected and rejects algorithm-specific knob misuse outside the selected map.
 - **TST-071**: MUST verify OpenCV-Tonemap backend consumes only `ev_zero` from the bracket triplet and does not read `ev_minus` or `ev_plus`.
 - **TST-072**: MUST verify OpenCV-Tonemap backend dispatches Drago, Reinhard, and Mantiuk implementations with fixed `gamma=1.0` and algorithm-specific optional knobs.
 - **TST-073**: MUST verify OpenCV-Tonemap backend applies resolved merge gamma only after selected tone mapping execution.
@@ -532,7 +533,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | TST-057 | `tests/test_uint16_postprocess_pipeline.py::test_apply_static_postprocess_float_executes_auto_gamma_then_static_substages`; verifies auto-gamma plus downstream static brightness/contrast/saturation order under `--post-gamma=auto`. |
 | TST-058 | `tests/test_uint16_postprocess_pipeline.py::test_apply_auto_post_gamma_float_uses_mean_luminance_anchor_and_guards`; verifies luminance-anchor gamma formula and guard-path unchanged output behavior. |
 | TST-059 | `tests/test_uint16_postprocess_pipeline.py::test_apply_auto_post_gamma_float_uses_float_lut_mapping_without_quantized_helpers`; verifies float LUT-domain mapping without quantized intermediates or stage-local clipping. |
-| REQ-181 | `src/dng2jpg/dng2jpg.py::_parse_white_balance_mode_option`, `_parse_run_options`, `print_help`; excerpt: parses optional `--white-balance`, validates mode set, and leaves stage disabled when omitted. |
+| REQ-181 | `src/dng2jpg/dng2jpg.py::_parse_white_balance_mode_option`, `_parse_run_options`, `print_help`; excerpt: parses optional `--auto-white-balance`, validates mode set, and leaves stage disabled when omitted. |
 | REQ-199 | `src/dng2jpg/dng2jpg.py::_parse_white_balance_analysis_source_option`, `_parse_run_options`, `print_help`; excerpt: parses optional `--white-balance-analysis-source`, validates selector set, and defaults to `ev-zero`. |
 | REQ-182 | `src/dng2jpg/dng2jpg.py::run`; excerpt: executes white-balance stage only when mode is configured and positions it strictly between bracket extraction and HDR merge dispatch. |
 | REQ-183 | `src/dng2jpg/dng2jpg.py::_apply_white_balance_to_bracket_triplet`, `_apply_channel_gains_to_white_balance_triplet`; excerpt: estimates one gain vector from configured analysis payload and applies it identically to all three bracket tensors. |

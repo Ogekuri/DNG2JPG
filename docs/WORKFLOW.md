@@ -102,7 +102,7 @@
           - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
         - `_parse_hdr_merge_option(...)`: parse `--hdr-merge` backend selector [`src/dng2jpg/dng2jpg.py`]
           - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
-        - `_parse_white_balance_mode_option(...)`: parse optional `--white-balance` mode selector [`src/dng2jpg/dng2jpg.py`]
+        - `_parse_white_balance_mode_option(...)`: parse optional `--auto-white-balance` mode selector [`src/dng2jpg/dng2jpg.py`]
           - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
         - `_parse_white_balance_analysis_source_option(...)`: parse optional `--white-balance-analysis-source` selector [`src/dng2jpg/dng2jpg.py`]
           - `print_error(...)`: emit parse diagnostics [`src/shell_scripts/utils.py`]
