@@ -680,8 +680,8 @@ class PostprocessOptions:
     @param debug_enabled {bool} `True` when persistent debug TIFF checkpoints are enabled.
     @param merge_gamma_option {MergeGammaOption} Parsed merge-gamma request applied only by OpenCV and HDR+ backends.
     @param raw_white_balance_mode {str} RAW camera WB normalization mode in `{"GREEN","MAX","MIN","MEAN"}`.
-    @param white_balance_mode {str|None} Optional white-balance mode applied to bracket triplet before HDR merge backend execution.
-    @param white_balance_analysis_source {str} White-balance analysis image selector in `{"ev-zero","linear-base"}`.
+    @param white_balance_mode {str|None} Optional `--auto-white-balance` mode applied to bracket triplet before HDR merge backend execution.
+    @param white_balance_analysis_source {str} `--white-balance-analysis-source` selector for auto-white-balance analysis payload in `{"ev-zero","linear-base"}`.
     @param opencv_tonemap_options {OpenCvTonemapOptions|None} Optional OpenCV-Tonemap backend selector and knob payload.
     @return {None} Immutable dataclass container.
     @satisfies REQ-020, REQ-050, REQ-065, REQ-066, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-088, REQ-089, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-146, REQ-176, REQ-179, REQ-181, REQ-182, REQ-190, REQ-194, REQ-195, REQ-196, REQ-199, REQ-203
@@ -710,6 +710,32 @@ class PostprocessOptions:
     white_balance_mode: str | None = None
     white_balance_analysis_source: str = WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO
     opencv_tonemap_options: OpenCvTonemapOptions | None = None
+
+    @property
+    def auto_white_balance_mode(self) -> str | None:
+        """@brief Expose optional `--auto-white-balance` mode with explicit naming.
+
+        @details Provides a semantically explicit alias for `white_balance_mode`
+        to distinguish auto-white-balance stage control from RAW camera
+        white-balance normalization (`--white-balance`).
+        @return {str|None} Canonical auto-white-balance mode or `None` when omitted.
+        @satisfies REQ-181, REQ-182
+        """
+
+        return self.white_balance_mode
+
+    @property
+    def auto_white_balance_analysis_source(self) -> str:
+        """@brief Expose `--white-balance-analysis-source` with explicit auto-stage naming.
+
+        @details Provides a semantically explicit alias for
+        `white_balance_analysis_source` to make auto-white-balance stage payload
+        selection unambiguous in runtime orchestration code.
+        @return {str} Canonical auto-white-balance analysis-source selector.
+        @satisfies REQ-199, REQ-200
+        """
+
+        return self.white_balance_analysis_source
 
 
 @dataclass(frozen=True)
@@ -3904,18 +3930,18 @@ def _parse_raw_white_balance_mode_option(raw_white_balance_mode_raw):
     return None
 
 
-def _parse_white_balance_mode_option(white_balance_raw):
-    """@brief Parse white-balance mode selector option value.
+def _parse_auto_white_balance_mode_option(auto_white_balance_raw):
+    """@brief Parse `--auto-white-balance` mode selector option value.
 
-    @details Accepts case-insensitive white-balance selector names and
+    @details Accepts case-insensitive auto-white-balance selector names and
     normalizes them to canonical runtime mode names.
-    @param white_balance_raw {str} Raw `--auto-white-balance` selector token.
-    @return {str|None} Canonical white-balance mode or `None` on parse failure.
+    @param auto_white_balance_raw {str} Raw `--auto-white-balance` selector token.
+    @return {str|None} Canonical auto-white-balance mode or `None` on parse failure.
     @satisfies REQ-181, REQ-183
     """
 
-    white_balance_text = str(white_balance_raw).strip()
-    if not white_balance_text:
+    auto_white_balance_text = str(auto_white_balance_raw).strip()
+    if not auto_white_balance_text:
         print_error("Invalid --auto-white-balance value: empty value")
         return None
     mapping = {
@@ -3925,12 +3951,25 @@ def _parse_white_balance_mode_option(white_balance_raw):
         WHITE_BALANCE_MODE_COLOR_CONSTANCY.lower(): WHITE_BALANCE_MODE_COLOR_CONSTANCY,
         WHITE_BALANCE_MODE_TTL.lower(): WHITE_BALANCE_MODE_TTL,
     }
-    resolved_mode = mapping.get(white_balance_text.lower())
+    resolved_mode = mapping.get(auto_white_balance_text.lower())
     if resolved_mode is not None:
         return resolved_mode
-    print_error(f"Invalid --auto-white-balance value: {white_balance_raw}")
+    print_error(f"Invalid --auto-white-balance value: {auto_white_balance_raw}")
     print_error("Allowed values: " + ", ".join(_WHITE_BALANCE_MODES))
     return None
+
+
+def _parse_white_balance_mode_option(white_balance_raw):
+    """@brief Parse compatibility alias for `--auto-white-balance` selector.
+
+    @details Preserves compatibility for existing internal/test references while
+    delegating parsing logic to `_parse_auto_white_balance_mode_option`.
+    @param white_balance_raw {str} Raw `--auto-white-balance` selector token.
+    @return {str|None} Canonical auto-white-balance mode or `None` on parse failure.
+    @satisfies REQ-181, REQ-183
+    """
+
+    return _parse_auto_white_balance_mode_option(white_balance_raw)
 
 
 def _parse_white_balance_analysis_source_option(analysis_source_raw):
@@ -4532,7 +4571,7 @@ def _parse_run_options(args):
     mutual exclusion against `--ev`, optional automatic exposure clipping and
     step controls, optional RAW white-balance normalization selector
     (`--white-balance=<GREEN|MAX|MIN|MEAN>`),
-    optional white-balance selector (`--auto-white-balance=<mode>`) applied to
+    optional auto-white-balance selector (`--auto-white-balance=<mode>`) applied to
     bracket triplet before backend merge when enabled,
     optional postprocess controls including `--post-gamma=<value|auto>` and
     optional `--post-gamma-auto-*` knobs,
@@ -4577,8 +4616,8 @@ def _parse_run_options(args):
     post_gamma_auto_raw_values = {}
     debug_enabled = False
     raw_white_balance_mode = DEFAULT_RAW_WHITE_BALANCE_MODE
-    white_balance_mode = None
-    white_balance_analysis_source = WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO
+    auto_white_balance_mode = None
+    auto_white_balance_analysis_source = WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO
     hdr_merge_mode = HDR_MERGE_MODE_OPENCV_MERGE
     opencv_raw_values = {}
     opencv_tonemap_selector_options = []
@@ -4762,24 +4801,26 @@ def _parse_run_options(args):
             continue
 
         if token.startswith("--auto-white-balance="):
-            parsed_white_balance_mode = _parse_white_balance_mode_option(
+            parsed_auto_white_balance_mode = _parse_auto_white_balance_mode_option(
                 token.split("=", 1)[1]
             )
-            if parsed_white_balance_mode is None:
+            if parsed_auto_white_balance_mode is None:
                 return None
-            white_balance_mode = parsed_white_balance_mode
+            auto_white_balance_mode = parsed_auto_white_balance_mode
             idx += 1
             continue
 
         if token.startswith("--white-balance-analysis-source="):
-            parsed_white_balance_analysis_source = (
+            parsed_auto_white_balance_analysis_source = (
                 _parse_white_balance_analysis_source_option(
                     token.split("=", 1)[1]
                 )
             )
-            if parsed_white_balance_analysis_source is None:
+            if parsed_auto_white_balance_analysis_source is None:
                 return None
-            white_balance_analysis_source = parsed_white_balance_analysis_source
+            auto_white_balance_analysis_source = (
+                parsed_auto_white_balance_analysis_source
+            )
             idx += 1
             continue
 
@@ -5163,8 +5204,8 @@ def _parse_run_options(args):
             debug_enabled=debug_enabled,
             merge_gamma_option=merge_gamma_option,
             raw_white_balance_mode=raw_white_balance_mode,
-            white_balance_mode=white_balance_mode,
-            white_balance_analysis_source=white_balance_analysis_source,
+            white_balance_mode=auto_white_balance_mode,
+            white_balance_analysis_source=auto_white_balance_analysis_source,
             opencv_tonemap_options=opencv_tonemap_options,
         ),
         enable_luminance,
@@ -5853,7 +5894,7 @@ def _validate_white_balance_triplet_shape(np_module, bracket_images_float):
     """
 
     if len(bracket_images_float) != 3:
-        raise ValueError("White-balance stage requires exactly three bracket images")
+        raise ValueError("Auto-white-balance stage requires exactly three bracket images")
     normalized_triplet = tuple(
         _normalize_float_rgb_image(
             np_module=np_module,
@@ -5863,7 +5904,9 @@ def _validate_white_balance_triplet_shape(np_module, bracket_images_float):
     )
     reference_shape = normalized_triplet[0].shape
     if normalized_triplet[1].shape != reference_shape or normalized_triplet[2].shape != reference_shape:
-        raise ValueError("White-balance stage requires bracket images with identical shapes")
+        raise ValueError(
+            "Auto-white-balance stage requires bracket images with identical shapes"
+        )
     return normalized_triplet
 
 
@@ -6010,7 +6053,9 @@ def _estimate_xphoto_white_balance_gains_rgb(
 
     xphoto_module = getattr(cv2_module, "xphoto", None)
     if xphoto_module is None:
-        raise RuntimeError("OpenCV xphoto module is unavailable for white-balance stage")
+        raise RuntimeError(
+            "OpenCV xphoto module is unavailable for auto-white-balance stage"
+        )
     if white_balance_mode == WHITE_BALANCE_MODE_SIMPLE:
         factory = getattr(xphoto_module, "createSimpleWB", None)
         if factory is None:
@@ -6144,7 +6189,7 @@ def _apply_white_balance_to_bracket_triplet(
     white_balance_analysis_image_float,
     auto_adjust_dependencies,
 ):
-    """@brief Apply optional analysis-image-derived white-balance correction to bracket triplet.
+    """@brief Apply optional analysis-image-derived auto-white-balance correction to bracket triplet.
 
     @details Keeps the stage disabled when `white_balance_mode` is `None`. When
     enabled, analyzes one configured analysis image, derives one correction
@@ -6154,7 +6199,7 @@ def _apply_white_balance_to_bracket_triplet(
     @param white_balance_mode {str|None} Optional canonical white-balance mode selector.
     @param white_balance_analysis_image_float {object} Selected white-balance analysis RGB float tensor.
     @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
-    @return {list[object]} Ordered bracket tensors after optional white-balance stage.
+    @return {list[object]} Ordered bracket tensors after optional auto-white-balance stage.
     @exception RuntimeError Raised when required dependencies are missing.
     @exception ValueError Raised when mode is unsupported or bracket contract is invalid.
     @satisfies REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188, REQ-200
@@ -7710,7 +7755,7 @@ def _resolve_auto_adjust_dependencies():
     """@brief Resolve OpenCV and numpy runtime dependencies for image-domain stages.
 
     @details Imports `cv2` and `numpy` modules required by the auto-adjust
-    pipeline, the OpenCV HDR backend, white-balance stage execution, and the
+    pipeline, the OpenCV HDR backend, auto-white-balance stage execution, and the
     automatic EV-zero evaluation, and returns `None` with deterministic error
     output when dependencies are missing.
     @return {tuple[ModuleType, ModuleType]|None} `(cv2_module, numpy_module)` when available; `None` on dependency failure.
@@ -11913,13 +11958,13 @@ def run(args):
         "RAW WB normalization: "
         f"mode={postprocess_options.raw_white_balance_mode}"
     )
-    if postprocess_options.white_balance_mode is None:
-        print_info("White-balance stage: disabled")
+    if postprocess_options.auto_white_balance_mode is None:
+        print_info("Auto-white-balance stage: disabled")
     else:
         print_info(
-            "White-balance stage: "
-            f"mode={postprocess_options.white_balance_mode}, "
-            f"analysis-source={postprocess_options.white_balance_analysis_source}"
+            "Auto-white-balance stage: "
+            f"mode={postprocess_options.auto_white_balance_mode}, "
+            f"analysis-source={postprocess_options.auto_white_balance_analysis_source}"
         )
     if postprocess_options.post_gamma_mode == "auto":
         print_info(
@@ -12165,16 +12210,16 @@ def run(args):
                     base_rgb_float=base_rgb_float,
                     raw_white_balance_mode=postprocess_options.raw_white_balance_mode,
                 )
-                if postprocess_options.white_balance_mode is not None:
+                if postprocess_options.auto_white_balance_mode is not None:
                     if (
-                        postprocess_options.white_balance_analysis_source
+                        postprocess_options.auto_white_balance_analysis_source
                         == WHITE_BALANCE_ANALYSIS_SOURCE_LINEAR_BASE
                     ):
                         if base_rgb_float is None:
                             raise RuntimeError(
-                                "White-balance linear-base analysis requires extracted linear base"
+                                "Auto-white-balance linear-base analysis requires extracted linear base"
                             )
-                        white_balance_analysis_image_float = (
+                        auto_white_balance_analysis_image_float = (
                             _build_white_balance_analysis_image_from_linear_base_float(
                                 np_module=numpy_module,
                                 base_rgb_float=base_rgb_float,
@@ -12182,19 +12227,21 @@ def run(args):
                             )
                         )
                     elif (
-                        postprocess_options.white_balance_analysis_source
+                        postprocess_options.auto_white_balance_analysis_source
                         == WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO
                     ):
-                        white_balance_analysis_image_float = bracket_images_float[1]
+                        auto_white_balance_analysis_image_float = bracket_images_float[
+                            1
+                        ]
                     else:
                         raise ValueError(
                             "Unsupported --white-balance-analysis-source value: "
-                            f"{postprocess_options.white_balance_analysis_source}"
+                            f"{postprocess_options.auto_white_balance_analysis_source}"
                         )
                     bracket_images_float = _apply_white_balance_to_bracket_triplet(
                         bracket_images_float=bracket_images_float,
-                        white_balance_mode=postprocess_options.white_balance_mode,
-                        white_balance_analysis_image_float=white_balance_analysis_image_float,
+                        white_balance_mode=postprocess_options.auto_white_balance_mode,
+                        white_balance_analysis_image_float=auto_white_balance_analysis_image_float,
                         auto_adjust_dependencies=auto_adjust_dependencies,
                     )
                 if debug_context is not None:
