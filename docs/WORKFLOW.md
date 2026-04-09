@@ -133,7 +133,7 @@
         - _parse_auto_levels_options(...): auto-levels option parsing [src/dng2jpg/dng2jpg.py]
         - _parse_auto_adjust_options(...): auto-adjust option parsing [src/dng2jpg/dng2jpg.py]
         - _parse_hdrplus_options(...): HDR+ option parsing [src/dng2jpg/dng2jpg.py]
-        - _parse_opencv_tonemap_backend_options(...): OpenCV tonemap option parsing [src/dng2jpg/dng2jpg.py]
+        - _parse_opencv_tonemap_backend_options(...): OpenCV tonemap selector/knob parsing for `--opencv-tonemap-*` CLI options [src/dng2jpg/dng2jpg.py]
         - _parse_hdr_merge_option(...): backend selector parsing [src/dng2jpg/dng2jpg.py]
         - _parse_ev_option(...): EV delta parsing [src/dng2jpg/dng2jpg.py]
         - _parse_auto_ev_option(...): auto-EV toggle parsing [src/dng2jpg/dng2jpg.py]

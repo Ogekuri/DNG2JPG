@@ -248,16 +248,16 @@ _OPENCV_KNOB_OPTIONS = (
     "--opencv-merge-tonemap-gamma",
 )
 _OPENCV_TONEMAP_SELECTOR_OPTIONS = (
-    "--tonemap",
+    "--opencv-tonemap-algorithm",
 )
 _OPENCV_TONEMAP_KNOB_OPTIONS = (
-    "--tonemap-drago-saturation",
-    "--tonemap-drago-bias",
-    "--tonemap-reinhard-intensity",
-    "--tonemap-reinhard-light_adapt",
-    "--tonemap-reinhard-color_adapt",
-    "--tonemap-mantiuk-scale",
-    "--tonemap-mantiuk-saturation",
+    "--opencv-tonemap-drago-saturation",
+    "--opencv-tonemap-drago-bias",
+    "--opencv-tonemap-reinhard-intensity",
+    "--opencv-tonemap-reinhard-light_adapt",
+    "--opencv-tonemap-reinhard-color_adapt",
+    "--opencv-tonemap-mantiuk-scale",
+    "--opencv-tonemap-mantiuk-saturation",
 )
 _HDR_MERGE_MODES = (
     HDR_MERGE_MODE_LUMINANCE,
@@ -1265,36 +1265,36 @@ def print_help(version):
         ),
     )
     _print_help_option(
-        "--tonemap=<drago|reinhard|mantiuk>",
-        f"Select OpenCV-Tonemap algorithm for `{HDR_MERGE_MODE_OPENCV_TONEMAP}`. Exactly one `--tonemap` selector is required.",
+        "--opencv-tonemap-algorithm=<drago|reinhard|mantiuk>",
+        f"Select OpenCV-Tonemap algorithm for `{HDR_MERGE_MODE_OPENCV_TONEMAP}`. Exactly one `--opencv-tonemap-algorithm` selector is required.",
     )
     _print_help_option(
-        "--tonemap-drago-saturation=<value>",
-        f"Drago saturation parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap=drago` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_DRAGO_SATURATION:g}`.",
+        "--opencv-tonemap-drago-saturation=<value>",
+        f"Drago saturation parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--opencv-tonemap-algorithm=drago` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_DRAGO_SATURATION:g}`.",
     )
     _print_help_option(
-        "--tonemap-drago-bias=<0..1>",
-        f"Drago bias parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap=drago` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_DRAGO_BIAS:g}`.",
+        "--opencv-tonemap-drago-bias=<0..1>",
+        f"Drago bias parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--opencv-tonemap-algorithm=drago` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_DRAGO_BIAS:g}`.",
     )
     _print_help_option(
-        "--tonemap-reinhard-intensity=<value>",
-        f"Reinhard intensity parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap=reinhard` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_REINHARD_INTENSITY:g}`.",
+        "--opencv-tonemap-reinhard-intensity=<value>",
+        f"Reinhard intensity parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--opencv-tonemap-algorithm=reinhard` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_REINHARD_INTENSITY:g}`.",
     )
     _print_help_option(
-        "--tonemap-reinhard-light_adapt=<0..1>",
-        f"Reinhard light adaptation parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap=reinhard` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_REINHARD_LIGHT_ADAPT:g}`.",
+        "--opencv-tonemap-reinhard-light_adapt=<0..1>",
+        f"Reinhard light adaptation parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--opencv-tonemap-algorithm=reinhard` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_REINHARD_LIGHT_ADAPT:g}`.",
     )
     _print_help_option(
-        "--tonemap-reinhard-color_adapt=<0..1>",
-        f"Reinhard color adaptation parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap=reinhard` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_REINHARD_COLOR_ADAPT:g}`.",
+        "--opencv-tonemap-reinhard-color_adapt=<0..1>",
+        f"Reinhard color adaptation parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--opencv-tonemap-algorithm=reinhard` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_REINHARD_COLOR_ADAPT:g}`.",
     )
     _print_help_option(
-        "--tonemap-mantiuk-scale=<value>",
-        f"Mantiuk scale parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap=mantiuk` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_MANTIUK_SCALE:g}`.",
+        "--opencv-tonemap-mantiuk-scale=<value>",
+        f"Mantiuk scale parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--opencv-tonemap-algorithm=mantiuk` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_MANTIUK_SCALE:g}`.",
     )
     _print_help_option(
-        "--tonemap-mantiuk-saturation=<value>",
-        f"Mantiuk saturation parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--tonemap=mantiuk` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_MANTIUK_SATURATION:g}`.",
+        "--opencv-tonemap-mantiuk-saturation=<value>",
+        f"Mantiuk saturation parameter. Effective only when `--hdr-merge={HDR_MERGE_MODE_OPENCV_TONEMAP}` and `--opencv-tonemap-algorithm=mantiuk` are selected. Default: `{DEFAULT_OPENCV_TONEMAP_MANTIUK_SATURATION:g}`.",
     )
     _print_help_option(
         "--hdrplus-proxy-mode=<name>",
@@ -1886,11 +1886,12 @@ def _parse_opencv_tonemap_backend_options(
     """@brief Parse and validate OpenCV-Tonemap backend selector and knobs.
 
     @details Requires exactly one selector in
-    `--tonemap=<drago|reinhard|mantiuk>`, applies deterministic defaults
+    `--opencv-tonemap-algorithm=<drago|reinhard|mantiuk>`, applies
+    deterministic defaults
     for optional algorithm-specific knobs, and rejects knobs that do not belong
     to the selected algorithm.
     @param tonemap_selector_options {list[str]} Ordered list of selected OpenCV-Tonemap selector tokens.
-    @param tonemap_knob_raw_values {dict[str, str]} Raw `--tonemap-*` knob payloads keyed by option name.
+    @param tonemap_knob_raw_values {dict[str, str]} Raw `--opencv-tonemap-*` knob payloads keyed by option name.
     @return {OpenCvTonemapOptions|None} Parsed OpenCV-Tonemap options or `None` on validation failure.
     @satisfies REQ-190, REQ-194, REQ-195, REQ-196
     """
@@ -1926,64 +1927,64 @@ def _parse_opencv_tonemap_backend_options(
     mantiuk_scale = options.mantiuk_scale
     mantiuk_saturation = options.mantiuk_saturation
 
-    if "--tonemap-drago-saturation" in tonemap_knob_raw_values:
+    if "--opencv-tonemap-drago-saturation" in tonemap_knob_raw_values:
         parsed = _parse_positive_float_option(
-            "--tonemap-drago-saturation",
-            tonemap_knob_raw_values["--tonemap-drago-saturation"],
+            "--opencv-tonemap-drago-saturation",
+            tonemap_knob_raw_values["--opencv-tonemap-drago-saturation"],
         )
         if parsed is None:
             return None
         drago_saturation = parsed
-    if "--tonemap-drago-bias" in tonemap_knob_raw_values:
+    if "--opencv-tonemap-drago-bias" in tonemap_knob_raw_values:
         parsed = _parse_float_in_range_option(
-            "--tonemap-drago-bias",
-            tonemap_knob_raw_values["--tonemap-drago-bias"],
+            "--opencv-tonemap-drago-bias",
+            tonemap_knob_raw_values["--opencv-tonemap-drago-bias"],
             0.0,
             1.0,
         )
         if parsed is None:
             return None
         drago_bias = parsed
-    if "--tonemap-reinhard-intensity" in tonemap_knob_raw_values:
+    if "--opencv-tonemap-reinhard-intensity" in tonemap_knob_raw_values:
         parsed = _parse_non_negative_float_option(
-            "--tonemap-reinhard-intensity",
-            tonemap_knob_raw_values["--tonemap-reinhard-intensity"],
+            "--opencv-tonemap-reinhard-intensity",
+            tonemap_knob_raw_values["--opencv-tonemap-reinhard-intensity"],
         )
         if parsed is None:
             return None
         reinhard_intensity = parsed
-    if "--tonemap-reinhard-light_adapt" in tonemap_knob_raw_values:
+    if "--opencv-tonemap-reinhard-light_adapt" in tonemap_knob_raw_values:
         parsed = _parse_float_in_range_option(
-            "--tonemap-reinhard-light_adapt",
-            tonemap_knob_raw_values["--tonemap-reinhard-light_adapt"],
+            "--opencv-tonemap-reinhard-light_adapt",
+            tonemap_knob_raw_values["--opencv-tonemap-reinhard-light_adapt"],
             0.0,
             1.0,
         )
         if parsed is None:
             return None
         reinhard_light_adapt = parsed
-    if "--tonemap-reinhard-color_adapt" in tonemap_knob_raw_values:
+    if "--opencv-tonemap-reinhard-color_adapt" in tonemap_knob_raw_values:
         parsed = _parse_float_in_range_option(
-            "--tonemap-reinhard-color_adapt",
-            tonemap_knob_raw_values["--tonemap-reinhard-color_adapt"],
+            "--opencv-tonemap-reinhard-color_adapt",
+            tonemap_knob_raw_values["--opencv-tonemap-reinhard-color_adapt"],
             0.0,
             1.0,
         )
         if parsed is None:
             return None
         reinhard_color_adapt = parsed
-    if "--tonemap-mantiuk-scale" in tonemap_knob_raw_values:
+    if "--opencv-tonemap-mantiuk-scale" in tonemap_knob_raw_values:
         parsed = _parse_positive_float_option(
-            "--tonemap-mantiuk-scale",
-            tonemap_knob_raw_values["--tonemap-mantiuk-scale"],
+            "--opencv-tonemap-mantiuk-scale",
+            tonemap_knob_raw_values["--opencv-tonemap-mantiuk-scale"],
         )
         if parsed is None:
             return None
         mantiuk_scale = parsed
-    if "--tonemap-mantiuk-saturation" in tonemap_knob_raw_values:
+    if "--opencv-tonemap-mantiuk-saturation" in tonemap_knob_raw_values:
         parsed = _parse_positive_float_option(
-            "--tonemap-mantiuk-saturation",
-            tonemap_knob_raw_values["--tonemap-mantiuk-saturation"],
+            "--opencv-tonemap-mantiuk-saturation",
+            tonemap_knob_raw_values["--opencv-tonemap-mantiuk-saturation"],
         )
         if parsed is None:
             return None
@@ -1991,45 +1992,51 @@ def _parse_opencv_tonemap_backend_options(
 
     for knob_name in tonemap_knob_raw_values:
         if tonemap_map == OPENCV_TONEMAP_MAP_DRAGO and knob_name.startswith(
-            "--tonemap-reinhard-"
+            "--opencv-tonemap-reinhard-"
         ):
             print_error(
-                f"OpenCV-Tonemap knob {knob_name} requires --tonemap=reinhard selector"
+                "OpenCV-Tonemap knob "
+                + f"{knob_name} requires --opencv-tonemap-algorithm=reinhard selector"
             )
             return None
         if tonemap_map == OPENCV_TONEMAP_MAP_DRAGO and knob_name.startswith(
-            "--tonemap-mantiuk-"
+            "--opencv-tonemap-mantiuk-"
         ):
             print_error(
-                f"OpenCV-Tonemap knob {knob_name} requires --tonemap=mantiuk selector"
+                "OpenCV-Tonemap knob "
+                + f"{knob_name} requires --opencv-tonemap-algorithm=mantiuk selector"
             )
             return None
         if tonemap_map == OPENCV_TONEMAP_MAP_REINHARD and knob_name.startswith(
-            "--tonemap-drago-"
+            "--opencv-tonemap-drago-"
         ):
             print_error(
-                f"OpenCV-Tonemap knob {knob_name} requires --tonemap=drago selector"
+                "OpenCV-Tonemap knob "
+                + f"{knob_name} requires --opencv-tonemap-algorithm=drago selector"
             )
             return None
         if tonemap_map == OPENCV_TONEMAP_MAP_REINHARD and knob_name.startswith(
-            "--tonemap-mantiuk-"
+            "--opencv-tonemap-mantiuk-"
         ):
             print_error(
-                f"OpenCV-Tonemap knob {knob_name} requires --tonemap=mantiuk selector"
+                "OpenCV-Tonemap knob "
+                + f"{knob_name} requires --opencv-tonemap-algorithm=mantiuk selector"
             )
             return None
         if tonemap_map == OPENCV_TONEMAP_MAP_MANTIUK and knob_name.startswith(
-            "--tonemap-drago-"
+            "--opencv-tonemap-drago-"
         ):
             print_error(
-                f"OpenCV-Tonemap knob {knob_name} requires --tonemap=drago selector"
+                "OpenCV-Tonemap knob "
+                + f"{knob_name} requires --opencv-tonemap-algorithm=drago selector"
             )
             return None
         if tonemap_map == OPENCV_TONEMAP_MAP_MANTIUK and knob_name.startswith(
-            "--tonemap-reinhard-"
+            "--opencv-tonemap-reinhard-"
         ):
             print_error(
-                f"OpenCV-Tonemap knob {knob_name} requires --tonemap=reinhard selector"
+                "OpenCV-Tonemap knob "
+                + f"{knob_name} requires --opencv-tonemap-algorithm=reinhard selector"
             )
             return None
 
@@ -4747,18 +4754,6 @@ def _parse_run_options(args):
             idx += 1
             continue
 
-        if token.startswith("--opencv-"):
-            if "=" not in token:
-                print_error(f"Missing value for {token}")
-                return None
-            option_name, option_value = token.split("=", 1)
-            if option_name not in _OPENCV_KNOB_OPTIONS:
-                print_error(f"Unknown option: {option_name}")
-                return None
-            opencv_raw_values[option_name] = option_value
-            idx += 1
-            continue
-
         if token == _OPENCV_TONEMAP_SELECTOR_OPTIONS[0]:
             print_error(f"Missing value for {token}")
             return None
@@ -4768,7 +4763,7 @@ def _parse_run_options(args):
             idx += 1
             continue
 
-        if token.startswith("--tonemap-"):
+        if token.startswith("--opencv-tonemap-"):
             if "=" not in token:
                 print_error(f"Missing value for {token}")
                 return None
@@ -4777,6 +4772,18 @@ def _parse_run_options(args):
                 print_error(f"Unknown option: {option_name}")
                 return None
             opencv_tonemap_knob_raw_values[option_name] = option_value
+            idx += 1
+            continue
+
+        if token.startswith("--opencv-"):
+            if "=" not in token:
+                print_error(f"Missing value for {token}")
+                return None
+            option_name, option_value = token.split("=", 1)
+            if option_name not in _OPENCV_KNOB_OPTIONS:
+                print_error(f"Unknown option: {option_name}")
+                return None
+            opencv_raw_values[option_name] = option_value
             idx += 1
             continue
 

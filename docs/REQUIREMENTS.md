@@ -258,13 +258,13 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-211**: MUST configure `IA` xphoto estimation with bit-depth-coherent settings by using `uint16` analysis payloads and matching `range_max`/histogram bins when backend support is available.
 - **REQ-212**: MUST apply `--white-balance-xphoto-domain` only to xphoto gain estimation; `linear` MUST use linear analysis data, `srgb` MUST use sRGB-encoded analysis data, and `source-auto` MUST resolve from source gamma diagnostics.
 - **REQ-189**: MUST accept `--hdr-merge=OpenCV-Tonemap` as HDR backend selector and execute OpenCV-Tonemap backend behavior only when selected.
-- **REQ-190**: MUST require exactly one `--tonemap=<drago|reinhard|mantiuk>` selector when `--hdr-merge=OpenCV-Tonemap` is selected.
-- **REQ-191**: MUST reject `--tonemap` and any `--tonemap-<algorithm>-*` knob unless `--hdr-merge=OpenCV-Tonemap` is selected.
+- **REQ-190**: MUST require exactly one `--opencv-tonemap-algorithm=<drago|reinhard|mantiuk>` selector when `--hdr-merge=OpenCV-Tonemap` is selected.
+- **REQ-191**: MUST reject `--opencv-tonemap-algorithm` and any `--opencv-tonemap-<algorithm>-*` knob unless `--hdr-merge=OpenCV-Tonemap` is selected.
 - **REQ-192**: MUST execute OpenCV-Tonemap only on `ev_zero` and MUST ignore `ev_minus` and `ev_plus` bracket images.
 - **REQ-193**: MUST invoke OpenCV `createTonemapDrago`, `createTonemapReinhard`, or `createTonemapMantiuk` with `gamma_inv=1/resolved_merge_gamma` derived from merge-gamma curve resolution and keep the selected algorithm as the only active implementation.
-- **REQ-194**: MUST expose OpenCV-Tonemap Drago knobs `--tonemap-drago-saturation` and `--tonemap-drago-bias`, defaulting to `1.0` and `0.85`.
-- **REQ-195**: MUST expose OpenCV-Tonemap Reinhard knobs `--tonemap-reinhard-intensity`, `--tonemap-reinhard-light_adapt`, and `--tonemap-reinhard-color_adapt`, defaulting to `0.0`, `0.0`, and `0.0`.
-- **REQ-196**: MUST expose OpenCV-Tonemap Mantiuk knobs `--tonemap-mantiuk-scale` and `--tonemap-mantiuk-saturation`, defaulting to `0.7` and `1.0`.
+- **REQ-194**: MUST expose OpenCV-Tonemap Drago knobs `--opencv-tonemap-drago-saturation` and `--opencv-tonemap-drago-bias`, defaulting to `1.0` and `0.85`.
+- **REQ-195**: MUST expose OpenCV-Tonemap Reinhard knobs `--opencv-tonemap-reinhard-intensity`, `--opencv-tonemap-reinhard-light_adapt`, and `--opencv-tonemap-reinhard-color_adapt`, defaulting to `0.0`, `0.0`, and `0.0`.
+- **REQ-196**: MUST expose OpenCV-Tonemap Mantiuk knobs `--opencv-tonemap-mantiuk-scale` and `--opencv-tonemap-mantiuk-saturation`, defaulting to `0.7` and `1.0`.
 - **REQ-197**: MUST apply resolved merge gamma as the final backend-local step of OpenCV-Tonemap after tone mapping, analogously to OpenCV Debevec or Robertson, and MUST NOT pre-apply merge gamma before tone mapping.
 - **REQ-198**: MUST preserve OpenCV-Tonemap float dynamic range without stage-local clipping at input, during tone mapping, during merge-gamma application, and at backend output.
 
@@ -341,8 +341,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-075**: MUST verify auto-white-balance estimation uses transient auto-brightness preprocessing and does not leak that preprocessed brightness-adjusted image into stage output.
 - **TST-076**: MUST verify xphoto gain extraction accepts real-image analysis payloads with non-fixed shape and remains deterministic with anti-aliased pyramid downsampling.
 - **TST-077**: MUST verify xphoto estimation-domain selector applies only to estimation (`linear|srgb|source-auto`) without altering single-image float output contracts.
-- **TST-069**: MUST verify `_parse_run_options` accepts `--hdr-merge=OpenCV-Tonemap`, requires exactly one `--tonemap=<drago|reinhard|mantiuk>` selector, and rejects missing or unknown selector values.
-- **TST-070**: MUST verify `_parse_run_options` rejects `--tonemap` and `--tonemap-<algorithm>-*` options unless `--hdr-merge=OpenCV-Tonemap` is selected and rejects algorithm-specific knob misuse outside the selected map.
+- **TST-069**: MUST verify `_parse_run_options` accepts `--hdr-merge=OpenCV-Tonemap`, requires exactly one `--opencv-tonemap-algorithm=<drago|reinhard|mantiuk>` selector, and rejects missing or unknown selector values.
+- **TST-070**: MUST verify `_parse_run_options` rejects `--opencv-tonemap-algorithm` and `--opencv-tonemap-<algorithm>-*` options unless `--hdr-merge=OpenCV-Tonemap` is selected and rejects algorithm-specific knob misuse outside the selected map.
 - **TST-071**: MUST verify OpenCV-Tonemap backend consumes only `ev_zero` from the bracket triplet and does not read `ev_minus` or `ev_plus`.
 - **TST-072**: MUST verify OpenCV-Tonemap backend dispatches Drago, Reinhard, and Mantiuk implementations with `gamma_inv=1/resolved_merge_gamma` and algorithm-specific optional knobs.
 - **TST-073**: MUST verify OpenCV-Tonemap backend applies resolved merge gamma only after selected tone mapping execution.
@@ -576,8 +576,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | TST-076 | `tests/test_uint16_postprocess_pipeline.py::test_extract_white_balance_channel_gains_from_xphoto_accepts_real_image_payload_shape`, `test_extract_white_balance_channel_gains_from_xphoto_uses_inter_area_pyramid_downsampling`; verifies non-fixed payload shape and anti-aliased pyramid downsampling for xphoto estimation. |
 | TST-077 | `tests/test_uint16_postprocess_pipeline.py::test_estimate_xphoto_white_balance_gains_source_auto_resolves_srgb_domain`, `test_run_routes_auto_white_balance_to_post_merge_stage`; verifies estimation-domain selector remains estimation-only and runtime stage ordering routes auto-white-balance to post-merge processing. |
 | REQ-189 | `src/dng2jpg/dng2jpg.py::_parse_hdr_merge_option`, `_parse_run_options`, `run`; excerpt: accepts `OpenCV-Tonemap` selector and routes backend execution only when selected. |
-| REQ-190 | `src/dng2jpg/dng2jpg.py::_parse_opencv_tonemap_backend_options`, `_parse_run_options`; excerpt: requires exactly one `--tonemap=<drago|reinhard|mantiuk>` selector in OpenCV-Tonemap mode. |
-| REQ-191 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: rejects `--tonemap` and `--tonemap-<algorithm>-*` options unless OpenCV-Tonemap backend is selected. |
+| REQ-190 | `src/dng2jpg/dng2jpg.py::_parse_opencv_tonemap_backend_options`, `_parse_run_options`; excerpt: requires exactly one `--opencv-tonemap-algorithm=<drago|reinhard|mantiuk>` selector in OpenCV-Tonemap mode. |
+| REQ-191 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: rejects `--opencv-tonemap-algorithm` and `--opencv-tonemap-<algorithm>-*` options unless OpenCV-Tonemap backend is selected. |
 | REQ-192 | `src/dng2jpg/dng2jpg.py::_run_opencv_tonemap_backend`; excerpt: processes only bracket index `1` (`ev_zero`) and ignores minus/plus brackets. |
 | REQ-193 | `src/dng2jpg/dng2jpg.py::_run_opencv_tonemap_backend`; excerpt: dispatches selected Drago/Reinhard/Mantiuk implementation with `gamma_inv=1/resolved_merge_gamma` from merge-gamma curve resolution. |
 | REQ-194 | `src/dng2jpg/dng2jpg.py::OpenCvTonemapOptions`, `_parse_opencv_tonemap_backend_options`, `print_help`; excerpt: exposes and defaults Drago optional knobs. |
@@ -585,8 +585,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-196 | `src/dng2jpg/dng2jpg.py::OpenCvTonemapOptions`, `_parse_opencv_tonemap_backend_options`, `print_help`; excerpt: exposes and defaults Mantiuk optional knobs. |
 | REQ-197 | `src/dng2jpg/dng2jpg.py::_run_opencv_tonemap_backend`; excerpt: applies resolved merge gamma only as backend-final step after tone mapping. |
 | REQ-198 | `src/dng2jpg/dng2jpg.py::_run_opencv_tonemap_backend`, `_apply_merge_gamma_float_no_clip`; excerpt: preserves float dynamic range without stage-local clipping in OpenCV-Tonemap backend. |
-| TST-069 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_accepts_opencv_tonemap_backend_and_requires_single_selector`; verifies OpenCV-Tonemap `--tonemap=<drago|reinhard|mantiuk>` parsing and mandatory selector enforcement. |
-| TST-070 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_rejects_tonemap_options_without_opencv_tonemap_backend`; verifies `--tonemap` and `--tonemap-<algorithm>-*` backend coupling plus selector/knob misuse rejections. |
+| TST-069 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_accepts_opencv_tonemap_backend_and_requires_single_selector`; verifies OpenCV-Tonemap `--opencv-tonemap-algorithm=<drago|reinhard|mantiuk>` parsing and mandatory selector enforcement. |
+| TST-070 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_rejects_tonemap_options_without_opencv_tonemap_backend`; verifies `--opencv-tonemap-algorithm` and `--opencv-tonemap-<algorithm>-*` backend coupling plus selector/knob misuse rejections. |
 | TST-071 | `tests/test_uint16_postprocess_pipeline.py::test_run_opencv_tonemap_backend_uses_ev_zero_only`; verifies ev-zero-only consumption and minus/plus exclusion. |
 | TST-072 | `tests/test_uint16_postprocess_pipeline.py::test_run_opencv_tonemap_backend_dispatches_algorithms_with_fixed_gamma`; verifies Drago/Reinhard/Mantiuk dispatch and `gamma_inv=1/resolved_merge_gamma`. |
 | TST-073 | `tests/test_uint16_postprocess_pipeline.py::test_run_opencv_tonemap_backend_applies_merge_gamma_last`; verifies merge gamma is applied after tone mapping. |
