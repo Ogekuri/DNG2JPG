@@ -3,8 +3,8 @@
 
 @details Implements single-pass neutral linear RAW extraction with one
 maximum-resolution RGB base image, applies normalized camera white-balance
-gains in float domain, derives three synthetic exposures (`ev_zero-ev`,
-`ev_zero`, `ev_zero+ev`) by NumPy EV scaling, emits one
+gains in float domain, derives three synthetic exposures (`ev_zero-ev_delta`,
+`ev_zero`, `ev_zero+ev_delta`) by NumPy EV scaling, emits one
 diagnostic source-gamma line from RAW metadata without feeding it into the
 numeric pipeline, merges through selected `luminance-hdr-cli`, selected OpenCV
 (`Debevec`, `Robertson`, `Mertens`), or selected HDR+ tile-based flow with
@@ -1167,17 +1167,18 @@ def print_help(version):
     _print_help_section("Step 2 - Exposure planning and RAW bracket extraction")
     _print_help_option(
         "--ev-bracketing=<value>",
-        "Exposure mode selector: use `auto` for automatic planning, or one finite numeric value `>= 0` for static symmetric bracket EV delta.",
+        "EV bracket half-span selector: use `auto` for iterative automatic delta, or one finite numeric value `>= 0` for static symmetric bracket EV delta.",
         (
-            "Default: automatic planning when omitted.",
-            "The exposure-measure EV triplet is still computed and printed.",
+            "Default: `1.0` (static) when omitted.",
+            "Use `--ev-bracketing=auto` to enable the iterative clipping-threshold algorithm.",
         ),
     )
     _print_help_option(
-        "--ev-zero=<value>",
-        "Static central bracket EV as one finite numeric value.",
+        "--ev=<value>",
+        "EV bracket center selector: use `auto` for automatic center selection, or one finite numeric value for static center EV.",
         (
-            "Accepted only together with `--ev-bracketing`.",
+            "Default: `0.0` (static) when omitted.",
+            "Use `--ev=auto` to select ev_zero as min(|ev_best|,|ev_ettr|,|ev_detail|).",
             "No bit-depth-derived upper bound is enforced.",
         ),
     )
@@ -1621,14 +1622,15 @@ def _is_ev_value_on_supported_step(ev_value):
 
 
 def _parse_ev_option(ev_raw):
-    """@brief Parse and validate one EV option value.
+    """@brief Parse and validate one `--ev-bracketing` static value.
 
     @details Converts token to `float`, enforces finiteness and non-negativity,
     and preserves the parsed static bracket half-span without applying any
-    bit-depth-derived upper-bound contract.
+    bit-depth-derived upper-bound contract. Does not handle the `auto` sentinel;
+    callers MUST check for `auto` before invoking this function.
     @param ev_raw {str} EV token extracted from command arguments.
     @return {float|None} Parsed EV value when valid; `None` otherwise.
-    @satisfies REQ-030
+    @satisfies REQ-030, CTN-003
     """
 
     try:
@@ -1646,29 +1648,31 @@ def _parse_ev_option(ev_raw):
     return float(ev_value)
 
 
-def _parse_ev_zero_option(ev_zero_raw):
-    """@brief Parse and validate one `--ev-zero` option value.
+def _parse_ev_center_option(ev_center_raw):
+    """@brief Parse and validate one `--ev` center option value.
 
     @details Converts token to `float`, enforces finiteness, and preserves
     static center EV value without applying bit-depth-derived upper bounds.
-    @param ev_zero_raw {str} EV-zero token extracted from command arguments.
-    @return {float|None} Parsed EV-zero value when valid; `None` otherwise.
-    @satisfies REQ-018, REQ-030
+    Does not handle the `auto` sentinel; callers MUST check for `auto` before
+    invoking this function.
+    @param ev_center_raw {str} EV-center token extracted from command arguments.
+    @return {float|None} Parsed EV-center value when valid; `None` otherwise.
+    @satisfies REQ-030, CTN-007
     """
 
     try:
-        ev_zero_value = float(ev_zero_raw)
+        ev_center_value = float(ev_center_raw)
     except ValueError:
-        print_error(f"Invalid --ev-zero value: {ev_zero_raw}")
-        print_error("Allowed values: finite numeric")
+        print_error(f"Invalid --ev value: {ev_center_raw}")
+        print_error("Allowed values: finite numeric or auto")
         return None
 
-    if not _is_ev_value_on_supported_step(ev_zero_value):
-        print_error(f"Unsupported --ev-zero value: {ev_zero_raw}")
-        print_error("Allowed values: finite numeric")
+    if not _is_ev_value_on_supported_step(ev_center_value):
+        print_error(f"Unsupported --ev value: {ev_center_raw}")
+        print_error("Allowed values: finite numeric or auto")
         return None
 
-    return float(ev_zero_value)
+    return float(ev_center_value)
 
 
 def _parse_percentage_option(option_name, option_raw):
@@ -2835,7 +2839,7 @@ def _calculate_auto_zero_evaluations(cv2_module, np_module, image_rgb_float):
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} Input image payload convertible to normalized RGB float `[0,1]`.
     @return {AutoZeroEvaluation} Candidate EV evaluations on the normalized linear image.
-    @satisfies REQ-008, REQ-032
+    @satisfies REQ-008, REQ-032, CTN-007
     """
 
     luminance_float = _calculate_bt709_luminance(
@@ -2865,10 +2869,10 @@ def _select_ev_zero_candidate(evaluations):
 
     @details Selects the minimum absolute-value EV candidate using deterministic
     tie-break order `abs(value) -> declaration order -> numeric value` without
-    applying bit-depth-derived clamping.
+    applying bit-depth-derived clamping. Invoked only when `--ev=auto` is active.
     @param evaluations {AutoZeroEvaluation} Exposure-measure EV values.
     @return {tuple[float, str]} Selected `(ev_zero, source_label)` pair.
-    @satisfies REQ-032
+    @satisfies REQ-032, CTN-007
     """
 
     candidates = (
@@ -2959,17 +2963,75 @@ def _measure_any_channel_shadow_clipping_pct(np_module, image_rgb_float):
 
 
 
+def _resolve_auto_ev_delta(
+    np_module,
+    base_rgb_float,
+    ev_zero,
+    auto_ev_options,
+):
+    """@brief Resolve automatic bracket half-span by iterative clipping-threshold expansion.
+
+    @details Starts at `auto_ev_options.step`, evaluates unclipped bracket images
+    at `ev_zero-ev_delta` and `ev_zero+ev_delta`, and stops at the first step where
+    shadow clipping exceeds `shadow_clipping_pct` or highlight clipping reaches
+    `highlight_clipping_pct`. Prints per-step diagnostics and final selection.
+    @param np_module {ModuleType} Imported numpy module.
+    @param base_rgb_float {object} Normalized linear base RGB image.
+    @param ev_zero {float} Fixed bracket center EV used during iteration.
+    @param auto_ev_options {AutoEvOptions} Automatic clipping thresholds and EV increment.
+    @return {tuple[float, tuple[AutoEvIterationStep, ...]]} `(ev_delta, iteration_steps)` pair.
+    @satisfies REQ-009, REQ-052, REQ-167, REQ-168
+    """
+
+    ev_delta = float(auto_ev_options.step)
+    iteration_steps = []
+    while True:
+        ev_minus, _ev_center, ev_plus = _build_unclipped_bracket_images_from_linear_base_float(
+            np_module=np_module,
+            base_rgb_float=base_rgb_float,
+            ev_delta=ev_delta,
+            ev_zero=ev_zero,
+        )
+        shadow_pct = _measure_any_channel_shadow_clipping_pct(np_module, ev_minus)
+        highlight_pct = _measure_any_channel_highlight_clipping_pct(np_module, ev_plus)
+        iteration_steps.append(
+            AutoEvIterationStep(
+                ev_delta=round(ev_delta, 6),
+                shadow_clipping_pct=shadow_pct,
+                highlight_clipping_pct=highlight_pct,
+            )
+        )
+        if (
+            highlight_pct >= auto_ev_options.highlight_clipping_pct
+            or shadow_pct > auto_ev_options.shadow_clipping_pct
+        ):
+            break
+        ev_delta += auto_ev_options.step
+    for step in iteration_steps:
+        print_info(
+            "Bracket step: "
+            f"ev_delta={step.ev_delta:.6f}, "
+            f"shadow_clipping_pct={step.shadow_clipping_pct:.6f}, "
+            f"highlight_clipping_pct={step.highlight_clipping_pct:.6f}"
+        )
+    print_info(
+        "Exposure planning selected bracket half-span: "
+        f"{iteration_steps[-1].ev_delta:.6f} EV"
+    )
+    return (round(iteration_steps[-1].ev_delta, 6), tuple(iteration_steps))
+
+
 def _resolve_joint_auto_ev_solution(
     auto_ev_options,
     auto_adjust_dependencies=None,
     base_rgb_float=None,
 ):
-    """@brief Resolve the automatic symmetric exposure plan.
+    """@brief Resolve the joint automatic symmetric exposure plan.
 
     @details Loads numeric dependencies, computes the exposure-measure EV
     triplet from one normalized linear base image, selects `ev_zero` by minimum
-    absolute value, and expands bracket half-span iteratively until clipping
-    thresholds are reached.
+    absolute value, then delegates iterative bracket half-span expansion to
+    `_resolve_auto_ev_delta`.
     @param auto_ev_options {AutoEvOptions} Automatic clipping thresholds and EV increment.
     @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2_module, numpy_module)` tuple.
     @param base_rgb_float {object|None} Optional precomputed normalized linear base RGB image.
@@ -2998,30 +3060,6 @@ def _resolve_joint_auto_ev_solution(
     selected_ev_zero, selected_source = _select_ev_zero_candidate(
         evaluations=evaluations,
     )
-    ev_delta = float(auto_ev_options.step)
-    iteration_steps = []
-    while True:
-        ev_minus, _ev_center, ev_plus = _build_unclipped_bracket_images_from_linear_base_float(
-            np_module=np_module,
-            base_rgb_float=base_rgb_float,
-            ev_delta=ev_delta,
-            ev_zero=selected_ev_zero,
-        )
-        shadow_pct = _measure_any_channel_shadow_clipping_pct(np_module, ev_minus)
-        highlight_pct = _measure_any_channel_highlight_clipping_pct(np_module, ev_plus)
-        iteration_steps.append(
-            AutoEvIterationStep(
-                ev_delta=round(ev_delta, 6),
-                shadow_clipping_pct=shadow_pct,
-                highlight_clipping_pct=highlight_pct,
-            )
-        )
-        if (
-            highlight_pct >= auto_ev_options.highlight_clipping_pct
-            or shadow_pct > auto_ev_options.shadow_clipping_pct
-        ):
-            break
-        ev_delta += auto_ev_options.step
     print_info(f"Exposure Misure EV ev_best: {evaluations.ev_best:+.1f} EV")
     print_info(f"Exposure Misure EV ev_ettr: {evaluations.ev_ettr:+.1f} EV")
     print_info(f"Exposure Misure EV ev_detail: {evaluations.ev_detail:+.1f} EV")
@@ -3029,22 +3067,17 @@ def _resolve_joint_auto_ev_solution(
         "Exposure planning selected ev_zero: "
         f"{selected_ev_zero:+.6f} EV (source={selected_source})"
     )
-    for step in iteration_steps:
-        print_info(
-            "Bracket step: "
-            f"ev_delta={step.ev_delta:.6f}, "
-            f"shadow_clipping_pct={step.shadow_clipping_pct:.6f}, "
-            f"highlight_clipping_pct={step.highlight_clipping_pct:.6f}"
-        )
-    print_info(
-        "Exposure planning selected bracket half-span: "
-        f"{iteration_steps[-1].ev_delta:.6f} EV"
+    selected_ev_delta, iteration_steps = _resolve_auto_ev_delta(
+        np_module=np_module,
+        base_rgb_float=base_rgb_float,
+        ev_zero=selected_ev_zero,
+        auto_ev_options=auto_ev_options,
     )
     return JointAutoEvSolution(
         ev_zero=round(selected_ev_zero, 6),
-        ev_delta=round(iteration_steps[-1].ev_delta, 6),
+        ev_delta=selected_ev_delta,
         selected_source=selected_source,
-        iteration_steps=tuple(iteration_steps),
+        iteration_steps=iteration_steps,
     )
 
 
@@ -4641,8 +4674,9 @@ def _apply_merge_gamma_float(np_module, image_rgb_float, resolved_merge_gamma):
 def _parse_run_options(args):
     """@brief Parse CLI args into input, output, and EV parameters.
 
-    @details Supports positional file arguments, exposure selector
-    (`--ev-bracketing=<auto|value>` plus optional `--ev-zero=<value>`), optional
+    @details Supports positional file arguments, bracket delta selector
+    (`--ev-bracketing=<auto|value>`, default `1.0` static), bracket center selector
+    (`--ev=<auto|value>`, default `0.0` static), optional
     automatic exposure clipping and step controls, optional RAW white-balance
     normalization selector
     (`--white-balance=<GREEN|MAX|MIN|MEAN>`),
@@ -4663,15 +4697,15 @@ def _parse_run_options(args):
     defaulting to `auto` when omitted, rejects unknown options, and rejects
     invalid arity.
     @param args {list[str]} Raw command argument vector.
-    @return {tuple[Path, Path, float|None, bool, PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, bool, AutoEvOptions]|None} Parsed `(input, output, ev, exposure_auto_enabled, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, ev_zero_specified, auto_ev_options)` tuple; `None` on parse failure.
-    @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-020, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146, REQ-176, REQ-179, REQ-180, REQ-181, REQ-183, REQ-189, REQ-190, REQ-191, REQ-194, REQ-195, REQ-196, REQ-199, REQ-203, REQ-210
+    @return {tuple[Path, Path, float|None, bool, PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, bool, AutoEvOptions]|None} Parsed `(input, output, ev, auto_ev_delta_enabled, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, auto_ev_zero_enabled, auto_ev_options)` tuple; `None` on parse failure.
+    @satisfies CTN-002, CTN-003, CTN-007, REQ-007, REQ-008, REQ-009, REQ-018, REQ-020, REQ-022, REQ-023, REQ-024, REQ-025, REQ-030, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146, REQ-176, REQ-179, REQ-180, REQ-181, REQ-183, REQ-189, REQ-190, REQ-191, REQ-194, REQ-195, REQ-196, REQ-199, REQ-203, REQ-210
     """
 
     positional = []
-    ev_value = None
-    auto_ev_enabled = True
+    ev_value = 1.0
+    auto_ev_delta_enabled = False
     ev_zero = 0.0
-    ev_zero_specified = False
+    auto_ev_zero_enabled = False
     auto_ev_options = AutoEvOptions()
     post_gamma = DEFAULT_POST_GAMMA
     post_gamma_mode = DEFAULT_POST_GAMMA_MODE
@@ -4967,14 +5001,14 @@ def _parse_run_options(args):
             ev_raw = token.split("=", 1)[1].strip()
             if ev_raw.lower() == "auto":
                 ev_value = None
-                auto_ev_enabled = True
+                auto_ev_delta_enabled = True
                 idx += 1
                 continue
             parsed_ev = _parse_ev_option(ev_raw)
             if parsed_ev is None:
                 return None
             ev_value = parsed_ev
-            auto_ev_enabled = False
+            auto_ev_delta_enabled = False
             idx += 1
             continue
 
@@ -5046,12 +5080,21 @@ def _parse_run_options(args):
             idx += 1
             continue
 
-        if token.startswith("--ev-zero="):
-            parsed_ev_zero = _parse_ev_zero_option(token.split("=", 1)[1])
-            if parsed_ev_zero is None:
+        if token == "--ev-zero" or token.startswith("--ev-zero="):
+            print_error("Removed option: --ev-zero")
+            return None
+
+        if token.startswith("--ev="):
+            ev_center_raw = token.split("=", 1)[1].strip()
+            if ev_center_raw.lower() == "auto":
+                auto_ev_zero_enabled = True
+                idx += 1
+                continue
+            parsed_ev_center = _parse_ev_center_option(ev_center_raw)
+            if parsed_ev_center is None:
                 return None
-            ev_zero = parsed_ev_zero
-            ev_zero_specified = True
+            ev_zero = parsed_ev_center
+            auto_ev_zero_enabled = False
             idx += 1
             continue
 
@@ -5136,12 +5179,8 @@ def _parse_run_options(args):
     if len(positional) != 2:
         print_error(
             "Usage: dng2jpg <input.dng> <output.jpg> "
-            "[--ev-bracketing=<value>] [--ev-zero=<value>]"
+            "[--ev-bracketing=<auto|value>] [--ev=<auto|value>]"
         )
-        return None
-
-    if ev_zero_specified and auto_ev_enabled:
-        print_error("--ev-zero requires numeric --ev-bracketing value")
         return None
 
     if hdr_merge_mode not in _HDR_MERGE_MODES:
@@ -5254,7 +5293,7 @@ def _parse_run_options(args):
         Path(positional[0]),
         Path(positional[1]),
         ev_value,
-        auto_ev_enabled,
+        auto_ev_delta_enabled,
         PostprocessOptions(
             post_gamma=post_gamma,
             post_gamma_mode=post_gamma_mode,
@@ -5290,7 +5329,7 @@ def _parse_run_options(args):
         hdrplus_options,
         enable_hdr_plus,
         ev_zero,
-        ev_zero_specified,
+        auto_ev_zero_enabled,
         auto_ev_options,
     )
 
@@ -12445,8 +12484,10 @@ def run(args):
     """@brief Execute `dng2jpg` command pipeline.
 
     @details Parses command options, validates dependencies, detects source DNG
-    bits-per-color from RAW metadata, resolves manual or automatic EV-zero
-    center, resolves static or adaptive EV selector, extracts one linear HDR
+    bits-per-color from RAW metadata, resolves `ev_zero` (static `0.0` default,
+    static `--ev=<value>`, or auto via `--ev=auto`) and `ev_delta` (static `1.0`
+    default, static `--ev-bracketing=<value>`, or auto via `--ev-bracketing=auto`),
+    extracts one linear HDR
     base image using selected RAW WB normalization mode and derives three
     normalized RGB float brackets, executes the selected HDR backend with float
     input/output interfaces,
@@ -12456,7 +12497,7 @@ def run(args):
     directory lifecycle.
     @param args {list[str]} Command argument vector excluding command token.
     @return {int} `0` on success; `1` on parse/validation/dependency/processing failure.
-    @satisfies PRJ-001, CTN-001, CTN-004, CTN-005, REQ-010, REQ-011, REQ-012, REQ-013, REQ-014, REQ-015, REQ-050, REQ-052, REQ-100, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-127, REQ-128, REQ-129, REQ-131, REQ-132, REQ-133, REQ-134, REQ-138, REQ-139, REQ-140, REQ-146, REQ-147, REQ-148, REQ-149, REQ-157, REQ-158, REQ-159, REQ-160, REQ-181, REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188, REQ-189, REQ-190, REQ-191, REQ-192, REQ-193, REQ-194, REQ-195, REQ-196, REQ-197, REQ-198, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207
+    @satisfies PRJ-001, CTN-001, CTN-004, CTN-005, CTN-007, REQ-008, REQ-009, REQ-010, REQ-011, REQ-012, REQ-013, REQ-014, REQ-015, REQ-032, REQ-037, REQ-050, REQ-052, REQ-100, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-127, REQ-128, REQ-129, REQ-131, REQ-132, REQ-133, REQ-134, REQ-138, REQ-139, REQ-140, REQ-146, REQ-147, REQ-148, REQ-149, REQ-157, REQ-158, REQ-159, REQ-160, REQ-181, REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188, REQ-189, REQ-190, REQ-191, REQ-192, REQ-193, REQ-194, REQ-195, REQ-196, REQ-197, REQ-198, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207
     """
 
     if not _is_supported_runtime_os():
@@ -12470,7 +12511,7 @@ def run(args):
         input_dng,
         output_jpg,
         ev_value,
-        auto_ev_enabled,
+        auto_ev_delta_enabled,
         postprocess_options,
         enable_luminance,
         enable_opencv,
@@ -12479,7 +12520,7 @@ def run(args):
         hdrplus_options,
         enable_hdr_plus,
         ev_zero,
-        ev_zero_specified,
+        auto_ev_zero_enabled,
         auto_ev_options,
     ) = parsed
     enable_opencv_tonemap = _derive_opencv_tonemap_enabled(postprocess_options)
@@ -12517,7 +12558,8 @@ def run(args):
         postprocess_options.auto_adjust_enabled
         or enable_opencv
         or enable_opencv_tonemap
-        or auto_ev_enabled
+        or auto_ev_delta_enabled
+        or auto_ev_zero_enabled
     ):
         auto_adjust_dependencies = _resolve_auto_adjust_dependencies()
         if auto_adjust_dependencies is None:
@@ -12747,7 +12789,7 @@ def run(args):
                         auto_adjust_dependencies=auto_adjust_dependencies,
                         estimation_input_is_auto_brightness_preprocessed=postprocess_options.auto_brightness_enabled,
                     )
-                if auto_ev_enabled:
+                if auto_ev_zero_enabled and auto_ev_delta_enabled:
                     joint_solution = _resolve_joint_auto_ev_solution(
                         auto_ev_options=auto_ev_options,
                         auto_adjust_dependencies=auto_adjust_dependencies,
@@ -12755,36 +12797,57 @@ def run(args):
                     )
                     resolved_ev_zero = joint_solution.ev_zero
                     effective_ev_value = joint_solution.ev_delta
-                else:
+                elif auto_ev_delta_enabled:
+                    resolved_ev_zero = ev_zero
+                    if auto_adjust_dependencies is None:
+                        raise RuntimeError("Missing auto-adjust dependencies for --ev-bracketing=auto")
+                    _cv2_unused, np_module_for_delta = auto_adjust_dependencies
+                    effective_ev_value, _iteration_steps = _resolve_auto_ev_delta(
+                        np_module=np_module_for_delta,
+                        base_rgb_float=base_rgb_float,
+                        ev_zero=resolved_ev_zero,
+                        auto_ev_options=auto_ev_options,
+                    )
+                elif auto_ev_zero_enabled:
+                    if auto_adjust_dependencies is None:
+                        raise RuntimeError("Missing auto-adjust dependencies for --ev=auto")
+                    cv2_module_for_ev, np_module_for_ev = auto_adjust_dependencies
                     evaluations = _calculate_auto_zero_evaluations(
-                        cv2_module=None,
-                        np_module=numpy_module,
+                        cv2_module=cv2_module_for_ev,
+                        np_module=np_module_for_ev,
                         image_rgb_float=base_rgb_float,
                     )
                     print_info(f"Exposure Misure EV ev_best: {evaluations.ev_best:+.1f} EV")
                     print_info(f"Exposure Misure EV ev_ettr: {evaluations.ev_ettr:+.1f} EV")
                     print_info(f"Exposure Misure EV ev_detail: {evaluations.ev_detail:+.1f} EV")
-                    if ev_zero_specified:
-                        resolved_ev_zero = ev_zero
-                    else:
-                        resolved_ev_zero, _selected_source = _select_ev_zero_candidate(
-                            evaluations=evaluations,
-                        )
-                print_info(f"Detected DNG bits per color: {bits_per_color}")
-                if auto_ev_enabled:
-                    print_info("Using exposure mode: auto")
-                    print_info(f"Using selected EV center (ev_zero): {resolved_ev_zero:g}")
+                    resolved_ev_zero, _selected_source = _select_ev_zero_candidate(
+                        evaluations=evaluations,
+                    )
+                    print_info(
+                        "Exposure planning selected ev_zero: "
+                        f"{resolved_ev_zero:+.6f} EV (source={_selected_source})"
+                    )
+                    if ev_value is None:
+                        raise ValueError("Missing static EV value for --ev=auto without --ev-bracketing=auto")
+                    effective_ev_value = ev_value
                 else:
-                    print_info("Using exposure mode: static")
-                    print_info(f"Using selected EV center (ev_zero): {resolved_ev_zero:g}")
+                    resolved_ev_zero = ev_zero
                     if ev_value is None:
                         raise ValueError("Missing static EV value")
                     effective_ev_value = ev_value
+                print_info(f"Detected DNG bits per color: {bits_per_color}")
+                if auto_ev_zero_enabled:
+                    print_info("Using exposure mode: auto ev_zero" + ("+delta" if auto_ev_delta_enabled else ""))
+                elif auto_ev_delta_enabled:
+                    print_info("Using exposure mode: auto ev_delta")
+                else:
+                    print_info("Using exposure mode: static")
+                print_info(f"Using selected EV center (ev_zero): {resolved_ev_zero:g}")
                 if effective_ev_value is None:
                     raise ValueError("Missing resolved EV delta")
                 print_info(
                     f"Using EV bracket delta: {effective_ev_value:g}"
-                    + (" (auto)" if auto_ev_enabled else " (static)")
+                    + (" (auto)" if auto_ev_delta_enabled else " (static)")
                 )
                 print_info(
                     "Export EV triplet: "
