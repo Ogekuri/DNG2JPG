@@ -1166,7 +1166,7 @@ def print_help(version):
 
     _print_help_section("Step 2 - Exposure planning and RAW bracket extraction")
     _print_help_option(
-        "--ev=<value>",
+        "--ev-bracketing=<value>",
         "Exposure mode selector: use `auto` for automatic planning, or one finite numeric value `>= 0` for static symmetric bracket EV delta.",
         (
             "Default: automatic planning when omitted.",
@@ -1177,7 +1177,7 @@ def print_help(version):
         "--ev-zero=<value>",
         "Static central bracket EV as one finite numeric value.",
         (
-            "Accepted only together with `--ev`.",
+            "Accepted only together with `--ev-bracketing`.",
             "No bit-depth-derived upper bound is enforced.",
         ),
     )
@@ -1634,12 +1634,12 @@ def _parse_ev_option(ev_raw):
     try:
         ev_value = float(ev_raw)
     except ValueError:
-        print_error(f"Invalid --ev value: {ev_raw}")
+        print_error(f"Invalid --ev-bracketing value: {ev_raw}")
         print_error("Allowed values: finite numeric >= 0")
         return None
 
     if ev_value < 0.0 or not _is_ev_value_on_supported_step(ev_value):
-        print_error(f"Unsupported --ev value: {ev_raw}")
+        print_error(f"Unsupported --ev-bracketing value: {ev_raw}")
         print_error("Allowed values: finite numeric >= 0")
         return None
 
@@ -4642,7 +4642,7 @@ def _parse_run_options(args):
     """@brief Parse CLI args into input, output, and EV parameters.
 
     @details Supports positional file arguments, exposure selector
-    (`--ev=<auto|value>` plus optional `--ev-zero=<value>`), optional
+    (`--ev-bracketing=<auto|value>` plus optional `--ev-zero=<value>`), optional
     automatic exposure clipping and step controls, optional RAW white-balance
     normalization selector
     (`--white-balance=<GREEN|MAX|MIN|MEAN>`),
@@ -4963,7 +4963,7 @@ def _parse_run_options(args):
             idx += 1
             continue
 
-        if token.startswith("--ev="):
+        if token.startswith("--ev-bracketing="):
             ev_raw = token.split("=", 1)[1].strip()
             if ev_raw.lower() == "auto":
                 ev_value = None
@@ -5136,12 +5136,12 @@ def _parse_run_options(args):
     if len(positional) != 2:
         print_error(
             "Usage: dng2jpg <input.dng> <output.jpg> "
-            "[--ev=<value>] [--ev-zero=<value>]"
+            "[--ev-bracketing=<value>] [--ev-zero=<value>]"
         )
         return None
 
     if ev_zero_specified and auto_ev_enabled:
-        print_error("--ev-zero requires numeric --ev value")
+        print_error("--ev-zero requires numeric --ev-bracketing value")
         return None
 
     if hdr_merge_mode not in _HDR_MERGE_MODES:

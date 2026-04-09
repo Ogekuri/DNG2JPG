@@ -126,7 +126,7 @@
         - _line(...): row line generation [src/dng2jpg/dng2jpg.py]
     - run(args): HDR conversion pipeline orchestration [src/dng2jpg/dng2jpg.py]
       - _is_supported_runtime_os(): Linux-only runtime guard [src/dng2jpg/dng2jpg.py]
-      - _parse_run_options(args): parse and validate conversion options, mapping `--ev=auto` to automatic exposure, finite numeric `--ev` to static exposure, and `--auto-white-balance=disable` to explicit stage bypass [src/dng2jpg/dng2jpg.py]
+      - _parse_run_options(args): parse and validate conversion options, mapping `--ev-bracketing=auto` to automatic exposure, finite numeric `--ev-bracketing` to static exposure, and `--auto-white-balance=disable` to explicit stage bypass [src/dng2jpg/dng2jpg.py]
         - _parse_opencv_merge_backend_options(...): OpenCV backend option parsing [src/dng2jpg/dng2jpg.py]
         - _parse_post_gamma_auto_options(...): auto post-gamma option parsing [src/dng2jpg/dng2jpg.py]
         - _parse_auto_brightness_options(...): auto-brightness option parsing [src/dng2jpg/dng2jpg.py]
