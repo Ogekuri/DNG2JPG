@@ -244,8 +244,8 @@ _HDRPLUS_KNOB_OPTIONS = (
 )
 _OPENCV_KNOB_OPTIONS = (
     "--opencv-merge-algorithm",
-    "--opencv-tonemap",
-    "--opencv-tonemap-gamma",
+    "--opencv-merge-tonemap",
+    "--opencv-merge-tonemap-gamma",
 )
 _OPENCV_TONEMAP_SELECTOR_OPTIONS = (
     "--tonemap",
@@ -1251,12 +1251,12 @@ def print_help(version):
         ),
     )
     _print_help_option(
-        "--opencv-tonemap=<bool>",
+        "--opencv-merge-tonemap=<bool>",
         "Enable simple OpenCV gamma tone mapping for OpenCV merge outputs.",
         (f"Default: `{'true' if DEFAULT_OPENCV_TONEMAP_ENABLED else 'false'}`.",),
     )
     _print_help_option(
-        "--opencv-tonemap-gamma=<value>",
+        "--opencv-merge-tonemap-gamma=<value>",
         "Positive gamma used by OpenCV simple tone mapping. Effective only when OpenCV tone mapping is enabled.",
         (
             f"Default by algorithm: `{OPENCV_MERGE_ALGORITHM_DEBEVEC}={DEFAULT_OPENCV_DEBEVEC_TONEMAP_GAMMA:g}`, "
@@ -1808,7 +1808,7 @@ def _resolve_default_opencv_tonemap_gamma(merge_algorithm):
     """@brief Resolve OpenCV tone-map gamma default from merge algorithm.
 
     @details Maps `Debevec`, `Robertson`, and `Mertens` to deterministic
-    default gamma values used when `--opencv-tonemap-gamma` is omitted.
+    default gamma values used when `--opencv-merge-tonemap-gamma` is omitted.
     Unknown values fall back to the repository default merge algorithm profile.
     @param merge_algorithm {str} Resolved OpenCV merge algorithm selector.
     @return {float} Default OpenCV tone-map gamma for the selected algorithm.
@@ -1851,17 +1851,18 @@ def _parse_opencv_merge_backend_options(opencv_raw_values):
             return None
         merge_algorithm = parsed
 
-    if "--opencv-tonemap" in opencv_raw_values:
+    if "--opencv-merge-tonemap" in opencv_raw_values:
         parsed = _parse_explicit_boolean_option(
-            "--opencv-tonemap", opencv_raw_values["--opencv-tonemap"]
+            "--opencv-merge-tonemap", opencv_raw_values["--opencv-merge-tonemap"]
         )
         if parsed is None:
             return None
         tonemap_enabled = parsed
 
-    if "--opencv-tonemap-gamma" in opencv_raw_values:
+    if "--opencv-merge-tonemap-gamma" in opencv_raw_values:
         parsed = _parse_positive_float_option(
-            "--opencv-tonemap-gamma", opencv_raw_values["--opencv-tonemap-gamma"]
+            "--opencv-merge-tonemap-gamma",
+            opencv_raw_values["--opencv-merge-tonemap-gamma"],
         )
         if parsed is None:
             return None

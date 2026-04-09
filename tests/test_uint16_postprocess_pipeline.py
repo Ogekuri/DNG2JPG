@@ -1905,8 +1905,8 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
         "--white-balance-xphoto-domain=<domain>",
         "--hdr-merge=<Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>",
         "--opencv-merge-algorithm=<name>",
-        "--opencv-tonemap=<bool>",
-        "--opencv-tonemap-gamma=<value>",
+        "--opencv-merge-tonemap=<bool>",
+        "--opencv-merge-tonemap-gamma=<value>",
         "--tonemap=<drago|reinhard|mantiuk>",
         "--tonemap-drago-saturation=<value>",
         "--tonemap-drago-bias=<0..1>",
@@ -2549,8 +2549,8 @@ def test_parse_run_options_accepts_opencv_controls_and_defaults() -> None:
             "--ev=1",
             "--hdr-merge=OpenCV-Merge",
             "--opencv-merge-algorithm=Debevec",
-            "--opencv-tonemap=off",
-            "--opencv-tonemap-gamma=2.2",
+            "--opencv-merge-tonemap=off",
+            "--opencv-merge-tonemap-gamma=2.2",
         ]
     )
     assert parsed_override is not None
@@ -2582,7 +2582,7 @@ def test_parse_run_options_rejects_invalid_opencv_controls() -> None:
             "output.jpg",
             "--ev=1",
             "--hdr-merge=OpenCV-Merge",
-            "--opencv-tonemap=maybe",
+            "--opencv-merge-tonemap=maybe",
         ]
     )
     assert invalid_tonemap is None
@@ -2593,7 +2593,7 @@ def test_parse_run_options_rejects_invalid_opencv_controls() -> None:
             "output.jpg",
             "--ev=1",
             "--hdr-merge=HDR-Plus",
-            "--opencv-tonemap=on",
+            "--opencv-merge-tonemap=on",
         ]
     )
     assert invalid_coupling is None
