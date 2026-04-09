@@ -106,8 +106,9 @@ def _check_online_version(force: bool) -> None:
     normalizes the returned tag name, assigns idle-delay `3600` seconds after a
     successful attempt, assigns idle-delay `86400` seconds after any handled
     request/parsing error, rewrites the cache JSON after every attempted API
-    call, and then emits the status or error message. Complexity: O(1). Side
-    effects: network I/O, cache-file rewrite, stdout/stderr output.
+    call, emits version status only when latest and installed versions differ,
+    and emits error messages for request/parsing failures. Complexity: O(1).
+    Side effects: network I/O, cache-file rewrite, stdout/stderr output.
     @param force {bool} Bypass flag that forces a network request even when the
     cache idle-time is still active.
     @return {None} No return value.
@@ -148,11 +149,10 @@ def _check_online_version(force: bool) -> None:
                 f"Versione Installata: {__version__}\033[0m"
             )
             status_stream = sys.stdout
+        elif not latest:
+            raise ValueError("Missing latest-release tag_name payload.")
         else:
-            status_message = (
-                f"\033[91mVersione Disponibile: {latest or 'unknown'} | "
-                f"Versione Installata: {__version__}\033[0m"
-            )
+            status_message = ""
     except error.HTTPError as http_error:
         idle_delay_seconds = _VERSION_CHECK_ERROR_IDLE_DELAY_SECONDS
         status_message = (
@@ -168,7 +168,8 @@ def _check_online_version(force: bool) -> None:
         status_message = f"\033[91mVersion check failed: {generic_error}.\033[0m"
 
     _write_version_cache(idle_delay_seconds)
-    print(status_message, file=status_stream)
+    if status_message:
+        print(status_message, file=status_stream)
 
 
 def _run_management(command: list[str]) -> int:

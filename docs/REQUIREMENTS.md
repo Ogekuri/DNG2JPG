@@ -125,7 +125,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-106**: MUST execute optional auto-adjust stage after static postprocess and before final JPEG quantization/write, preserve RGB float input/output interfaces, and confine any required float-to-uint16 or TIFF16 conversions to the auto-adjust step itself.
 - **REQ-014**: MUST synchronize output file timestamps from EXIF datetime only after refreshed EXIF metadata has been written when EXIF datetime metadata is available.
 - **REQ-015**: MUST return `1` on parse, validation, dependency, and processing errors, and return `0` on successful processing.
-- **REQ-016**: MUST execute GitHub latest-release version checks with an idle-time cache JSON file and print version status or check errors.
+- **REQ-016**: MUST execute GitHub latest-release version checks with an idle-time cache JSON file and print check errors or version status only when latest and installed versions differ.
 - **REQ-150**: MUST use idle-delay `3600` seconds after successful latest-release checks and idle-delay `86400` seconds after any latest-release check error.
 - **REQ-151**: MUST recalculate idle-time and rewrite the version-check cache JSON after every latest-release API attempt, regardless of success or error outcome.
 - **REQ-017**: MUST render conversion usage/help with canonical executable name `dng2jpg`, stable aligned indentation, and MUST NOT prepend alternative launcher labels.

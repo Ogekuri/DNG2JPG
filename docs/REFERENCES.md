@@ -61,7 +61,7 @@ import sys
 
 ---
 
-# core.py | Python | 225L | 9 symbols | 14 imports | 8 comments
+# core.py | Python | 226L | 9 symbols | 14 imports | 8 comments
 > Path: `src/dng2jpg/core.py`
 
 ## Imports
@@ -107,9 +107,9 @@ import subprocess
 - @throws {None} Cache read and decode failures are converted to `False`.
 - @satisfies REQ-016
 
-### fn `def _check_online_version(force: bool) -> None` `priv` (L101-173)
+### fn `def _check_online_version(force: bool) -> None` `priv` (L101-174)
 - @brief Execute the latest-release check and refresh cache idle-time policy.
-- @details Skips the network request when `_should_skip_version_check(...)` returns true. Otherwise performs one GitHub latest-release API request, normalizes the returned tag name, assigns idle-delay `3600` seconds after a successful attempt, assigns idle-delay `86400` seconds after any handled request/parsing error, rewrites the cache JSON after every attempted API call, and then emits the status or error message. Complexity: O(1). Side effects: network I/O, cache-file rewrite, stdout/stderr output.
+- @details Skips the network request when `_should_skip_version_check(...)` returns true. Otherwise performs one GitHub latest-release API request, normalizes the returned tag name, assigns idle-delay `3600` seconds after a successful attempt, assigns idle-delay `86400` seconds after any handled request/parsing error, rewrites the cache JSON after every attempted API call, emits version status only when latest and installed versions differ, and emits error messages for request/parsing failures. Complexity: O(1). Side effects: network I/O, cache-file rewrite, stdout/stderr output.
 - @param force {bool} Bypass flag that forces a network request even when the cache idle-time is still active.
 - @return {None} No return value.
 - @throws {OSError} Cache-file rewrite failure after a completed API attempt.
@@ -117,9 +117,9 @@ import subprocess
 - @see _write_version_cache
 - @satisfies REQ-016, REQ-150, REQ-151
 
-### fn `def _run_management(command: list[str]) -> int` `priv` (L174-187)
+### fn `def _run_management(command: list[str]) -> int` `priv` (L175-188)
 
-### fn `def main(argv: Sequence[str] | None = None) -> int` (L188-225)
+### fn `def main(argv: Sequence[str] | None = None) -> int` (L189-226)
 
 ## Symbol Index
 |Symbol|Kind|Vis|Lines|Sig|
@@ -130,9 +130,9 @@ import subprocess
 |`_management_help`|fn|priv|27-40|def _management_help() -> str|
 |`_write_version_cache`|fn|priv|41-72|def _write_version_cache(idle_delay_seconds: int) -> None|
 |`_should_skip_version_check`|fn|priv|73-100|def _should_skip_version_check(force: bool) -> bool|
-|`_check_online_version`|fn|priv|101-173|def _check_online_version(force: bool) -> None|
-|`_run_management`|fn|priv|174-187|def _run_management(command: list[str]) -> int|
-|`main`|fn|pub|188-225|def main(argv: Sequence[str] | None = None) -> int|
+|`_check_online_version`|fn|priv|101-174|def _check_online_version(force: bool) -> None|
+|`_run_management`|fn|priv|175-188|def _run_management(command: list[str]) -> int|
+|`main`|fn|pub|189-226|def main(argv: Sequence[str] | None = None) -> int|
 
 
 ---

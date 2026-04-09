@@ -113,7 +113,7 @@
   - No explicit threads detected in repository code.
 - Internal Call-Trace Tree:
   - main(argv): parse top-level management commands and dispatch conversion [src/dng2jpg/core.py]
-    - _check_online_version(force): latest-release check with cache gating [src/dng2jpg/core.py]
+    - _check_online_version(force): latest-release check with cache gating and silent same-version outcome [src/dng2jpg/core.py]
       - _should_skip_version_check(force): idle-time cache gate [src/dng2jpg/core.py]
       - _write_version_cache(idle_delay_seconds): persist cache metadata [src/dng2jpg/core.py]
     - _run_management(command): execute upgrade/uninstall subprocess on Linux [src/dng2jpg/core.py]
@@ -219,7 +219,7 @@
 - Internal Call-Trace Tree:
   - __main__(...): module-to-core bridge [src/dng2jpg/__main__.py]
     - main(argv): command dispatcher [src/dng2jpg/core.py]
-      - _check_online_version(force): optional release check [src/dng2jpg/core.py]
+      - _check_online_version(force): optional release check with silent same-version outcome [src/dng2jpg/core.py]
       - _run_management(command): optional management command [src/dng2jpg/core.py]
       - run(args): conversion pipeline [src/dng2jpg/dng2jpg.py]
         - _parse_run_options(args): CLI option parser [src/dng2jpg/dng2jpg.py]
