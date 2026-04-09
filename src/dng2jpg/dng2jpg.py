@@ -641,9 +641,9 @@ class OpenCvTonemapOptions:
 
     @details Encapsulates one mandatory OpenCV tone-map algorithm selector and
     optional algorithm-specific parameters for the `--hdr-merge=OpenCV-Tonemap`
-    backend. The backend executes one selected algorithm only, uses fixed
-    OpenCV tone-map `gamma=1.0` for linear-image processing, and applies merge
-    gamma only as the backend-final step.
+    backend. The backend executes one selected algorithm only, resolves OpenCV
+    tone-map gamma as the inverse of the resolved merge-gamma curve parameter,
+    and applies merge gamma only as the backend-final step.
     @param tonemap_map {str} Selected OpenCV tone-map algorithm in `{"drago","reinhard","mantiuk"}`.
     @param drago_saturation {float} Drago saturation parameter.
     @param drago_bias {float} Drago bias parameter.
@@ -3906,6 +3906,40 @@ def _apply_merge_gamma_float_no_clip(np_module, image_rgb_float, resolved_merge_
     raise ValueError(f"Unsupported merge gamma transfer: {resolved_merge_gamma.transfer}")
 
 
+def _resolve_opencv_tonemap_gamma_inverse(resolved_merge_gamma):
+    """@brief Resolve OpenCV-Tonemap gamma inverse from merge-gamma payload.
+
+    @details Maps resolved merge-gamma transfer families to one OpenCV
+    tone-mapping gamma value that inverts the merge-gamma curve parameter:
+    `sRGB -> 1/2.4`, `power -> 1/param_a`, `rec709 -> 1/param_b`, and
+    `linear -> 1.0`.
+    @param resolved_merge_gamma {ResolvedMergeGamma} Resolved merge-gamma payload.
+    @return {float} Positive OpenCV tone-map gamma value.
+    @exception ValueError Raised when required merge-gamma parameters are missing or non-positive.
+    @satisfies REQ-193
+    """
+
+    if resolved_merge_gamma.transfer == "linear":
+        return 1.0
+    if resolved_merge_gamma.transfer == "srgb":
+        return 1.0 / 2.4
+    if resolved_merge_gamma.transfer == "power":
+        if resolved_merge_gamma.param_a is None:
+            raise ValueError("Resolved power merge gamma is missing exponent")
+        exponent = float(resolved_merge_gamma.param_a)
+        if exponent <= 0.0:
+            raise ValueError("Resolved power merge gamma exponent must be positive")
+        return 1.0 / exponent
+    if resolved_merge_gamma.transfer == "rec709":
+        if resolved_merge_gamma.param_b is None:
+            raise ValueError("Resolved Rec.709 merge gamma is missing exponent")
+        exponent = float(resolved_merge_gamma.param_b)
+        if exponent <= 0.0:
+            raise ValueError("Resolved Rec.709 merge gamma exponent must be positive")
+        return 1.0 / exponent
+    raise ValueError(f"Unsupported merge gamma transfer: {resolved_merge_gamma.transfer}")
+
+
 def _parse_auto_adjust_option(auto_adjust_raw):
     """@brief Parse auto-adjust enable selector option value.
 
@@ -7108,9 +7142,9 @@ def _run_opencv_tonemap_backend(
 
     @details Selects bracket index `1` (`ev_zero`) as the only tone-map input,
     dispatches exactly one OpenCV tone-map implementation (`Drago`, `Reinhard`,
-    or `Mantiuk`) with fixed OpenCV `gamma=1.0`, preserves float-domain dynamic
-    range without backend-local clipping, and applies merge gamma strictly as
-    backend-final step.
+    or `Mantiuk`) with `gamma_inv` resolved as the inverse merge-gamma curve
+    parameter, preserves float-domain dynamic range without backend-local
+    clipping, and applies merge gamma strictly as backend-final step.
     @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors `(ev_minus, ev_zero, ev_plus)`.
     @param opencv_tonemap_options {OpenCvTonemapOptions} OpenCV-Tonemap selector and knob payload.
     @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
@@ -7136,23 +7170,26 @@ def _run_opencv_tonemap_backend(
         np_module=np_module,
         image_data=bracket_images_float[1],
     ).astype(np_module.float32, copy=False)
+    tonemap_gamma_inverse = _resolve_opencv_tonemap_gamma_inverse(
+        resolved_merge_gamma=resolved_merge_gamma
+    )
 
     if opencv_tonemap_options.tonemap_map == OPENCV_TONEMAP_MAP_DRAGO:
         tonemap = cv2_module.createTonemapDrago(
-            gamma=1.0,
+            gamma=tonemap_gamma_inverse,
             saturation=float(opencv_tonemap_options.drago_saturation),
             bias=float(opencv_tonemap_options.drago_bias),
         )
     elif opencv_tonemap_options.tonemap_map == OPENCV_TONEMAP_MAP_REINHARD:
         tonemap = cv2_module.createTonemapReinhard(
-            gamma=1.0,
+            gamma=tonemap_gamma_inverse,
             intensity=float(opencv_tonemap_options.reinhard_intensity),
             light_adapt=float(opencv_tonemap_options.reinhard_light_adapt),
             color_adapt=float(opencv_tonemap_options.reinhard_color_adapt),
         )
     elif opencv_tonemap_options.tonemap_map == OPENCV_TONEMAP_MAP_MANTIUK:
         tonemap = cv2_module.createTonemapMantiuk(
-            gamma=1.0,
+            gamma=tonemap_gamma_inverse,
             scale=float(opencv_tonemap_options.mantiuk_scale),
             saturation=float(opencv_tonemap_options.mantiuk_saturation),
         )
@@ -12654,7 +12691,7 @@ def run(args):
             )
         print_info(
             f"HDR backend: {HDR_MERGE_MODE_OPENCV_TONEMAP} "
-            f"(map={opencv_tonemap_options.tonemap_map}, gamma=1.0, {tonemap_details})"
+            f"(map={opencv_tonemap_options.tonemap_map}, gamma=merge-gamma-inverse, {tonemap_details})"
         )
     elif enable_hdr_plus:
         print_info(

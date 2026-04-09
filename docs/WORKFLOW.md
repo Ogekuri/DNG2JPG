@@ -184,6 +184,7 @@
         - _run_opencv_merge_mertens(...): Mertens merge path [src/dng2jpg/dng2jpg.py]
         - _apply_merge_gamma_float(...): transfer conversion to linearized merge domain [src/dng2jpg/dng2jpg.py]
       - _run_opencv_tonemap_backend(...): OpenCV tonemap backend [src/dng2jpg/dng2jpg.py]
+        - _resolve_opencv_tonemap_gamma_inverse(...): OpenCV tonemap gamma inverse resolution from merge transfer [src/dng2jpg/dng2jpg.py]
         - _apply_merge_gamma_float_no_clip(...): transfer conversion without clipping [src/dng2jpg/dng2jpg.py]
       - _run_hdr_plus_merge(...): HDR+ merge backend [src/dng2jpg/dng2jpg.py]
         - _hdrplus_build_scalar_proxy_float32(...): scalar proxy generation [src/dng2jpg/dng2jpg.py]

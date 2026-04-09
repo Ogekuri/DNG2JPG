@@ -381,7 +381,6 @@ class _FakeOpenCvModule:
         saturation: float,
         bias: float,
     ) -> _FakeAdvancedTonemap:
-        assert gamma == 1.0
         self.last_tonemap_drago = _FakeAdvancedTonemap(
             "drago",
             gamma=float(gamma),
@@ -398,7 +397,6 @@ class _FakeOpenCvModule:
         light_adapt: float,
         color_adapt: float,
     ) -> _FakeAdvancedTonemap:
-        assert gamma == 1.0
         self.last_tonemap_reinhard = _FakeAdvancedTonemap(
             "reinhard",
             gamma=float(gamma),
@@ -415,7 +413,6 @@ class _FakeOpenCvModule:
         scale: float,
         saturation: float,
     ) -> _FakeAdvancedTonemap:
-        assert gamma == 1.0
         self.last_tonemap_mantiuk = _FakeAdvancedTonemap(
             "mantiuk",
             gamma=float(gamma),
@@ -2883,7 +2880,7 @@ def test_run_opencv_tonemap_backend_uses_ev_zero_only() -> None:
 
 
 def test_run_opencv_tonemap_backend_dispatches_algorithms_with_fixed_gamma() -> None:
-    """OpenCV-Tonemap backend must dispatch drago/reinhard/mantiuk with gamma 1.0."""
+    """OpenCV-Tonemap backend must dispatch drago/reinhard/mantiuk with gamma inverse."""
 
     fake_cv2 = _FakeOpenCvModule()
     bracket_images_float = [
@@ -2902,16 +2899,21 @@ def test_run_opencv_tonemap_backend_dispatches_algorithms_with_fixed_gamma() -> 
         auto_adjust_dependencies=(fake_cv2, np),
         resolved_merge_gamma=dng2jpg_module.ResolvedMergeGamma(
             request=dng2jpg_module.MergeGammaOption(mode="auto"),
-            transfer="linear",
-            label="Linear",
+            transfer="srgb",
+            label="sRGB",
             param_a=None,
             param_b=None,
-            evidence="default-linear",
+            evidence="exif-colorspace=1",
         ),
     )
     assert fake_cv2.last_tonemap_drago is not None
-    assert fake_cv2.last_tonemap_drago.params["gamma"] == 1.0
-    np.testing.assert_allclose(drago_result, np.full((2, 2, 3), 0.8, dtype=np.float32))
+    assert abs(fake_cv2.last_tonemap_drago.params["gamma"] - (1.0 / 2.4)) < 1e-9
+    np.testing.assert_allclose(
+        drago_result,
+        np.full((2, 2, 3), 0.9063318, dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
 
     reinhard_result = dng2jpg_module._run_opencv_tonemap_backend(  # pylint: disable=protected-access
         bracket_images_float=bracket_images_float,
@@ -2924,18 +2926,20 @@ def test_run_opencv_tonemap_backend_dispatches_algorithms_with_fixed_gamma() -> 
         auto_adjust_dependencies=(fake_cv2, np),
         resolved_merge_gamma=dng2jpg_module.ResolvedMergeGamma(
             request=dng2jpg_module.MergeGammaOption(mode="auto"),
-            transfer="linear",
-            label="Linear",
-            param_a=None,
+            transfer="power",
+            label="Adobe RGB",
+            param_a=2.19921875,
             param_b=None,
-            evidence="default-linear",
+            evidence="exif-adobe-rgb",
         ),
     )
     assert fake_cv2.last_tonemap_reinhard is not None
-    assert fake_cv2.last_tonemap_reinhard.params["gamma"] == 1.0
+    assert abs(fake_cv2.last_tonemap_reinhard.params["gamma"] - (1.0 / 2.19921875)) < 1e-9
     np.testing.assert_allclose(
         reinhard_result,
-        np.full((2, 2, 3), 0.76, dtype=np.float32),
+        np.full((2, 2, 3), 0.8826837, dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
     )
 
     mantiuk_result = dng2jpg_module._run_opencv_tonemap_backend(  # pylint: disable=protected-access
@@ -2948,18 +2952,18 @@ def test_run_opencv_tonemap_backend_dispatches_algorithms_with_fixed_gamma() -> 
         auto_adjust_dependencies=(fake_cv2, np),
         resolved_merge_gamma=dng2jpg_module.ResolvedMergeGamma(
             request=dng2jpg_module.MergeGammaOption(mode="auto"),
-            transfer="linear",
-            label="Linear",
+            transfer="srgb",
+            label="sRGB",
             param_a=None,
             param_b=None,
-            evidence="default-linear",
+            evidence="unresolved-default-srgb",
         ),
     )
     assert fake_cv2.last_tonemap_mantiuk is not None
-    assert fake_cv2.last_tonemap_mantiuk.params["gamma"] == 1.0
+    assert abs(fake_cv2.last_tonemap_mantiuk.params["gamma"] - (1.0 / 2.4)) < 1e-9
     np.testing.assert_allclose(
         mantiuk_result,
-        np.full((2, 2, 3), 0.33, dtype=np.float32),
+        np.full((2, 2, 3), 0.6097116, dtype=np.float32),
         rtol=1e-6,
         atol=1e-6,
     )
