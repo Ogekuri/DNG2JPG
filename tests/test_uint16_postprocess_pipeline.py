@@ -1405,6 +1405,15 @@ def test_parse_run_options_accepts_white_balance_modes_and_selector_defaults() -
             parsed[4].white_balance_xphoto_domain
             == dng2jpg_module.DEFAULT_WHITE_BALANCE_XPHOTO_DOMAIN
         )
+    parsed_explicit_disable = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--ev=1", "--auto-white-balance=DISABLE"]
+    )
+    assert parsed_explicit_disable is not None
+    assert parsed_explicit_disable[4].white_balance_mode is None
+    assert (
+        parsed_explicit_disable[4].white_balance_xphoto_domain
+        == dng2jpg_module.DEFAULT_WHITE_BALANCE_XPHOTO_DOMAIN
+    )
     parsed_xphoto_domain = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         [
             "input.dng",
@@ -1972,7 +1981,10 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
     assert "Allowed values: Debevec, Robertson, Mertens." in output
     assert "Allowed values: rggb, bt709, mean." in output
     assert "Allowed values: GREEN, MAX, MIN, MEAN." in output
-    assert "Allowed values: Simple, GrayworldWB, IA, ColorConstancy, TTL." in output
+    assert (
+        "Allowed values: Simple, GrayworldWB, IA, ColorConstancy, TTL, disable."
+        in output
+    )
     assert "Effective only when `--hdr-merge=OpenCV-Merge`." in output
     assert "Effective only when `--hdr-merge=OpenCV-Tonemap`" in output
     assert "Effective only when `--hdr-merge=HDR-Plus`." in output

@@ -120,6 +120,7 @@ WHITE_BALANCE_MODE_GRAYWORLD = "GrayworldWB"
 WHITE_BALANCE_MODE_IA = "IA"
 WHITE_BALANCE_MODE_COLOR_CONSTANCY = "ColorConstancy"
 WHITE_BALANCE_MODE_TTL = "TTL"
+AUTO_WHITE_BALANCE_MODE_DISABLE = "disable"
 WHITE_BALANCE_XPHOTO_DOMAIN_LINEAR = "linear"
 WHITE_BALANCE_XPHOTO_DOMAIN_SRGB = "srgb"
 WHITE_BALANCE_XPHOTO_DOMAIN_SOURCE_AUTO = "source-auto"
@@ -276,6 +277,9 @@ _WHITE_BALANCE_MODES = (
     WHITE_BALANCE_MODE_IA,
     WHITE_BALANCE_MODE_COLOR_CONSTANCY,
     WHITE_BALANCE_MODE_TTL,
+)
+_AUTO_WHITE_BALANCE_MODE_OPTIONS = _WHITE_BALANCE_MODES + (
+    AUTO_WHITE_BALANCE_MODE_DISABLE,
 )
 _WHITE_BALANCE_ANALYSIS_SOURCES = (
     WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO,
@@ -1206,7 +1210,7 @@ def print_help(version):
         "Optional pre-bracketing white-balance stage executed after auto-brightness and before auto-zero evaluation.",
         (
             "Allowed values: "
-            + ", ".join(_WHITE_BALANCE_MODES)
+            + ", ".join(_AUTO_WHITE_BALANCE_MODE_OPTIONS)
             + ".",
             "Default: disabled (stage skipped when omitted).",
         ),
@@ -3976,9 +3980,11 @@ def _parse_auto_white_balance_mode_option(auto_white_balance_raw):
     """@brief Parse `--auto-white-balance` mode selector option value.
 
     @details Accepts case-insensitive auto-white-balance selector names and
-    normalizes them to canonical runtime mode names.
+    normalizes them to canonical runtime mode names, including explicit
+    `disable` alias token.
     @param auto_white_balance_raw {str} Raw `--auto-white-balance` selector token.
-    @return {str|None} Canonical auto-white-balance mode or `None` on parse failure.
+    @return {str|None} Canonical selector token including `disable` alias or
+    `None` on parse failure.
     @satisfies REQ-181, REQ-183
     """
 
@@ -3992,12 +3998,13 @@ def _parse_auto_white_balance_mode_option(auto_white_balance_raw):
         WHITE_BALANCE_MODE_IA.lower(): WHITE_BALANCE_MODE_IA,
         WHITE_BALANCE_MODE_COLOR_CONSTANCY.lower(): WHITE_BALANCE_MODE_COLOR_CONSTANCY,
         WHITE_BALANCE_MODE_TTL.lower(): WHITE_BALANCE_MODE_TTL,
+        AUTO_WHITE_BALANCE_MODE_DISABLE.lower(): AUTO_WHITE_BALANCE_MODE_DISABLE,
     }
     resolved_mode = mapping.get(auto_white_balance_text.lower())
     if resolved_mode is not None:
         return resolved_mode
     print_error(f"Invalid --auto-white-balance value: {auto_white_balance_raw}")
-    print_error("Allowed values: " + ", ".join(_WHITE_BALANCE_MODES))
+    print_error("Allowed values: " + ", ".join(_AUTO_WHITE_BALANCE_MODE_OPTIONS))
     return None
 
 
@@ -4875,7 +4882,10 @@ def _parse_run_options(args):
             )
             if parsed_auto_white_balance_mode is None:
                 return None
-            auto_white_balance_mode = parsed_auto_white_balance_mode
+            if parsed_auto_white_balance_mode == AUTO_WHITE_BALANCE_MODE_DISABLE:
+                auto_white_balance_mode = None
+            else:
+                auto_white_balance_mode = parsed_auto_white_balance_mode
             idx += 1
             continue
 
