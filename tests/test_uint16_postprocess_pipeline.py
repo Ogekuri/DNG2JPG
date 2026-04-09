@@ -1895,7 +1895,6 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
         "<output.jpg>",
         "--help",
         "--ev=<value>",
-        "--auto-ev=<enable|disable>",
         "--ev-zero=<value>",
         "--auto-ev-shadow-clipping=<0..100>",
         "--auto-ev-highlight-clipping=<0..100>",
@@ -1995,8 +1994,8 @@ def test_parse_run_options_rejects_unknown_hdr_merge_backend() -> None:
     assert parsed is None
 
 
-def test_parse_run_options_auto_ev_defaults_and_disable_behavior(capsys) -> None:
-    """`--auto-ev` must default to enabled and require another mode when disabled."""
+def test_parse_run_options_auto_ev_defaults_and_explicit_ev_auto() -> None:
+    """Auto exposure must default to enabled and be selectable by `--ev=auto`."""
 
     parsed_default_auto = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         ["input.dng", "output.jpg"]
@@ -2008,23 +2007,23 @@ def test_parse_run_options_auto_ev_defaults_and_disable_behavior(capsys) -> None
     assert auto_ev_options.shadow_clipping_pct == 20.0
     assert auto_ev_options.highlight_clipping_pct == 20.0
 
-    parsed_disabled_without_ev = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--auto-ev=disable"]
+    parsed_explicit_auto = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--ev=auto"]
     )
-    assert parsed_disabled_without_ev is None
-    captured = capsys.readouterr()
-    assert "No exposure mode selected: provide --ev or --auto-ev enable." in captured.err
+    assert parsed_explicit_auto is not None
+    assert parsed_explicit_auto[2] is None
+    assert parsed_explicit_auto[3] is True
 
 
-def test_parse_run_options_rejects_auto_ev_with_static_ev(capsys) -> None:
-    """`--auto-ev` and `--ev` must be mutually exclusive."""
+def test_parse_run_options_rejects_removed_auto_ev_option(capsys) -> None:
+    """Legacy `--auto-ev` must be rejected as removed option."""
 
     parsed_conflict = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--ev=1", "--auto-ev=enable"]
+        ["input.dng", "output.jpg", "--auto-ev=enable"]
     )
     assert parsed_conflict is None
     captured = capsys.readouterr()
-    assert "--auto-ev cannot be combined with --ev" in captured.err
+    assert "Removed option: --auto-ev" in captured.err
 
 
 def test_parse_run_options_static_ev_defaults_ev_zero_to_zero_with_unspecified_flag() -> None:
@@ -2061,7 +2060,7 @@ def test_parse_run_options_rejects_ev_zero_without_ev(capsys) -> None:
     )
     assert parsed is None
     captured = capsys.readouterr()
-    assert "--ev-zero requires --ev" in captured.err
+    assert "--ev-zero requires numeric --ev value" in captured.err
 
 
 def test_parse_run_options_rejects_removed_auto_zero_options(capsys) -> None:
@@ -2089,7 +2088,7 @@ def test_parse_run_options_accepts_new_auto_ev_clipping_options() -> None:
         [
             "input.dng",
             "output.jpg",
-            "--auto-ev=enable",
+            "--ev=auto",
             "--auto-ev-shadow-clipping=4",
             "--auto-ev-highlight-clipping=6",
             "--auto-ev-step=0.2",
@@ -5167,7 +5166,7 @@ def test_run_auto_ev_prints_joint_candidate_diagnostics(monkeypatch, tmp_path, c
         [
             str(input_dng),
             str(output_jpg),
-            "--auto-ev=enable",
+            "--ev=auto",
             "--hdr-merge=OpenCV-Merge",
         ]
     )

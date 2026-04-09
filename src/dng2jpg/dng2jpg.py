@@ -1163,18 +1163,10 @@ def print_help(version):
     _print_help_section("Step 2 - Exposure planning and RAW bracket extraction")
     _print_help_option(
         "--ev=<value>",
-        "Static symmetric bracket EV delta as one finite numeric value `>= 0`.",
+        "Exposure mode selector: use `auto` for automatic planning, or one finite numeric value `>= 0` for static symmetric bracket EV delta.",
         (
-            "Mutually exclusive with enabled `--auto-ev`.",
+            "Default: automatic planning when omitted.",
             "The exposure-measure EV triplet is still computed and printed.",
-        ),
-    )
-    _print_help_option(
-        "--auto-ev=<enable|disable>",
-        "Automatic symmetric exposure planner that selects `ev_zero` from the exposure-measure EV triplet and derives `ev_delta` through iterative clipping-threshold expansion.",
-        (
-            "Default: `enable` when `--ev` is omitted; `disable` when `--ev` is provided.",
-            "Rejected when combined with `--ev` or `--ev-zero`.",
         ),
     )
     _print_help_option(
@@ -1673,26 +1665,6 @@ def _parse_ev_zero_option(ev_zero_raw):
         return None
 
     return float(ev_zero_value)
-
-
-def _parse_auto_ev_option(auto_ev_raw):
-    """@brief Parse and validate one `--auto-ev` option value.
-
-    @details Accepts only explicit enable/disable tokens to keep deterministic
-    CLI behavior and unambiguous exclusivity handling with `--ev`.
-    @param auto_ev_raw {str} Raw `--auto-ev` value token from CLI args.
-    @return {bool|None} Parsed enable-state value; `None` on parse failure.
-    @satisfies CTN-003, REQ-009
-    """
-
-    auto_ev_text = auto_ev_raw.strip().lower()
-    if auto_ev_text == "enable":
-        return True
-    if auto_ev_text == "disable":
-        return False
-    print_error(f"Invalid --auto-ev value: {auto_ev_raw}")
-    print_error("Allowed values: enable, disable")
-    return None
 
 
 def _parse_percentage_option(option_name, option_raw):
@@ -4662,11 +4634,10 @@ def _apply_merge_gamma_float(np_module, image_rgb_float, resolved_merge_gamma):
 def _parse_run_options(args):
     """@brief Parse CLI args into input, output, and EV parameters.
 
-    @details Supports positional file arguments, static exposure selectors
-    (`--ev=<value>`/`--ev <value>` plus optional `--ev-zero=<value>`),
-    automatic exposure selector (`--auto-ev[=<enable|disable>]`) with explicit
-    mutual exclusion against `--ev`, optional automatic exposure clipping and
-    step controls, optional RAW white-balance normalization selector
+    @details Supports positional file arguments, exposure selector
+    (`--ev=<auto|value>` plus optional `--ev-zero=<value>`), optional
+    automatic exposure clipping and step controls, optional RAW white-balance
+    normalization selector
     (`--white-balance=<GREEN|MAX|MIN|MEAN>`),
     optional auto-white-balance selector (`--auto-white-balance=<mode>`) applied to
     the linear base image after auto-brightness and before auto-zero evaluation, optional xphoto estimation-domain selector
@@ -4685,13 +4656,13 @@ def _parse_run_options(args):
     defaulting to `auto` when omitted, rejects unknown options, and rejects
     invalid arity.
     @param args {list[str]} Raw command argument vector.
-    @return {tuple[Path, Path, float|None, bool, PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, bool, AutoEvOptions]|None} Parsed `(input, output, ev, auto_ev, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, ev_zero_specified, auto_ev_options)` tuple; `None` on parse failure.
+    @return {tuple[Path, Path, float|None, bool, PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, bool, AutoEvOptions]|None} Parsed `(input, output, ev, exposure_auto_enabled, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, ev_zero_specified, auto_ev_options)` tuple; `None` on parse failure.
     @satisfies CTN-002, CTN-003, REQ-007, REQ-008, REQ-009, REQ-018, REQ-020, REQ-022, REQ-023, REQ-024, REQ-025, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146, REQ-176, REQ-179, REQ-180, REQ-181, REQ-183, REQ-189, REQ-190, REQ-191, REQ-194, REQ-195, REQ-196, REQ-199, REQ-203, REQ-210
     """
 
     positional = []
     ev_value = None
-    auto_ev_enabled = None
+    auto_ev_enabled = True
     ev_zero = 0.0
     ev_zero_specified = False
     auto_ev_options = AutoEvOptions()
@@ -4729,7 +4700,6 @@ def _parse_run_options(args):
     luminance_tmo = DEFAULT_LUMINANCE_TMO
     luminance_tmo_extra_args = []
     luminance_option_specified = False
-    auto_ev_option_specified = False
     idx = 0
 
     while idx < len(args):
@@ -4984,21 +4954,23 @@ def _parse_run_options(args):
             continue
 
         if token.startswith("--ev="):
-            parsed_ev = _parse_ev_option(token.split("=", 1)[1])
+            ev_raw = token.split("=", 1)[1].strip()
+            if ev_raw.lower() == "auto":
+                ev_value = None
+                auto_ev_enabled = True
+                idx += 1
+                continue
+            parsed_ev = _parse_ev_option(ev_raw)
             if parsed_ev is None:
                 return None
             ev_value = parsed_ev
+            auto_ev_enabled = False
             idx += 1
             continue
 
-        if token.startswith("--auto-ev="):
-            parsed_auto_ev = _parse_auto_ev_option(token.split("=", 1)[1])
-            if parsed_auto_ev is None:
-                return None
-            auto_ev_enabled = parsed_auto_ev
-            auto_ev_option_specified = True
-            idx += 1
-            continue
+        if token == "--auto-ev" or token.startswith("--auto-ev="):
+            print_error("Removed option: --auto-ev")
+            return None
 
         if token == "--auto-zero" or token.startswith("--auto-zero="):
             print_error("Removed option: --auto-zero")
@@ -5154,23 +5126,12 @@ def _parse_run_options(args):
     if len(positional) != 2:
         print_error(
             "Usage: dng2jpg <input.dng> <output.jpg> "
-            "[--ev=<value>] [--auto-ev=<enable|disable>] [--ev-zero=<value>]"
+            "[--ev=<value>] [--ev-zero=<value>]"
         )
         return None
 
-    if auto_ev_enabled is None:
-        auto_ev_enabled = ev_value is None
-    if ev_value is not None and auto_ev_option_specified:
-        print_error("--auto-ev cannot be combined with --ev")
-        return None
-    if ev_value is None and not auto_ev_enabled:
-        print_error("No exposure mode selected: provide --ev or --auto-ev enable.")
-        return None
-    if ev_zero_specified and ev_value is None:
-        if auto_ev_option_specified and auto_ev_enabled:
-            print_error("--ev-zero cannot be combined with --auto-ev")
-        else:
-            print_error("--ev-zero requires --ev")
+    if ev_zero_specified and auto_ev_enabled:
+        print_error("--ev-zero requires numeric --ev value")
         return None
 
     if hdr_merge_mode not in _HDR_MERGE_MODES:
