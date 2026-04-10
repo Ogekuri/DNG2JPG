@@ -1166,19 +1166,19 @@ def print_help(version):
 
     _print_help_section("Step 2 - Exposure planning and RAW bracket extraction")
     _print_help_option(
-        "--ev-bracketing=<value>",
+        "--bracketing=<value>",
         "EV bracket half-span selector: use `auto` for iterative automatic delta, or one finite numeric value `>= 0` for static symmetric bracket EV delta.",
         (
             "Default: `1.0` (static) when omitted.",
-            "Use `--ev-bracketing=auto` to enable the iterative clipping-threshold algorithm.",
+            "Use `--bracketing=auto` to enable the iterative clipping-threshold algorithm.",
         ),
     )
     _print_help_option(
-        "--ev=<value>",
+        "--exposure=<value>",
         "EV bracket center selector: use `auto` for automatic center selection, or one finite numeric value for static center EV.",
         (
             "Default: `0.0` (static) when omitted.",
-            "Use `--ev=auto` to select ev_zero as min(|ev_best|,|ev_ettr|,|ev_detail|).",
+            "Use `--exposure=auto` to select ev_zero as min(|ev_best|,|ev_ettr|,|ev_detail|).",
             "No bit-depth-derived upper bound is enforced.",
         ),
     )
@@ -1622,7 +1622,7 @@ def _is_ev_value_on_supported_step(ev_value):
 
 
 def _parse_ev_option(ev_raw):
-    """@brief Parse and validate one `--ev-bracketing` static value.
+    """@brief Parse and validate one `--bracketing` static value.
 
     @details Converts token to `float`, enforces finiteness and non-negativity,
     and preserves the parsed static bracket half-span without applying any
@@ -1636,12 +1636,12 @@ def _parse_ev_option(ev_raw):
     try:
         ev_value = float(ev_raw)
     except ValueError:
-        print_error(f"Invalid --ev-bracketing value: {ev_raw}")
+        print_error(f"Invalid --bracketing value: {ev_raw}")
         print_error("Allowed values: finite numeric >= 0")
         return None
 
     if ev_value < 0.0 or not _is_ev_value_on_supported_step(ev_value):
-        print_error(f"Unsupported --ev-bracketing value: {ev_raw}")
+        print_error(f"Unsupported --bracketing value: {ev_raw}")
         print_error("Allowed values: finite numeric >= 0")
         return None
 
@@ -1649,7 +1649,7 @@ def _parse_ev_option(ev_raw):
 
 
 def _parse_ev_center_option(ev_center_raw):
-    """@brief Parse and validate one `--ev` center option value.
+    """@brief Parse and validate one `--exposure` center option value.
 
     @details Converts token to `float`, enforces finiteness, and preserves
     static center EV value without applying bit-depth-derived upper bounds.
@@ -1663,12 +1663,12 @@ def _parse_ev_center_option(ev_center_raw):
     try:
         ev_center_value = float(ev_center_raw)
     except ValueError:
-        print_error(f"Invalid --ev value: {ev_center_raw}")
+        print_error(f"Invalid --exposure value: {ev_center_raw}")
         print_error("Allowed values: finite numeric or auto")
         return None
 
     if not _is_ev_value_on_supported_step(ev_center_value):
-        print_error(f"Unsupported --ev value: {ev_center_raw}")
+        print_error(f"Unsupported --exposure value: {ev_center_raw}")
         print_error("Allowed values: finite numeric or auto")
         return None
 
@@ -2869,7 +2869,7 @@ def _select_ev_zero_candidate(evaluations):
 
     @details Selects the minimum absolute-value EV candidate using deterministic
     tie-break order `abs(value) -> declaration order -> numeric value` without
-    applying bit-depth-derived clamping. Invoked only when `--ev=auto` is active.
+    applying bit-depth-derived clamping. Invoked only when `--exposure=auto` is active.
     @param evaluations {AutoZeroEvaluation} Exposure-measure EV values.
     @return {tuple[float, str]} Selected `(ev_zero, source_label)` pair.
     @satisfies REQ-032, CTN-007
@@ -4675,8 +4675,8 @@ def _parse_run_options(args):
     """@brief Parse CLI args into input, output, and EV parameters.
 
     @details Supports positional file arguments, bracket delta selector
-    (`--ev-bracketing=<auto|value>`, default `1.0` static), bracket center selector
-    (`--ev=<auto|value>`, default `0.0` static), optional
+    (`--bracketing=<auto|value>`, default `1.0` static), bracket center selector
+    (`--exposure=<auto|value>`, default `0.0` static), optional
     automatic exposure clipping and step controls, optional RAW white-balance
     normalization selector
     (`--white-balance=<GREEN|MAX|MIN|MEAN>`),
@@ -4997,7 +4997,7 @@ def _parse_run_options(args):
             idx += 1
             continue
 
-        if token.startswith("--ev-bracketing="):
+        if token.startswith("--bracketing="):
             ev_raw = token.split("=", 1)[1].strip()
             if ev_raw.lower() == "auto":
                 ev_value = None
@@ -5011,32 +5011,6 @@ def _parse_run_options(args):
             auto_ev_delta_enabled = False
             idx += 1
             continue
-
-        if token == "--auto-ev" or token.startswith("--auto-ev="):
-            print_error("Removed option: --auto-ev")
-            return None
-
-        if token == "--auto-zero" or token.startswith("--auto-zero="):
-            print_error("Removed option: --auto-zero")
-            return None
-
-        if token == "--auto-zero-pct" or token.startswith("--auto-zero-pct="):
-            print_error("Removed option: --auto-zero-pct")
-            return None
-
-        if token in (
-            "--auto-ev-shadow-target",
-            "--auto-ev-highlight-target",
-            "--auto-ev-pct",
-        ) or token.startswith(
-            (
-                "--auto-ev-shadow-target=",
-                "--auto-ev-highlight-target=",
-                "--auto-ev-pct=",
-            )
-        ):
-            print_error(f"Removed option: {token.split('=', 1)[0]}")
-            return None
 
         if token.startswith("--auto-ev-shadow-clipping="):
             parsed_threshold = _parse_percentage_option(
@@ -5080,11 +5054,7 @@ def _parse_run_options(args):
             idx += 1
             continue
 
-        if token == "--ev-zero" or token.startswith("--ev-zero="):
-            print_error("Removed option: --ev-zero")
-            return None
-
-        if token.startswith("--ev="):
+        if token.startswith("--exposure="):
             ev_center_raw = token.split("=", 1)[1].strip()
             if ev_center_raw.lower() == "auto":
                 auto_ev_zero_enabled = True
@@ -5179,7 +5149,7 @@ def _parse_run_options(args):
     if len(positional) != 2:
         print_error(
             "Usage: dng2jpg <input.dng> <output.jpg> "
-            "[--ev-bracketing=<auto|value>] [--ev=<auto|value>]"
+            "[--bracketing=<auto|value>] [--exposure=<auto|value>]"
         )
         return None
 
@@ -12485,8 +12455,8 @@ def run(args):
 
     @details Parses command options, validates dependencies, detects source DNG
     bits-per-color from RAW metadata, resolves `ev_zero` (static `0.0` default,
-    static `--ev=<value>`, or auto via `--ev=auto`) and `ev_delta` (static `1.0`
-    default, static `--ev-bracketing=<value>`, or auto via `--ev-bracketing=auto`),
+    static `--exposure=<value>`, or auto via `--exposure=auto`) and `ev_delta` (static `1.0`
+    default, static `--bracketing=<value>`, or auto via `--bracketing=auto`),
     extracts one linear HDR
     base image using selected RAW WB normalization mode and derives three
     normalized RGB float brackets, executes the selected HDR backend with float
@@ -12800,7 +12770,7 @@ def run(args):
                 elif auto_ev_delta_enabled:
                     resolved_ev_zero = ev_zero
                     if auto_adjust_dependencies is None:
-                        raise RuntimeError("Missing auto-adjust dependencies for --ev-bracketing=auto")
+                        raise RuntimeError("Missing auto-adjust dependencies for --bracketing=auto")
                     _cv2_unused, np_module_for_delta = auto_adjust_dependencies
                     effective_ev_value, _iteration_steps = _resolve_auto_ev_delta(
                         np_module=np_module_for_delta,
@@ -12810,7 +12780,7 @@ def run(args):
                     )
                 elif auto_ev_zero_enabled:
                     if auto_adjust_dependencies is None:
-                        raise RuntimeError("Missing auto-adjust dependencies for --ev=auto")
+                        raise RuntimeError("Missing auto-adjust dependencies for --exposure=auto")
                     cv2_module_for_ev, np_module_for_ev = auto_adjust_dependencies
                     evaluations = _calculate_auto_zero_evaluations(
                         cv2_module=cv2_module_for_ev,
@@ -12828,7 +12798,7 @@ def run(args):
                         f"{resolved_ev_zero:+.6f} EV (source={_selected_source})"
                     )
                     if ev_value is None:
-                        raise ValueError("Missing static EV value for --ev=auto without --ev-bracketing=auto")
+                        raise ValueError("Missing static EV value for --exposure=auto without --bracketing=auto")
                     effective_ev_value = ev_value
                 else:
                     resolved_ev_zero = ev_zero
