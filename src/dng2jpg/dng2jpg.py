@@ -140,29 +140,29 @@ OPENCV_MERGE_ALGORITHM_ROBERTSON = "Robertson"
 OPENCV_MERGE_ALGORITHM_MERTENS = "Mertens"
 DEFAULT_REINHARD02_POST_GAMMA = 0.9
 DEFAULT_REINHARD02_BRIGHTNESS = 1.3
-DEFAULT_REINHARD02_CONTRAST = 0.75
+DEFAULT_REINHARD02_CONTRAST = 0.9
 DEFAULT_REINHARD02_SATURATION = 0.7
-DEFAULT_MANTIUK08_POST_GAMMA = 0.8
+DEFAULT_MANTIUK08_POST_GAMMA = 0.9
 DEFAULT_MANTIUK08_BRIGHTNESS = 0.8
-DEFAULT_MANTIUK08_CONTRAST = 1.1
+DEFAULT_MANTIUK08_CONTRAST = 1.2
 DEFAULT_MANTIUK08_SATURATION = 1.05
-DEFAULT_HDRPLUS_POST_GAMMA = 0.8
+DEFAULT_HDRPLUS_POST_GAMMA = 0.9
 DEFAULT_HDRPLUS_BRIGHTNESS = 0.9
-DEFAULT_HDRPLUS_CONTRAST = 1.0
+DEFAULT_HDRPLUS_CONTRAST = 1.2
 DEFAULT_HDRPLUS_SATURATION = 1.0
 DEFAULT_OPENCV_DEBEVEC_POST_GAMMA = 1.0
-DEFAULT_OPENCV_DEBEVEC_BRIGHTNESS = 1.0
+DEFAULT_OPENCV_DEBEVEC_BRIGHTNESS = 1.2
 DEFAULT_OPENCV_DEBEVEC_CONTRAST = 1.5
-DEFAULT_OPENCV_DEBEVEC_SATURATION = 1.05
+DEFAULT_OPENCV_DEBEVEC_SATURATION = 1.0
 DEFAULT_OPENCV_DEBEVEC_TONEMAP_GAMMA = 1.0
 DEFAULT_OPENCV_ROBERTSON_POST_GAMMA = 1.0
-DEFAULT_OPENCV_ROBERTSON_BRIGHTNESS = 1.0
+DEFAULT_OPENCV_ROBERTSON_BRIGHTNESS = 1.4
 DEFAULT_OPENCV_ROBERTSON_CONTRAST = 1.4
-DEFAULT_OPENCV_ROBERTSON_SATURATION = 1.05
+DEFAULT_OPENCV_ROBERTSON_SATURATION = 1.0
 DEFAULT_OPENCV_ROBERTSON_TONEMAP_GAMMA = 0.9
 DEFAULT_OPENCV_MERTENS_POST_GAMMA = 1.0
 DEFAULT_OPENCV_MERTENS_BRIGHTNESS = 0.9
-DEFAULT_OPENCV_MERTENS_CONTRAST = 1.3
+DEFAULT_OPENCV_MERTENS_CONTRAST = 1.4
 DEFAULT_OPENCV_MERTENS_SATURATION = 1.1
 DEFAULT_OPENCV_MERTENS_TONEMAP_GAMMA = 0.8
 DEFAULT_OPENCV_POST_GAMMA = DEFAULT_OPENCV_ROBERTSON_POST_GAMMA
@@ -179,6 +179,18 @@ DEFAULT_OPENCV_TONEMAP_REINHARD_LIGHT_ADAPT = 0.0
 DEFAULT_OPENCV_TONEMAP_REINHARD_COLOR_ADAPT = 0.0
 DEFAULT_OPENCV_TONEMAP_MANTIUK_SCALE = 0.7
 DEFAULT_OPENCV_TONEMAP_MANTIUK_SATURATION = 1.0
+DEFAULT_OPENCV_TONEMAP_DRAGO_POST_GAMMA = 1.0
+DEFAULT_OPENCV_TONEMAP_DRAGO_BRIGHTNESS = 1.0
+DEFAULT_OPENCV_TONEMAP_DRAGO_CONTRAST = 1.4
+DEFAULT_OPENCV_TONEMAP_DRAGO_SATURATION = 0.6
+DEFAULT_OPENCV_TONEMAP_REINHARD_POST_GAMMA = 1.0
+DEFAULT_OPENCV_TONEMAP_REINHARD_BRIGHTNESS = 1.0
+DEFAULT_OPENCV_TONEMAP_REINHARD_CONTRAST = 1.0
+DEFAULT_OPENCV_TONEMAP_REINHARD_SATURATION = 1.0
+DEFAULT_OPENCV_TONEMAP_MANTIUK_POST_GAMMA = 0.9
+DEFAULT_OPENCV_TONEMAP_MANTIUK_BRIGHTNESS = 1.2
+DEFAULT_OPENCV_TONEMAP_MANTIUK_CONTRAST = 1.4
+DEFAULT_OPENCV_TONEMAP_MANTIUK_SATURATION = 0.5
 DEFAULT_HDRPLUS_PROXY_MODE = "rggb"
 DEFAULT_HDRPLUS_SEARCH_RADIUS = 4
 DEFAULT_HDRPLUS_TEMPORAL_FACTOR = 8.0
@@ -1134,6 +1146,21 @@ def print_help(version):
             HDR_MERGE_MODE_OPENCV_MERGE,
             OPENCV_MERGE_ALGORITHM_MERTENS,
             f"{DEFAULT_OPENCV_MERTENS_POST_GAMMA:g} / {DEFAULT_OPENCV_MERTENS_BRIGHTNESS:g} / {DEFAULT_OPENCV_MERTENS_CONTRAST:g} / {DEFAULT_OPENCV_MERTENS_SATURATION:g}",
+        ),
+        (
+            HDR_MERGE_MODE_OPENCV_TONEMAP,
+            OPENCV_TONEMAP_MAP_DRAGO,
+            f"{DEFAULT_OPENCV_TONEMAP_DRAGO_POST_GAMMA:g} / {DEFAULT_OPENCV_TONEMAP_DRAGO_BRIGHTNESS:g} / {DEFAULT_OPENCV_TONEMAP_DRAGO_CONTRAST:g} / {DEFAULT_OPENCV_TONEMAP_DRAGO_SATURATION:g}",
+        ),
+        (
+            HDR_MERGE_MODE_OPENCV_TONEMAP,
+            OPENCV_TONEMAP_MAP_REINHARD,
+            f"{DEFAULT_OPENCV_TONEMAP_REINHARD_POST_GAMMA:g} / {DEFAULT_OPENCV_TONEMAP_REINHARD_BRIGHTNESS:g} / {DEFAULT_OPENCV_TONEMAP_REINHARD_CONTRAST:g} / {DEFAULT_OPENCV_TONEMAP_REINHARD_SATURATION:g}",
+        ),
+        (
+            HDR_MERGE_MODE_OPENCV_TONEMAP,
+            OPENCV_TONEMAP_MAP_MANTIUK,
+            f"{DEFAULT_OPENCV_TONEMAP_MANTIUK_POST_GAMMA:g} / {DEFAULT_OPENCV_TONEMAP_MANTIUK_BRIGHTNESS:g} / {DEFAULT_OPENCV_TONEMAP_MANTIUK_CONTRAST:g} / {DEFAULT_OPENCV_TONEMAP_MANTIUK_SATURATION:g}",
         ),
         (
             HDR_MERGE_MODE_HDR_PLUS,
@@ -4164,17 +4191,20 @@ def _resolve_default_postprocess(
     hdr_merge_mode,
     luminance_tmo,
     opencv_merge_algorithm=DEFAULT_OPENCV_MERGE_ALGORITHM,
+    opencv_tonemap_algorithm=None,
 ):
     """@brief Resolve backend-specific postprocess defaults.
 
     @details Selects backend-specific defaults. Uses algorithm-specific OpenCV
-    defaults keyed by resolved `Debevec|Robertson|Mertens`, luminance-operator-
+    defaults keyed by resolved `Debevec|Robertson|Mertens`, OpenCV-Tonemap
+    defaults keyed by resolved `drago|reinhard|mantiuk`, luminance-operator-
     specific defaults for `Luminace-HDR` (`mantiuk08`, `reinhard02`),
     configured defaults for `HDR-Plus`, and generic fallback defaults for
     untuned luminance operators. Complexity: O(1). Side effects: none.
     @param hdr_merge_mode {str} Canonical HDR merge mode selector.
     @param luminance_tmo {str} Selected luminance tone-mapping operator.
     @param opencv_merge_algorithm {str} Resolved OpenCV merge algorithm selector.
+    @param opencv_tonemap_algorithm {str|None} Resolved OpenCV-Tonemap algorithm selector.
     @return {tuple[float, float, float, float]} Defaults in `(post_gamma, brightness, contrast, saturation)` order.
     @satisfies DES-006, DES-008, REQ-145
     """
@@ -4204,6 +4234,32 @@ def _resolve_default_postprocess(
             opencv_merge_algorithm,
             opencv_defaults[DEFAULT_OPENCV_MERGE_ALGORITHM],
         )
+
+    if hdr_merge_mode == HDR_MERGE_MODE_OPENCV_TONEMAP:
+        tonemap_defaults = {
+            OPENCV_TONEMAP_MAP_DRAGO: (
+                DEFAULT_OPENCV_TONEMAP_DRAGO_POST_GAMMA,
+                DEFAULT_OPENCV_TONEMAP_DRAGO_BRIGHTNESS,
+                DEFAULT_OPENCV_TONEMAP_DRAGO_CONTRAST,
+                DEFAULT_OPENCV_TONEMAP_DRAGO_SATURATION,
+            ),
+            OPENCV_TONEMAP_MAP_REINHARD: (
+                DEFAULT_OPENCV_TONEMAP_REINHARD_POST_GAMMA,
+                DEFAULT_OPENCV_TONEMAP_REINHARD_BRIGHTNESS,
+                DEFAULT_OPENCV_TONEMAP_REINHARD_CONTRAST,
+                DEFAULT_OPENCV_TONEMAP_REINHARD_SATURATION,
+            ),
+            OPENCV_TONEMAP_MAP_MANTIUK: (
+                DEFAULT_OPENCV_TONEMAP_MANTIUK_POST_GAMMA,
+                DEFAULT_OPENCV_TONEMAP_MANTIUK_BRIGHTNESS,
+                DEFAULT_OPENCV_TONEMAP_MANTIUK_CONTRAST,
+                DEFAULT_OPENCV_TONEMAP_MANTIUK_SATURATION,
+            ),
+        }
+        resolved_tonemap_algorithm = OPENCV_TONEMAP_MAP_REINHARD
+        if opencv_tonemap_algorithm in tonemap_defaults:
+            resolved_tonemap_algorithm = opencv_tonemap_algorithm
+        return tonemap_defaults[resolved_tonemap_algorithm]
 
     if hdr_merge_mode == HDR_MERGE_MODE_HDR_PLUS:
         return (
@@ -5241,6 +5297,11 @@ def _parse_run_options(args):
         hdr_merge_mode,
         luminance_tmo,
         opencv_merge_algorithm=opencv_merge_options.merge_algorithm,
+        opencv_tonemap_algorithm=(
+            opencv_tonemap_options.tonemap_map
+            if opencv_tonemap_options is not None
+            else None
+        ),
     )
     if not post_gamma_set:
         post_gamma = backend_post_gamma

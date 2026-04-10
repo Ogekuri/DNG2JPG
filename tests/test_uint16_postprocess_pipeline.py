@@ -1300,7 +1300,7 @@ def test_parse_run_options_accepts_remaining_auto_brightness_controls() -> None:
         [
             "input.dng",
             "output.jpg",
-            "--ev-bracketing=1",
+            "--bracketing=1",
             "--auto-brightness=enable",
             "--ab-key-value=0.22",
             "--ab-white-point-pct=99.5",
@@ -1334,7 +1334,7 @@ def test_parse_run_options_accepts_auto_adjust_clahe_controls() -> None:
         [
             "input.dng",
             "output.jpg",
-            "--ev-bracketing=1",
+            "--bracketing=1",
             "--auto-adjust=enable",
             "--aa-enable-local-contrast=false",
             "--aa-local-contrast-strength=0.35",
@@ -1764,7 +1764,7 @@ def test_parse_run_options_accepts_opencv_tonemap_backend_and_requires_single_se
         [
             "input.dng",
             "output.jpg",
-            "--ev-bracketing=1",
+            "--bracketing=1",
             "--hdr-merge=OpenCV-Tonemap",
             "--opencv-tonemap-algorithm=drago",
         ]
@@ -1778,7 +1778,7 @@ def test_parse_run_options_accepts_opencv_tonemap_backend_and_requires_single_se
     assert parsed[10] is False
 
     missing_selector = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--ev-bracketing=1", "--hdr-merge=OpenCV-Tonemap"]
+        ["input.dng", "output.jpg", "--bracketing=1", "--hdr-merge=OpenCV-Tonemap"]
     )
     assert missing_selector is None
 
@@ -1786,7 +1786,7 @@ def test_parse_run_options_accepts_opencv_tonemap_backend_and_requires_single_se
         [
             "input.dng",
             "output.jpg",
-            "--ev-bracketing=1",
+            "--bracketing=1",
             "--hdr-merge=OpenCV-Tonemap",
             "--opencv-tonemap-algorithm=drago",
             "--opencv-tonemap-algorithm=reinhard",
@@ -1799,9 +1799,9 @@ def test_resolve_default_postprocess_opencv_uses_updated_static_defaults() -> No
     """OpenCV backend defaults must resolve to the updated static factors."""
 
     expected_defaults = {
-        dng2jpg_module.OPENCV_MERGE_ALGORITHM_DEBEVEC: (1.0, 1.0, 1.5, 1.05),
-        dng2jpg_module.OPENCV_MERGE_ALGORITHM_ROBERTSON: (1.0, 1.0, 1.4, 1.05),
-        dng2jpg_module.OPENCV_MERGE_ALGORITHM_MERTENS: (1.0, 0.9, 1.3, 1.1),
+        dng2jpg_module.OPENCV_MERGE_ALGORITHM_DEBEVEC: (1.0, 1.2, 1.5, 1.0),
+        dng2jpg_module.OPENCV_MERGE_ALGORITHM_ROBERTSON: (1.0, 1.4, 1.4, 1.0),
+        dng2jpg_module.OPENCV_MERGE_ALGORITHM_MERTENS: (1.0, 0.9, 1.4, 1.1),
     }
     for algorithm, expected in expected_defaults.items():
         defaults = dng2jpg_module._resolve_default_postprocess(  # pylint: disable=protected-access
@@ -1819,7 +1819,7 @@ def test_resolve_default_postprocess_hdrplus_uses_updated_static_defaults() -> N
         dng2jpg_module.HDR_MERGE_MODE_HDR_PLUS,
         dng2jpg_module.DEFAULT_LUMINANCE_TMO,
     )
-    assert defaults == (0.8, 0.9, 1.0, 1.0)
+    assert defaults == (0.9, 0.9, 1.2, 1.0)
 
 
 def test_resolve_default_postprocess_luminance_uses_updated_tmo_defaults() -> None:
@@ -1833,8 +1833,25 @@ def test_resolve_default_postprocess_luminance_uses_updated_tmo_defaults() -> No
         dng2jpg_module.HDR_MERGE_MODE_LUMINANCE,
         "reinhard02",
     )
-    assert mantiuk_defaults == (0.8, 0.8, 1.1, 1.05)
-    assert reinhard_defaults == (0.9, 1.3, 0.75, 0.7)
+    assert mantiuk_defaults == (0.9, 0.8, 1.2, 1.05)
+    assert reinhard_defaults == (0.9, 1.3, 0.9, 0.7)
+
+
+def test_resolve_default_postprocess_opencv_tonemap_uses_algorithm_defaults() -> None:
+    """OpenCV-Tonemap defaults must resolve per selected tone-map algorithm."""
+
+    expected_defaults = {
+        dng2jpg_module.OPENCV_TONEMAP_MAP_DRAGO: (1.0, 1.0, 1.4, 0.6),
+        dng2jpg_module.OPENCV_TONEMAP_MAP_REINHARD: (1.0, 1.0, 1.0, 1.0),
+        dng2jpg_module.OPENCV_TONEMAP_MAP_MANTIUK: (0.9, 1.2, 1.4, 0.5),
+    }
+    for algorithm, expected in expected_defaults.items():
+        defaults = dng2jpg_module._resolve_default_postprocess(  # pylint: disable=protected-access
+            dng2jpg_module.HDR_MERGE_MODE_OPENCV_TONEMAP,
+            dng2jpg_module.DEFAULT_LUMINANCE_TMO,
+            opencv_tonemap_algorithm=algorithm,
+        )
+        assert defaults == expected
 
 
 def test_print_help_orders_sections_by_pipeline_step(capsys) -> None:
@@ -1903,8 +1920,8 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
         "<input.dng>",
         "<output.jpg>",
         "--help",
-        "--ev-bracketing=<value>",
-        "--ev-zero=<value>",
+        "--bracketing=<value>",
+        "--exposure=<value>",
         "--auto-ev-shadow-clipping=<0..100>",
         "--auto-ev-highlight-clipping=<0..100>",
         "--auto-ev-step=<value>",
@@ -1995,6 +2012,14 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
     assert "Default: `enable`." in output
     assert "Default by algorithm: `Debevec=1`, `Robertson=0.9`, `Mertens=0.8`." in output
     assert "Static postprocess defaults when omitted:" in output
+    assert "HDR-Plus" in output and "0.9 / 0.9 / 1.2 / 1" in output
+    assert "mantiuk08" in output and "0.9 / 0.8 / 1.2 / 1.05" in output
+    assert "reinhard02" in output and "0.9 / 1.3 / 0.9 / 0.7" in output
+    assert "Debevec" in output and "1 / 1.2 / 1.5 / 1" in output
+    assert "Mertens" in output and "1 / 0.9 / 1.4 / 1.1" in output
+    assert "Robertson" in output and "1 / 1.4 / 1.4 / 1" in output
+    assert "drago" in output and "1 / 1 / 1.4 / 0.6" in output
+    assert "mantiuk" in output and "0.9 / 1.2 / 1.4 / 0.5" in output
 
 
 def test_parse_run_options_rejects_unknown_hdr_merge_backend() -> None:

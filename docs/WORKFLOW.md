@@ -139,7 +139,7 @@
         - _parse_ev_center_option(...): EV center parsing for `--exposure=<value>` (numeric only; auto sentinel handled inline) [src/dng2jpg/dng2jpg.py]
         - _parse_gamma_option(...): post-gamma numeric parsing [src/dng2jpg/dng2jpg.py]
         - _parse_jpg_compression_option(...): JPG compression parsing [src/dng2jpg/dng2jpg.py]
-        - _resolve_default_postprocess(...): backend default postprocess profile resolution [src/dng2jpg/dng2jpg.py]
+        - _resolve_default_postprocess(...): backend default postprocess profile resolution keyed by backend variant (`Luminace-HDR`, `OpenCV-Merge`, `OpenCV-Tonemap`, `HDR-Plus`) [src/dng2jpg/dng2jpg.py]
       - _derive_opencv_tonemap_enabled(postprocess_options): backend gate derivation [src/dng2jpg/dng2jpg.py]
       - _build_debug_artifact_context(output_jpg, input_dng, postprocess_options): debug path setup [src/dng2jpg/dng2jpg.py]
       - _collect_missing_external_executables(enable_luminance): external binary checks [src/dng2jpg/dng2jpg.py]
