@@ -84,7 +84,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **CTN-001**: MUST execute conversion only on Linux runtime and reject unsupported operating systems with explicit error output.
 - **CTN-002**: MUST parse `--hdr-merge <Luminace-HDR|OpenCV-Merge|HDR-Plus>` and MUST default to `OpenCV-Merge` when omitted.
 - **CTN-003**: MUST resolve `ev_delta` from `--bracketing`: absent → `ev_delta=1.0` (static); `--bracketing=<value>` → `ev_delta=<value>` (static); `--bracketing=auto` → `ev_delta` from iterative automatic algorithm.
-- **CTN-007**: MUST resolve `ev_zero` from `--exposure`: absent → `ev_zero=0.0` (static); `--exposure=<value>` → `ev_zero=<value>` (static); `--exposure=auto` → signed candidate with minimum absolute value among `ev_best`, `ev_ettr`, `ev_detail`, using tie order `ev_best`, `ev_ettr`, `ev_detail`.
+- **CTN-007**: MUST resolve `ev_zero` from `--exposure`: absent → `ev_zero=0.0` (static); `--exposure=<value>` → `ev_zero=<value>` (static); `--exposure=auto` → `ev_zero=min(ev_best, ev_ettr, ev_detail)` preserving candidate signs.
 - **CTN-004**: MUST require `.dng` input extension, existing input file, and existing output parent directory.
 - **CTN-005**: MUST preflight-check each external executable selected by resolved options (`luminance-hdr-cli`) and MUST fail before processing with explicit diagnostics naming every missing executable.
 - **CTN-006**: MUST reject launcher execution when resolved launcher base directory differs from repository git root.
@@ -156,7 +156,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-207**: MUST implement `MEAN` normalization by dividing all RAW WB coefficients by their arithmetic mean so the normalized mean gain equals `1.0`.
 - **REQ-208**: MUST print one RAW WB normalization diagnostic before exposure planning containing rawpy-extracted RGB coefficients, selected normalization mode (`GREEN|MAX|MIN|MEAN`), and normalized RGB gains used for white-balance application.
 - **REQ-209**: MUST format every numeric coefficient in RAW WB normalization diagnostics as fixed-point float with exactly four fractional digits.
-- **REQ-032**: MUST evaluate `ev_best`, `ev_ettr`, and `ev_detail` on the normalized linear gamma=`1` RGB image after optional auto-brightness and auto-white-balance only when `--exposure=auto` is active, and MUST select `ev_zero` as the signed minimum absolute-value candidate with tie order `ev_best`, `ev_ettr`, `ev_detail`.
+- **REQ-032**: MUST evaluate `ev_best`, `ev_ettr`, and `ev_detail` on the normalized linear gamma=`1` RGB image after optional auto-brightness and auto-white-balance only when `--exposure=auto` is active, and MUST select `ev_zero` as `min(ev_best, ev_ettr, ev_detail)` preserving candidate signs.
 - **REQ-166**: MUST expose `--auto-ev-step` as a positive configurable EV increment for iterative bracket expansion, defaulting to `0.1`.
 - **REQ-167**: MUST derive `ev_delta` by iterating from `auto_ev_step`, evaluating unclipped bracket images at `ev_zero-ev_delta` and `ev_zero+ev_delta`, and stopping at the first step where shadow clipping exceeds `--auto-ev-shadow-clipping` or highlight clipping reaches `--auto-ev-highlight-clipping`.
 - **REQ-168**: MUST measure highlight clipping as the percentage of pixels in the plus image with any channel `>=1` and shadow clipping as the percentage of pixels in the minus image with any channel `<=0`.
@@ -273,7 +273,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-001**: MUST verify `_parse_run_options` defaults to `ev_delta=1.0` (static) and `ev_zero=0.0` (static) when both `--bracketing` and `--exposure` are absent; accepts `--bracketing=auto`, finite numeric `--bracketing`, `--exposure=auto`, and finite numeric `--exposure`; parses and rejects unknown `--hdr-merge` values.
 - **TST-002**: MUST verify `run` returns `1` for unsupported runtime OS and for missing `luminance-hdr-cli` dependency with deterministic diagnostics naming each missing executable.
 - **TST-003**: MUST verify successful `run` execution returns `0`, writes output JPG, and emits success message `HDR JPG created: <output>`.
-- **TST-004**: MUST verify `ev_zero` auto-selection chooses the signed minimum absolute-value candidate among `ev_best`, `ev_ettr`, and `ev_detail`, and resolves absolute-value ties by order `ev_best`, `ev_ettr`, `ev_detail` when `--exposure=auto` is active.
+- **TST-004**: MUST verify `ev_zero` auto-selection chooses `min(ev_best, ev_ettr, ev_detail)` preserving candidate signs when `--exposure=auto` is active.
 - **TST-005**: MUST verify static exposure resolution preserves manual `--bracketing` and `--exposure` values, defaults `ev_delta=1.0` and `ev_zero=0.0` when absent, rejects negative or non-finite `--bracketing`, and does not enforce `0.25` EV increments or bit-depth-derived upper bounds.
 - **TST-006**: MUST verify `_run_luminance_hdr_cli` builds deterministic argument order and includes any `--tmo*` passthrough pairs unchanged.
 - **TST-007**: MUST verify `_extract_dng_exif_payload_and_timestamp` applies datetime priority `36867` then `36868` then `306` and extracts EXIF `ExposureTime` as positive seconds.
@@ -361,7 +361,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | CTN-001 | `src/dng2jpg/dng2jpg.py::_is_supported_runtime_os`; excerpt: returns true only on Linux and prints Linux-only error otherwise. |
 | CTN-002 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: parses `--hdr-merge` from the remaining backend set and defaults to `OpenCV-Merge` when omitted. |
 | CTN-003 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: resolves `ev_delta` from `--bracketing` (absent→1.0 static, numeric→static, auto→auto algorithm). |
-| CTN-007 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: resolves `ev_zero` from `--exposure` (absent→0.0 static, numeric→static, auto→signed minimum absolute-value selection with deterministic tie order). |
+| CTN-007 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: resolves `ev_zero` from `--exposure` (absent→0.0 static, numeric→static, auto→signed numeric minimum of `ev_best`, `ev_ettr`, `ev_detail`). |
 | CTN-004 | `src/dng2jpg/dng2jpg.py::run`; excerpt: validates `.dng` suffix, input existence, and output parent directory existence. |
 | CTN-005 | `src/dng2jpg/dng2jpg.py::_collect_missing_external_executables`, `run`; excerpt: explicit preflight for selected external commands and deterministic missing-dependency diagnostics. |
 | CTN-006 | `scripts/d2j.sh`; excerpt: compares `${PROJECT_ROOT}` and `${BASE_DIR}` and exits `1` on mismatch. |
@@ -405,7 +405,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-027 | `src/dng2jpg/dng2jpg.py::_validate_supported_bits_per_color`; excerpt: raises on bit depth below `MIN_SUPPORTED_BITS_PER_COLOR=9`. |
 | REQ-030 | `src/dng2jpg/dng2jpg.py::_parse_ev_option`, `_parse_ev_center_option`; excerpt: finite static EV parsing enforces non-negative `--bracketing` only and omits bit-depth-derived upper-bound checks. |
 | REQ-031 | `src/dng2jpg/dng2jpg.py::_extract_base_rgb_linear_float`; excerpt: applies camera white-balance gains normalized relative to the green coefficient from `rawpy.camera_whitebalance` to the shared neutral base image before exposure planning. |
-| REQ-032 | `src/dng2jpg/dng2jpg.py::_calculate_auto_zero_evaluations`, `_select_ev_zero_candidate`, `run`; excerpt: evaluates candidates and selects signed minimum absolute-value `ev_zero` with deterministic tie order when `--exposure=auto` is active. |
+| REQ-032 | `src/dng2jpg/dng2jpg.py::_calculate_auto_zero_evaluations`, `_select_ev_zero_candidate`, `run`; excerpt: evaluates candidates and selects `ev_zero` as signed numeric minimum among `ev_best`, `ev_ettr`, and `ev_detail` when `--exposure=auto` is active. |
 | REQ-033 | `src/dng2jpg/dng2jpg.py::_parse_tmo_passthrough_value`, `_run_luminance_hdr_cli`; excerpt: parses and forwards `--tmo*` args unchanged. |
 | REQ-034 | `src/dng2jpg/dng2jpg.py::_order_bracket_paths`; excerpt: deterministic `ev_minus`, `ev_zero`, `ev_plus` order. |
 | REQ-035 | `src/dng2jpg/dng2jpg.py::_run_luminance_hdr_cli`; excerpt: changes cwd to output parent before subprocess execution. |
@@ -499,7 +499,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | TST-001 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_ev_defaults_and_auto_selectors`; verifies default static `ev_delta=1.0`/`ev_zero=0.0`, `--bracketing=auto`, `--exposure=auto`, finite selectors, and `--hdr-merge` parsing. |
 | TST-002 | `src/dng2jpg/dng2jpg.py::run`; branches for unsupported OS and dependency failures returning `1`. |
 | TST-003 | `src/dng2jpg/dng2jpg.py::run`; success branch prints `HDR JPG created: ...` and returns `0`. |
-| TST-004 | `tests/test_uint16_postprocess_pipeline.py::test_select_ev_zero_candidate_chooses_minimum_absolute_value`, `test_select_ev_zero_candidate_uses_unclamped_values`; verifies signed minimum absolute-value selection and deterministic tie handling when `--exposure=auto`. |
+| TST-004 | `tests/test_uint16_postprocess_pipeline.py::test_select_ev_zero_candidate_chooses_numeric_minimum`, `test_select_ev_zero_candidate_uses_unclamped_values`; verifies `ev_zero=min(ev_best, ev_ettr, ev_detail)` with preserved signs when `--exposure=auto`. |
 | TST-005 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_static_ev_defaults`, `test_parse_run_options_static_ev_preserves_manual_ev_center`, `test_parse_run_options_rejects_negative_ev_bracketing`; verifies static defaults, manual `--exposure` preservation, and invalid rejection. |
 | TST-006 | `src/dng2jpg/dng2jpg.py::_run_luminance_hdr_cli`; deterministic argv generation including passthrough. |
 | TST-007 | `tests/test_uint16_postprocess_pipeline.py::test_extract_dng_exif_payload_and_timestamp_reads_datetime_priority_and_exposure_time`; verifies EXIF datetime priority and positive-second `ExposureTime` parsing. |

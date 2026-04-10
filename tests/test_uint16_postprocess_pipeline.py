@@ -2404,8 +2404,8 @@ def test_extract_dng_exif_payload_and_timestamp_reads_nested_exif_ifd_exposure_t
     assert timestamp is not None
 
 
-def test_select_ev_zero_candidate_chooses_minimum_absolute_value() -> None:
-    """Default ev-zero selection must choose the minimum absolute-value candidate."""
+def test_select_ev_zero_candidate_chooses_numeric_minimum() -> None:
+    """Default ev-zero selection must choose the signed numeric minimum candidate."""
 
     selected_ev_zero, selected_source = dng2jpg_module._select_ev_zero_candidate(  # pylint: disable=protected-access
         evaluations=dng2jpg_module.AutoZeroEvaluation(
@@ -2415,13 +2415,13 @@ def test_select_ev_zero_candidate_chooses_minimum_absolute_value() -> None:
         ),
     )
 
-    assert selected_ev_zero == 0.3
-    assert selected_source == "ev_ettr"
+    assert selected_ev_zero == -1.2
+    assert selected_source == "ev_best"
 
 
 
 def test_select_ev_zero_candidate_uses_unclamped_values() -> None:
-    """Default ev-zero selection must compare raw candidate magnitudes without clamp."""
+    """Default ev-zero selection must compare raw candidate values without clamp."""
 
     selected_ev_zero, selected_source = dng2jpg_module._select_ev_zero_candidate(  # pylint: disable=protected-access
         evaluations=dng2jpg_module.AutoZeroEvaluation(
@@ -2452,8 +2452,17 @@ def test_resolve_joint_auto_ev_solution_iterates_until_clipping_threshold() -> N
     )
 
     assert solution.selected_source in {"ev_best", "ev_ettr", "ev_detail"}
-    assert solution.ev_delta == 1.0
-    assert [step.ev_delta for step in solution.iteration_steps] == [0.5, 1.0]
+    assert solution.ev_delta == 4.0
+    assert [step.ev_delta for step in solution.iteration_steps] == [
+        0.5,
+        1.0,
+        1.5,
+        2.0,
+        2.5,
+        3.0,
+        3.5,
+        4.0,
+    ]
     assert solution.iteration_steps[-1].highlight_clipping_pct >= 5.0
 
 

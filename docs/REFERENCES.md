@@ -901,7 +901,7 @@ postprocess invocation.
 
 ### fn `def _select_ev_zero_candidate(evaluations)` `priv` (L2867-2895)
 - @brief Select `ev_zero` from the exposure-measure EV triplet.
-- @details Selects the minimum absolute-value EV candidate using deterministic tie-break order `abs(value) -> declaration order -> numeric value` without applying bit-depth-derived clamping. Invoked only when `--exposure=auto` is active.
+- @details Selects the numeric minimum EV candidate preserving sign using deterministic tie-break order `value -> declaration order` without applying bit-depth-derived clamping. Invoked only when `--exposure=auto` is active.
 - @param evaluations {AutoZeroEvaluation} Exposure-measure EV values.
 - @return {tuple[float, str]} Selected `(ev_zero, source_label)` pair.
 - @satisfies REQ-032, CTN-007
@@ -952,8 +952,8 @@ shadow clipping exceeds `shadow_clipping_pct` or highlight clipping reaches
 - @brief Resolve the joint automatic symmetric exposure plan.
 - @brief Parse and validate non-empty luminance string option value.
 - @details Loads numeric dependencies, computes the exposure-measure EV
-triplet from one normalized linear base image, selects `ev_zero` by minimum
-absolute value, then delegates iterative bracket half-span expansion to
+triplet from one normalized linear base image, selects `ev_zero` as numeric
+minimum preserving sign, then delegates iterative bracket half-span expansion to
 `_resolve_auto_ev_delta`.
 - @details Normalizes surrounding spaces, lowercases token, rejects empty values, and rejects ambiguous values that start with option prefix marker.
 - @param auto_ev_options {AutoEvOptions} Automatic clipping thresholds and EV increment.

@@ -1178,7 +1178,7 @@ def print_help(version):
         "EV bracket center selector: use `auto` for automatic center selection, or one finite numeric value for static center EV.",
         (
             "Default: `0.0` (static) when omitted.",
-            "Use `--exposure=auto` to select ev_zero as min(|ev_best|,|ev_ettr|,|ev_detail|).",
+            "Use `--exposure=auto` to select ev_zero as min(ev_best, ev_ettr, ev_detail).",
             "No bit-depth-derived upper bound is enforced.",
         ),
     )
@@ -2867,9 +2867,9 @@ def _calculate_auto_zero_evaluations(cv2_module, np_module, image_rgb_float):
 def _select_ev_zero_candidate(evaluations):
     """@brief Select `ev_zero` from the exposure-measure EV triplet.
 
-    @details Selects the minimum absolute-value EV candidate using deterministic
-    tie-break order `abs(value) -> declaration order -> numeric value` without
-    applying bit-depth-derived clamping. Invoked only when `--exposure=auto` is active.
+    @details Selects the numeric minimum EV candidate preserving sign using
+    deterministic tie-break order `value -> declaration order` without applying
+    bit-depth-derived clamping. Invoked only when `--exposure=auto` is active.
     @param evaluations {AutoZeroEvaluation} Exposure-measure EV values.
     @return {tuple[float, str]} Selected `(ev_zero, source_label)` pair.
     @satisfies REQ-032, CTN-007
@@ -2883,7 +2883,7 @@ def _select_ev_zero_candidate(evaluations):
     best = None
     for index, (label, raw_value) in enumerate(candidates):
         candidate_value = float(raw_value)
-        sort_key = (round(abs(candidate_value), 9), index, round(candidate_value, 9))
+        sort_key = (round(candidate_value, 9), index)
         if best is None or sort_key < best[0]:
             best = (sort_key, candidate_value, label)
     if best is None:
@@ -3029,8 +3029,8 @@ def _resolve_joint_auto_ev_solution(
     """@brief Resolve the joint automatic symmetric exposure plan.
 
     @details Loads numeric dependencies, computes the exposure-measure EV
-    triplet from one normalized linear base image, selects `ev_zero` by minimum
-    absolute value, then delegates iterative bracket half-span expansion to
+    triplet from one normalized linear base image, selects `ev_zero` as numeric
+    minimum preserving sign, then delegates iterative bracket half-span expansion to
     `_resolve_auto_ev_delta`.
     @param auto_ev_options {AutoEvOptions} Automatic clipping thresholds and EV increment.
     @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2_module, numpy_module)` tuple.

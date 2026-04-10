@@ -170,7 +170,7 @@
       - _apply_auto_white_balance_stage_float(...): optional auto white-balance stage [src/dng2jpg/dng2jpg.py]
       - _resolve_joint_auto_ev_solution(...): joint auto EV center+delta resolution when both `--exposure=auto` and `--bracketing=auto` [src/dng2jpg/dng2jpg.py]
         - _calculate_auto_zero_evaluations(...): EV quality measurements [src/dng2jpg/dng2jpg.py]
-        - _select_ev_zero_candidate(evaluations): EV center selection [src/dng2jpg/dng2jpg.py]
+        - _select_ev_zero_candidate(evaluations): EV center selection as signed numeric minimum across `ev_best`, `ev_ettr`, `ev_detail` [src/dng2jpg/dng2jpg.py]
         - _resolve_auto_ev_delta(...): iterative bracket half-span expansion algorithm [src/dng2jpg/dng2jpg.py]
       - _resolve_auto_ev_delta(...): standalone auto EV delta resolution when only `--bracketing=auto` (without `--exposure=auto`) [src/dng2jpg/dng2jpg.py]
       - _build_exposure_multipliers(ev_value, ev_zero): EV triplet multipliers [src/dng2jpg/dng2jpg.py]
