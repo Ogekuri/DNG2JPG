@@ -1,4 +1,4 @@
-# dng2jpg/d2j (0.1.0)
+# dng2jpg/d2j (0.2.0)
 
 Convert a DNG to a JPG with a HDR Merge.
 

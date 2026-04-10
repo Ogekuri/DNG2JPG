@@ -1,5 +1,187 @@
 # Changelog
 
+## [0.2.0](https://github.com/Ogekuri/DNG2JPG/compare/v0.1.0..v0.2.0) - 2026-04-10
+### ⛰️  Features
+- print structured validated parameter summary after CLI validation [useReq] *(dng2jpg)*
+  - Add REQ-220, REQ-221: after _parse_run_options + CTN-004 pass, invoke
+  - _print_validated_run_parameters before dependency resolution; function emits
+  - one param per line under group headers (Input/Output, Exposure, White Balance,
+  - HDR Backend, Merge Gamma, Postprocess, conditional Auto-Brightness/Auto-Levels/
+  - Auto-Adjust, Debug) with two-space indentation.
+  - Add TST-080, TST-081: test group ordering and conditional group emission.
+  - Modify REQ-052: remove packed diagnostic items now covered by REQ-221.
+  - Remove old packed print_info block from run(); replace with new function call.
+  - Update docs/WORKFLOW.md and docs/REFERENCES.md.
+- add RAW WB normalization diagnostics [useReq] *(raw-wb)*
+  - add REQ-208 and REQ-209 for RAW WB diagnostic logging
+  - print rawpy coefficients, normalization mode, and normalized gains
+  - enforce fixed-point numeric formatting with four fractional digits
+  - update WORKFLOW.md and regenerate REFERENCES.md
+
+### 🐛  Bug Fixes
+- drop scalar int for type-7 UNDEFINED EXIF tags [useReq] *(_normalize_ifd_integer_like_values_for_piexif_dump)*
+  - Root cause: tag 41729 (SceneType, UNDEFINED/type-7) stored as scalar int
+  - in source DNG EXIF caused piexif.dump to raise TypeError at runtime.
+  - Fix: pop scalar int values for type-7 tags in normalization function;
+  - only tuple-of-int values are converted to bytes (existing behavior).
+  - Test: add reproducer test_normalize_ifd_drops_scalar_int_for_undefined_type_7_tag.
+  - Satisfies REQ-042.
+- sanitize non-finite uint casts in conversion helpers [useReq] *(dng2jpg)*
+  - Add a reproducer test for RuntimeWarning in _to_uint16_image_array when debug conversion receives NaN.
+  - Replace non-finite float samples with 0.0 before min/max scaling and integer casts in uint8/uint16 adapters.
+  - Regenerate docs/REFERENCES.md to keep symbol metadata aligned with updated code.
+- sanitize non-finite tonemap output [useReq] *(opencv-tonemap)*
+  - Prevent OpenCV-Tonemap crashes when OpenCV returns NaN/Inf values.\nAdd a reproducer test that proves the issue is transversal across drago, reinhard, and mantiuk selectors.\nKeep dynamic-range behavior unchanged by avoiding clipping and zeroing only non-finite samples.
+
+### 🚜  Changes
+- BREAKING CHANGE: update CLI default selectors and exposure modes [useReq] *(dng2jpg)*
+  - Update requirement defaults for hdr-merge, exposure/bracketing, OpenCV selectors, and WB mode.
+  - Set parser defaults: OpenCV-Tonemap backend, reinhard tonemap map, Debevec OpenCV merge, MEAN RAW WB.
+  - Set omitted bracketing/exposure to auto solving and auto-brightness to disable.
+  - Align help output and parser validation for optional OpenCV-Tonemap selector default.
+  - Update parser-focused unit tests and regenerate WORKFLOW/REFERENCES documentation.
+- update backend postprocess default matrix [useReq] *(dng2jpg)*
+  - Update REQUIREMENTS for backend-specific static postprocess defaults.
+  - Implement new defaults for HDR-Plus, Luminace-HDR, OpenCV-Merge, and OpenCV-Tonemap.
+  - Extend help default table with OpenCV-Tonemap algorithm rows and updated tuples.
+  - Extend _resolve_default_postprocess with OpenCV-Tonemap algorithm-aware resolution.
+  - Update targeted unit tests for defaults and help table output.
+  - Regenerate REFERENCES and apply targeted WORKFLOW runtime-model update.
+- skip side brackets and auto-ev loop [useReq] *(opencv-tonemap)*
+  - Update REQ-009/052/159/160/167/192 and add REQ-215..219 for OpenCV-Tonemap auto-bracketing bypass.
+  - Implement fixed auto half-span 0.1 EV with explicit skip diagnostics in auto-bracketing mode.
+  - Skip ev_minus/ev_plus extraction for OpenCV-Tonemap, return None side brackets, and emit extraction skipped logs.
+  - Adjust run orchestration and debug extraction checkpoint handling for optional side brackets.
+  - Regenerate WORKFLOW and REFERENCES for updated call-trace and symbol mapping.
+- switch ev_zero auto-selection to numeric minimum [useReq] *(exposure)*
+  - Update REQUIREMENTS CTN-007/REQ-032/TST-004 to numeric-min semantics.
+  - Replace abs-based ev_zero selection with signed numeric minimum in dng2jpg.
+  - Align exposure-help text and auto-EV selection documentation.
+  - Adjust and rename unit tests for ev_zero selection and joint auto-EV fixture.
+  - Regenerate WORKFLOW and REFERENCES docs for updated symbol behavior.
+- tighten ev_zero auto-selection contract [useReq] *(ev-zero)*
+  - Update CTN-007, REQ-032, and TST-004 to encode signed minimum-absolute EV selection.
+  - Define deterministic tie order as ev_best -> ev_ettr -> ev_detail.
+  - Validated implementation behavior in _select_ev_zero_candidate and kept source code unchanged.
+- default raw white-balance mode to MAX [useReq] *(dng2jpg)*
+  - Update REQ-203 default from MEAN to MAX.
+  - Set DEFAULT_RAW_WHITE_BALANCE_MODE to RAW_WHITE_BALANCE_MODE_MAX.
+  - Regenerate docs/REFERENCES.md for symbol consistency.
+- BREAKING CHANGE: rename --ev to --exposure and --ev-bracketing to --bracketing [useReq] *(cli)*
+  - Renamed CLI option --ev to --exposure (CTN-007, REQ-030, REQ-032, REQ-052)
+  - Renamed CLI option --ev-bracketing to --bracketing (CTN-003, REQ-008, REQ-009, REQ-030, REQ-052)
+  - Removed explicit rejection checks for legacy options: --ev-zero, --auto-ev,
+  - --auto-zero, --auto-zero-pct, --auto-ev-shadow-target, --auto-ev-highlight-target,
+  - --auto-ev-pct (REQ-018 removed from SRS)
+  - Updated error messages, docstrings, help text, and usage line to reflect new names
+  - Updated REQUIREMENTS.md, WORKFLOW.md, and REFERENCES.md accordingly
+- BREAKING CHANGE: refactor --ev-zero to --ev and change --ev-bracketing default [useReq] *(cli)*
+  - Requirements: added CTN-007, updated CTN-003, REQ-008, REQ-009, REQ-018,
+  - REQ-030, REQ-032, REQ-052, TST-001, TST-004, TST-005.
+  - Breaking changes:
+  - Removed --ev-zero option (now rejected as removed option).
+  - Renamed --ev-zero to --ev; supports auto|<value> independently.
+  - Default --ev-bracketing changed from auto to static 1.0 EV.
+  - Default --ev is static 0.0 EV (new option, independent of --ev-bracketing).
+  - --ev=auto: ev_zero = min(|ev_best|,|ev_ettr|,|ev_detail|).
+  - --ev-bracketing=auto: ev_delta from iterative clipping algorithm.
+  - Both auto flags are independent; any combination is valid.
+  - Added _resolve_auto_ev_delta() helper; refactored joint auto-EV solution.
+- BREAKING CHANGE: rename --ev to --ev-bracketing [useReq] *(cli)*
+  - REQ update: CTN-003, REQ-008, REQ-018, REQ-030 rename --ev flag
+  - TST update: TST-001, TST-004, TST-005 reflect new --ev-bracketing name
+  - src: _parse_run_options detects --ev-bracketing= token; error messages updated
+  - tests: all --ev= args replaced with --ev-bracketing=; error assertion updated
+  - docs: WORKFLOW.md and REFERENCES.md updated; no backward compatibility shim
+- support explicit awb disable selector [useReq] *(dng2jpg)*
+  - Update REQ-181 to include explicit --auto-white-balance=disable selector behavior.
+  - Map disable selector to stage-bypass runtime state in run-option parsing.
+  - Expose disable selector in help allowed values and parser diagnostics.
+  - Extend parser/help tests for explicit disable acceptance and documentation output.
+- suppress same-version update output [useReq] *(core)*
+  - Update REQ-016 to silence latest-release checks when versions match.
+  - Adjust _check_online_version to emit status only on version mismatch.
+  - Treat missing tag payload as version-check error output.
+  - Refresh WORKFLOW and REFERENCES runtime/symbol documentation.
+- BREAKING CHANGE: rename OpenCV merge tonemap flags [useReq] *(cli)*
+  - Rename OpenCV merge tonemap options in requirements, parser/help, tests, and references.
+- use inverse merge gamma in OpenCV-Tonemap [useReq] *(opencv-tonemap)*
+  - Update REQ-193/TST-072 for gamma_inv behavior.
+  - Compute OpenCV-Tonemap gamma from inverse resolved merge gamma.
+  - Apply gamma_inv to Drago/Reinhard/Mantiuk constructors.
+  - Adjust OpenCV-Tonemap tests for sRGB and Adobe RGB gamma_inv paths.
+  - Refresh WORKFLOW.md and regenerate REFERENCES.md.
+- remove unconditional entry normalization [useReq] *(postprocess)*
+  - Update REQ-012 and REQ-134 and add REQ-214/TST-078 for postprocess-entry adaptation semantics.
+  - Add _prepare_postprocess_entry_rgb_float and route _postprocess through it.
+  - Keep float merge outputs unnormalized at postprocess entry; normalize only non-float payloads.
+  - Add tests for float-entry passthrough and non-float entry normalization.
+  - Add luminance-output normalization coverage and refresh workflow/references docs.
+- split postprocess from final jpg encode [useReq] *(_encode_jpg)*
+  - Update REQ-012/REQ-133 and traceability to model dedicated _postprocess orchestration.
+  - Extract post-merge processing from _encode_jpg into _postprocess and keep _encode_jpg for final JPEG write/EXIF steps.
+  - Adapt run() orchestration and unit tests to the new stage boundary while preserving behavior and debug checkpoints.
+- move auto WB/brightness pre-bracketing [useReq] *(pipeline)*
+  - Update requirements to place auto-brightness and auto-white-balance after linear extraction and before auto-zero evaluation.
+  - Implement pre-bracketing stage execution in run() and skip duplicate post-merge execution when stages are pre-applied.
+  - Keep post-merge static stage limited to static/manual brightness behavior.
+  - Update WORKFLOW runtime trace and regenerate REFERENCES index.
+- extend --debug merge checkpoints [useReq] *(debug-checkpoints)*
+  - update REQ-148 and TST-038 for per-stage debug outputs
+  - persist pre/post merge-gamma and final HDR merge checkpoints
+  - add unit coverage for merge checkpoint helper and run debug flow
+  - refresh WORKFLOW and REFERENCES documentation
+- refactor post-merge auto white balance stage [useReq] *(pipeline)*
+  - update requirements for post-merge auto-white-balance behavior
+  - move auto-white-balance execution after auto-brightness in post-merge pipeline
+  - estimate white-balance gains from transient auto-brightness preprocessing only
+  - apply gains to original stage input image and emit dedicated debug checkpoint
+  - remove white-balance-analysis-source CLI path from runtime behavior
+  - refresh workflow and references docs and update related unit tests
+- move auto-brightness before static stage [useReq] *(postprocess)*
+  - Update requirements for auto-brightness placement and linear gamma-1 processing.
+  - Run auto-brightness before static postprocess in _encode_jpg.
+  - Remove sRGB decode/encode from auto-brightness implementation.
+  - Shift debug stage suffixes so auto-brightness is checkpoint 3.0.
+  - Align help ordering, workflow model, references, and unit tests.
+- refine auto WB estimation pipeline [useReq] *(white-balance)*
+  - Update REQUIREMENTS for xphoto domain control and IA bit-depth coherence.
+  - Implement --white-balance-xphoto-domain parser/help wiring and runtime diagnostics.
+  - Replace xphoto downsampling with anti-aliased pyramid and add source-auto domain resolution.
+  - Enable IA uint16 xphoto payload path with range_max/histogram configuration by bit depth.
+  - Switch robust ColorConstancy/TTL masks to percentile-based thresholds in linear domain.
+  - Expand unit coverage for selector parsing, xphoto payload robustness, IA uint16 path, and stage ordering invariants.
+- disambiguate auto white-balance stage diagnostics [useReq] *(white-balance)*
+  - Update REQ-181/182/183 and TST-060/062 wording for auto-white-balance stage semantics.\nImplement explicit runtime diagnostic "Auto-white-balance stage: disabled" when --auto-white-balance is omitted.\nIntroduce explicit auto_white_balance parser/property naming in source while preserving compatibility.\nRefresh WORKFLOW.md targeted call-trace wording and regenerate REFERENCES.md.
+- relax GREEN raw WB normalization check [useReq] *(dng2jpg)*
+  - Update REQ-204 to remove mandatory termination for GREEN mode.
+  - Remove strict GREEN pre/post validation in RAW WB gain normalization.
+  - Keep GREEN normalization as division by green coefficient only.
+  - Adjust unit test to validate non-unit-green input normalization.
+  - Refresh WORKFLOW and REFERENCES documents for updated behavior.
+- add RAW white-balance mode selector [useReq] *(dng2jpg)*
+  - Update REQUIREMENTS with configurable RAW WB normalization behavior.
+  - Implement --white-balance=<GREEN|MAX|MIN|MEAN> with default MEAN.
+  - Enforce GREEN-mode validation requiring camera green coefficient equal to 1.0.
+  - Propagate mode into linear-base extraction and bracket generation.
+  - Refresh WORKFLOW/REFERENCES docs and extend unit tests for parser and formulas.
+- BREAKING CHANGE: require --option=value form and rename --white-balance [useReq] *(cli)*
+  - Rename `--white-balance` CLI option to `--auto-white-balance`.
+  - Require the `--option=value` form for every value-bearing CLI option;
+  - reject the separated `--option value` form.
+  - Update REQ-181..188, DES-001, add REQ-202 for the mandatory `=` format.
+  - Adjust tests, help output, and WORKFLOW/REFERENCES accordingly.
+- remove bit-depth EV ceiling constraints [useReq] *(dng2jpg)*
+  - remove BASE_MAX/SAFE_ZERO_MAX/MAX_BRACKET calculations and runtime checks
+  - keep detected DNG bits-per-color diagnostic output
+  - update exposure candidate selection to use unclamped EV measures
+  - align requirements, workflow, references, and tests with new behavior
+
+### 📚  Documentation
+- regenerate execution model [useReq] *(workflow)*
+  - Update docs/WORKFLOW.md from current src/, scripts/, and .github/workflows evidence.
+  - Document execution units, internal call traces, and communication edges.
+
 ## [0.1.0](https://github.com/Ogekuri/DNG2JPG/releases/tag/v0.1.0) - 2026-04-03
 ### ⛰️  Features
 - add OpenCV-Tonemap HDR backend with selector/knobs [useReq] *(dng2jpg)*
@@ -486,5 +668,7 @@
 # History
 
 - \[0.1.0\]: https://github.com/Ogekuri/DNG2JPG/releases/tag/v0.1.0
+- \[0.2.0\]: https://github.com/Ogekuri/DNG2JPG/releases/tag/v0.2.0
 
 [0.1.0]: https://github.com/Ogekuri/DNG2JPG/releases/tag/v0.1.0
+[0.2.0]: https://github.com/Ogekuri/DNG2JPG/compare/v0.1.0..v0.2.0
