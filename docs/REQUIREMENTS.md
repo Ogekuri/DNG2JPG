@@ -82,9 +82,9 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 
 ### 2.2 Project Constraints
 - **CTN-001**: MUST execute conversion only on Linux runtime and reject unsupported operating systems with explicit error output.
-- **CTN-002**: MUST parse `--hdr-merge <Luminace-HDR|OpenCV-Merge|HDR-Plus>` and MUST default to `OpenCV-Merge` when omitted.
-- **CTN-003**: MUST resolve `ev_delta` from `--bracketing`: absent → `ev_delta=1.0` (static); `--bracketing=<value>` → `ev_delta=<value>` (static); `--bracketing=auto` → `ev_delta` from iterative automatic algorithm.
-- **CTN-007**: MUST resolve `ev_zero` from `--exposure`: absent → `ev_zero=0.0` (static); `--exposure=<value>` → `ev_zero=<value>` (static); `--exposure=auto` → `ev_zero=min(ev_best, ev_ettr, ev_detail)` preserving candidate signs.
+- **CTN-002**: MUST parse `--hdr-merge <Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>` and MUST default to `OpenCV-Tonemap` when omitted.
+- **CTN-003**: MUST resolve `ev_delta` from `--bracketing`: absent → automatic iterative algorithm; `--bracketing=<value>` → `ev_delta=<value>` (static); `--bracketing=auto` → `ev_delta` from iterative automatic algorithm.
+- **CTN-007**: MUST resolve `ev_zero` from `--exposure`: absent → `ev_zero=min(ev_best, ev_ettr, ev_detail)` preserving candidate signs; `--exposure=<value>` → `ev_zero=<value>` (static); `--exposure=auto` → `ev_zero=min(ev_best, ev_ettr, ev_detail)` preserving candidate signs.
 - **CTN-004**: MUST require `.dng` input extension, existing input file, and existing output parent directory.
 - **CTN-005**: MUST preflight-check each external executable selected by resolved options (`luminance-hdr-cli`) and MUST fail before processing with explicit diagnostics naming every missing executable.
 - **CTN-006**: MUST reject launcher execution when resolved launcher base directory differs from repository git root.
@@ -111,7 +111,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-004**: MUST execute `uv tool install` and `uv tool uninstall` automatically on Linux for management upgrade and uninstall commands.
 - **REQ-005**: MUST print manual management commands instead of auto-executing them on non-Linux systems.
 - **REQ-006**: MUST reject unknown options, missing option values, and invalid option values with explicit parse errors.
-- **REQ-007**: MUST reject `--aa-*` options when `--auto-adjust` resolves to `disable` and MUST reject `--ab-*` options when `--auto-brightness` resolves to `disable`.
+- **REQ-007**: MUST reject `--aa-*` options when `--auto-adjust` resolves to `disable`, MUST reject `--ab-*` options when `--auto-brightness` resolves to `disable`, and MUST default omitted `--auto-brightness` to `disable`.
 - **REQ-008**: MUST compute `ev_best`, `ev_ettr`, and `ev_detail` from the normalized linear HDR base image only when `--exposure=auto` or `--bracketing=auto` is active.
 - **REQ-009**: MUST compute one symmetric EV triplet `(ev_zero-ev_delta, ev_zero, ev_zero+ev_delta)`.
 - **REQ-010**: MUST extract one maximum-resolution demosaiced RGB base image using one neutral linear `rawpy.postprocess` call with `gamma=(1,1)`, `no_auto_bright=True`, `output_bps=16`, `use_camera_wb=False`, `user_wb=[1,1,1,1]`, `output_color=raw`, and `no_auto_scale=True`.
@@ -143,14 +143,14 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-164**: MUST print source gamma diagnostics as one deterministic runtime line containing both a source-gamma label and either a numeric gamma value or `undetermined`.
 - **REQ-021**: MUST enforce `--jpg-compression` in inclusive range `0..100`.
 - **REQ-022**: MUST reject luminance-specific options when `--hdr-merge` is not `Luminace-HDR`.
-- **REQ-023**: MUST reject unknown `--hdr-merge` values and accept only `Luminace-HDR`, `OpenCV-Merge`, or `HDR-Plus`.
-- **REQ-024**: MUST route backend execution from resolved `--hdr-merge` mode and MUST preserve the existing processing behavior of `Luminace-HDR`, `OpenCV-Merge`, and `HDR-Plus`.
+- **REQ-023**: MUST reject unknown `--hdr-merge` values and accept only `Luminace-HDR`, `OpenCV-Merge`, `OpenCV-Tonemap`, or `HDR-Plus`.
+- **REQ-024**: MUST route backend execution from resolved `--hdr-merge` mode and MUST preserve the existing processing behavior of `Luminace-HDR`, `OpenCV-Merge`, `OpenCV-Tonemap`, and `HDR-Plus`.
 - **REQ-025**: MUST reject unsupported `--auto-adjust` values, accept only `enable` or `disable`, and default omitted `--auto-adjust` to `enable`.
 - **REQ-026**: MUST resolve DNG bit depth from `raw_image_visible.dtype.itemsize * 8` with fallback to `white_level.bit_length()`.
 - **REQ-027**: MUST enforce minimum supported bit depth as `9` bits per color.
 - **REQ-030**: MUST accept finite numeric `--bracketing` values `>=0` and finite numeric `--exposure` values without enforcing `0.25` EV step granularity or bit-depth-derived upper bounds.
 - **REQ-031**: MUST derive exposure-planning inputs from one shared neutral-linear HDR base image after applying float-domain `rawpy` camera white-balance gains normalized by the resolved RAW white-balance normalization mode.
-- **REQ-203**: MUST parse optional `--white-balance=<GREEN|MAX|MIN|MEAN>`, defaulting to `MAX`, and MUST reject unknown values.
+- **REQ-203**: MUST parse optional `--white-balance=<GREEN|MAX|MIN|MEAN>`, defaulting to `MEAN`, and MUST reject unknown values.
 - **REQ-204**: MUST implement `GREEN` normalization by dividing all RAW WB coefficients by the green coefficient so the normalized green gain equals `1.0`.
 - **REQ-205**: MUST implement `MAX` normalization by dividing all RAW WB coefficients by the maximum coefficient so the maximum normalized gain equals `1.0`.
 - **REQ-206**: MUST implement `MIN` normalization by dividing all RAW WB coefficients by the minimum coefficient so the minimum normalized gain equals `1.0`.
@@ -187,7 +187,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-104**: MUST map luminance with `L=(a/Lw_bar)*Y`, percentile-derived robust `Lwhite`, and burn-out compression `Ld=(L*(1+L/Lwhite^2))/(1+L)` before linear-domain chromaticity-preserving RGB scaling.
 - **REQ-105**: MUST desaturate only overflowing linear RGB pixels by blending toward `(Ld,Ld,Ld)` with the minimal factor that restores `max(R,G,B)<=1` while preserving luminance.
 - **REQ-100**: MUST execute auto-levels after static postprocess when `--auto-levels` resolves to `enable`, preserving RGB float input/output buffers and float internal calculations across histogram analysis and tonal transformation.
-- **REQ-101**: MUST parse `--auto-levels <enable|disable>`, `--al-clip-pct`, `--al-clip-out-of-gamut`, `--al-highlight-reconstruction`, `--al-highlight-reconstruction-method`, and `--al-gain-threshold`, requiring resolved auto-levels state `enable` before any `--al-*` option.
+- **REQ-101**: MUST parse `--auto-levels <enable|disable>`, `--al-clip-pct`, `--al-clip-out-of-gamut`, `--al-highlight-reconstruction`, `--al-highlight-reconstruction-method`, and `--al-gain-threshold`, default omitted `--auto-levels` to `enable`, and require resolved auto-levels state `enable` before any `--al-*` option.
 - **REQ-102**: MUST accept highlight reconstruction methods `Luminance Recovery`, `CIELab Blending`, `Blend`, `Color Propagation`, and `Inpaint Opposed`.
 - **REQ-116**: MUST default auto-levels knobs to `clip_pct=0.02`, `clip_out_of_gamut=true`, `highlight_reconstruction=disabled`, `highlight_reconstruction_method=Inpaint Opposed`, and `gain_threshold=1.0`.
 - **REQ-117**: MUST derive auto-levels calibration from a RawTherapee-compatible luminance histogram using `sum`, `average`, `median`, octiles, `ospread`, `rawmax`, clipped white point, and clipped black point.
@@ -203,11 +203,11 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-135**: MUST expose `--ab-enable-luminance-preserving-desat` as the auto-brightness desaturation toggle.
 - **REQ-136**: MUST implement CLAHE-luma directly on RGB float `[0,1]` by adjusting luminance only, reconstructing RGB with preserved chroma, and blending with the original image via configurable strength.
 - **REQ-137**: MUST keep auto-adjust CLAHE-luma functionally equivalent to the former auto-brightness CLAHE-luma stage except for differences attributable only to removed float-uint16 quantization.
-- **REQ-107**: MUST accept `--hdr-merge OpenCV-Merge` as HDR backend selector and execute OpenCV backend behavior when selected or by default.
-- **REQ-108**: MUST execute OpenCV backend from three in-memory RGB float brackets ordered as `ev_minus`, `ev_zero`, `ev_plus` using selectable algorithm `Debevec`, `Robertson`, or `Mertens`, defaulting to `Robertson`, and MUST pass brackets without entry re-normalization or clipping.
+- **REQ-107**: MUST accept `--hdr-merge OpenCV-Merge` as HDR backend selector and execute OpenCV backend behavior when selected.
+- **REQ-108**: MUST execute OpenCV backend from three in-memory RGB float brackets ordered as `ev_minus`, `ev_zero`, `ev_plus` using selectable algorithm `Debevec`, `Robertson`, or `Mertens`, defaulting to `Debevec`, and MUST pass brackets without entry re-normalization or clipping.
 - **REQ-109**: MUST derive OpenCV Debevec/Robertson exposure times in seconds from source EXIF `ExposureTime`, preserve bracket order, and map the sequence to extracted `(ev_zero-ev_delta, ev_zero, ev_zero+ev_delta)`.
 - **REQ-110**: MUST preserve RGB float input/output interfaces for OpenCV merge and MUST keep the full OpenCV HDR path in RGB float `[0,1]` without backend-local `uint8` or `uint16` conversions.
-- **REQ-141**: MUST expose OpenCV controls `--opencv-merge-algorithm`, `--opencv-merge-tonemap`, and `--opencv-merge-tonemap-gamma`, defaulting to `Robertson`, `enable`, and algorithm-specific gamma `Debevec=1.0`, `Robertson=0.9`, `Mertens=0.8`.
+- **REQ-141**: MUST expose OpenCV controls `--opencv-merge-algorithm`, `--opencv-merge-tonemap`, and `--opencv-merge-tonemap-gamma`, defaulting to `Debevec`, `enable`, and algorithm-specific gamma `Debevec=1.0`, `Robertson=0.9`, `Mertens=0.8`.
 - **REQ-142**: MUST treat EXIF `ExposureTime` as the linear RAW exposure time of the extracted base image and MUST compute OpenCV radiance times as `t_raw*2^(ev_zero-ev_delta)`, `t_raw*2^ev_zero`, and `t_raw*2^(ev_zero+ev_delta)`.
 - **REQ-143**: MUST execute optional OpenCV simple gamma tone mapping for `Debevec`, `Robertson`, and `Mertens` outputs before downstream postprocess, default enabled with algorithm-specific gamma `1.0`, `0.9`, and `0.8`, and MUST skip contrast-enhancing tone operators.
 - **REQ-144**: MUST deliver one congruent normalized RGB float output contract across OpenCV `Debevec`, `Robertson`, and `Mertens`, preserving exposure semantics without backend-specific contrast compensation.
@@ -248,7 +248,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-149**: MUST preserve debug TIFF files after command completion while keeping temporary workspace cleanup behavior unchanged for non-debug intermediates.
 - **REQ-181**: MUST parse optional `--auto-white-balance=<Simple|GrayworldWB|IA|ColorConstancy|TTL|disable>`, defaulting stage to disabled when omitted, keeping it disabled for `disable`, and rejecting unknown values.
 - **REQ-199**: MUST derive white-balance analysis exclusively from the current stage input image and MUST NOT use bracket tensors or `ev_zero` as analysis sources.
-- **REQ-182**: MUST execute auto-white-balance only when `--auto-white-balance` is specified, after auto-brightness and before `_calculate_auto_zero_evaluations`; omitted option MUST print `Auto-white-balance stage: disabled` and bypass the stage.
+- **REQ-182**: MUST execute auto-white-balance only when `--auto-white-balance` resolves to enabled mode, after auto-brightness and before `_calculate_auto_zero_evaluations`; omitted option MUST print `Auto-white-balance stage: disabled` and bypass the stage.
 - **REQ-183**: MUST estimate one auto-white-balance gain vector from a transient analysis image built from the stage input after applying shared auto-brightness preprocessing.
 - **REQ-200**: MUST apply auto-white-balance gains to the original stage input image and output one corrected RGB float image to downstream auto-zero evaluation, bracket generation, and static/manual postprocess stages.
 - **REQ-213**: MUST keep auto-brightness preprocessing used for white-point estimation internal to estimation and MUST NOT output that preprocessed image as stage output.
@@ -261,8 +261,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-210**: MUST parse optional `--white-balance-xphoto-domain=<linear|srgb|source-auto>`, defaulting to `source-auto`, and MUST reject unknown values.
 - **REQ-211**: MUST configure `IA` xphoto estimation with bit-depth-coherent settings by using `uint16` analysis payloads and matching `range_max`/histogram bins when backend support is available.
 - **REQ-212**: MUST apply `--white-balance-xphoto-domain` only to xphoto gain estimation; `linear` MUST use linear analysis data, `srgb` MUST use sRGB-encoded analysis data, and `source-auto` MUST resolve from source gamma diagnostics.
-- **REQ-189**: MUST accept `--hdr-merge=OpenCV-Tonemap` as HDR backend selector and execute OpenCV-Tonemap backend behavior only when selected.
-- **REQ-190**: MUST require exactly one `--opencv-tonemap-algorithm=<drago|reinhard|mantiuk>` selector when `--hdr-merge=OpenCV-Tonemap` is selected.
+- **REQ-189**: MUST accept `--hdr-merge=OpenCV-Tonemap` as HDR backend selector and execute OpenCV-Tonemap backend behavior when selected or by default.
+- **REQ-190**: MUST accept zero or one `--opencv-tonemap-algorithm=<drago|reinhard|mantiuk>` selector when `--hdr-merge=OpenCV-Tonemap` is selected and MUST default omitted selector to `reinhard`.
 - **REQ-191**: MUST reject `--opencv-tonemap-algorithm` and any `--opencv-tonemap-<algorithm>-*` knob unless `--hdr-merge=OpenCV-Tonemap` is selected.
 - **REQ-192**: MUST execute OpenCV-Tonemap only on `ev_zero`; extraction stage MUST skip `ev_minus` and `ev_plus`, set both images to `None`, and log both skip events.
 - **REQ-219**: MUST print `Extracting bracket ev_minus: skipped` and `Extracting bracket ev_plus: skipped` when `--hdr-merge=OpenCV-Tonemap`.
@@ -275,19 +275,19 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 
 ## 4. Test Requirements
 
-- **TST-001**: MUST verify `_parse_run_options` defaults to `ev_delta=1.0` (static) and `ev_zero=0.0` (static) when both `--bracketing` and `--exposure` are absent; accepts `--bracketing=auto`, finite numeric `--bracketing`, `--exposure=auto`, and finite numeric `--exposure`; parses and rejects unknown `--hdr-merge` values.
+- **TST-001**: MUST verify `_parse_run_options` defaults to automatic `ev_delta` and automatic `ev_zero` when both `--bracketing` and `--exposure` are absent; accepts `--bracketing=auto`, finite numeric `--bracketing`, `--exposure=auto`, and finite numeric `--exposure`; parses and rejects unknown `--hdr-merge` values.
 - **TST-002**: MUST verify `run` returns `1` for unsupported runtime OS and for missing `luminance-hdr-cli` dependency with deterministic diagnostics naming each missing executable.
 - **TST-003**: MUST verify successful `run` execution returns `0`, writes output JPG, and emits success message `HDR JPG created: <output>`.
 - **TST-004**: MUST verify `ev_zero` auto-selection chooses `min(ev_best, ev_ettr, ev_detail)` preserving candidate signs when `--exposure=auto` is active.
-- **TST-005**: MUST verify static exposure resolution preserves manual `--bracketing` and `--exposure` values, defaults `ev_delta=1.0` and `ev_zero=0.0` when absent, rejects negative or non-finite `--bracketing`, and does not enforce `0.25` EV increments or bit-depth-derived upper bounds.
+- **TST-005**: MUST verify static exposure resolution preserves manual `--bracketing` and `--exposure` values, defaults `ev_delta` and `ev_zero` to automatic solving when absent, rejects negative or non-finite `--bracketing`, and does not enforce `0.25` EV increments or bit-depth-derived upper bounds.
 - **TST-006**: MUST verify `_run_luminance_hdr_cli` builds deterministic argument order and includes any `--tmo*` passthrough pairs unchanged.
 - **TST-007**: MUST verify `_extract_dng_exif_payload_and_timestamp` applies datetime priority `36867` then `36868` then `306` and extracts EXIF `ExposureTime` as positive seconds.
 - **TST-008**: MUST verify `_refresh_output_jpg_exif_thumbnail_after_save` preserves source orientation fields, rebuilds EXIF thumbnail bytes from the exact final quantized RGB uint8 save buffer, and emits display-oriented thumbnail pixels with thumbnail orientation `1`.
 - **TST-009**: MUST verify release workflow gates `build-release` execution on `needs.check-branch.outputs.is_master == "true"`.
-- **TST-010**: MUST verify `_parse_run_options` enforces `--auto-levels <enable|disable>` with `--al-*` coupling and validates `Clip out-of-gamut colors`, `Clip %`, highlight-reconstruction toggle, method, and gain-threshold knobs.
+- **TST-010**: MUST verify `_parse_run_options` defaults `--auto-levels` to `enable`, enforces `--auto-levels <enable|disable>` with `--al-*` coupling, and validates `Clip out-of-gamut colors`, `Clip %`, highlight-reconstruction toggle, method, and gain-threshold knobs.
 - **TST-011**: MUST verify `_apply_auto_brightness_rgb_float` preserves float I/O and executes the original step order, key-analysis thresholds, Reinhard mapping, and optional desaturation.
 - **TST-012**: MUST verify `_encode_jpg` applies one float-to-uint8 conversion immediately before JPEG save after dedicated `_postprocess` stage completion.
-- **TST-013**: MUST verify `_parse_run_options` accepts `--hdr-merge OpenCV-Merge`, defaults `--hdr-merge` to `OpenCV-Merge`, and rejects values outside `Luminace-HDR`, `OpenCV-Merge`, and `HDR-Plus`.
+- **TST-013**: MUST verify `_parse_run_options` accepts `--hdr-merge OpenCV-Merge`, defaults `--hdr-merge` to `OpenCV-Tonemap`, and rejects values outside `Luminace-HDR`, `OpenCV-Merge`, `OpenCV-Tonemap`, and `HDR-Plus`.
 - **TST-014**: MUST verify OpenCV radiance exposure derivation preserves bracket order, uses EXIF exposure seconds, maps the sequence to `(ev_zero-ev_delta, ev_zero, ev_zero+ev_delta)`, and remains deterministic for variable bracket spans.
 - **TST-015**: MUST verify OpenCV merge outputs for `Debevec`, `Robertson`, and `Mertens` remain normalized RGB float images bounded to `[0,1]` after float-only backend execution.
 - **TST-047**: MUST verify `_parse_run_options` rejects removed `--auto-ev`, `--auto-ev-shadow-target`, `--auto-ev-highlight-target`, and `--auto-ev-pct`, and accepts `--auto-ev-shadow-clipping`, `--auto-ev-highlight-clipping`, and `--auto-ev-step` with deterministic defaults and validation.
@@ -298,7 +298,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-018**: MUST verify auto-levels tonal transformation consumes the RawTherapee-compatible metric set in normalized float space, preserves float-only internal math, and matches RawTherapee mixed-overflow channel handling.
 - **TST-046**: MUST verify `Clip out-of-gamut colors` executes the RawTherapee `filmlike_clip` hue-stable clipping family instead of isotropic ratio-preserving normalization.
 - **TST-045**: MUST verify `Color Propagation` and `Inpaint Opposed` selectors execute only when `--al-highlight-reconstruction` resolves to enabled and preserve deterministic RGB float outputs.
-- **TST-019**: MUST verify auto-brightness CLI parsing exposes key-value, white-point, boost, epsilon, and desaturation controls with deterministic defaults and validation.
+- **TST-019**: MUST verify auto-brightness CLI parsing defaults omitted `--auto-brightness` to `disable` and exposes key-value, white-point, boost, epsilon, and desaturation controls with deterministic defaults and validation.
 - **TST-020**: MUST verify auto-brightness clipping proxies use normalized thresholds `1/255` and `254/255` and key auto-selection uses the original base values and boost rules.
 - **TST-021**: MUST verify `_parse_run_options` accepts HDR+ knob overrides and rejects invalid HDR+ knob combinations with deterministic parse errors.
 - **TST-022**: MUST verify HDR+ scalar proxy mode `rggb` produces deterministic green-weighted scalar conversion from RGB float input.
@@ -334,7 +334,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-058**: MUST verify auto-gamma luminance anchoring computes `gamma=log(target_gray)/log(mean_luminance)` and returns unchanged image when mean luminance is outside configured guard bounds.
 - **TST-059**: MUST verify auto-gamma LUT-domain mapping runs in float space without quantized intermediates and without stage-local clipping.
 - **TST-040**: MUST verify float-only OpenCV Mertens output applies OpenCV-equivalent `255x` exposure-fusion scaling before final `[0,1]` normalization.
-- **TST-060**: MUST verify `_parse_run_options` defaults auto-white-balance to disabled, defaults xphoto domain to `source-auto`, and accepts all supported auto-white-balance selectors.
+- **TST-060**: MUST verify `_parse_run_options` defaults auto-white-balance to disabled, defaults xphoto domain to `source-auto`, defaults RAW white-balance normalization mode to `MEAN`, and accepts all supported auto-white-balance selectors.
 - **TST-061**: MUST verify `_parse_run_options` rejects missing or unsupported `--auto-white-balance` and `--white-balance-xphoto-domain` values with deterministic diagnostics.
 - **TST-062**: MUST verify `run` prints `Auto-white-balance stage: disabled`, skips auto-white-balance when `--auto-white-balance` is omitted, executes auto-brightness after `_extract_base_rgb_linear_float` and before `_calculate_auto_zero_evaluations`, and keeps static-postprocess brightness manual-only.
 - **TST-063**: MUST verify `_apply_auto_white_balance_stage_float` applies one identical gain vector to one stage input image using transient estimation-only preprocessing.
@@ -346,7 +346,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-075**: MUST verify auto-white-balance estimation uses transient auto-brightness preprocessing and does not leak that preprocessed brightness-adjusted image into stage output.
 - **TST-076**: MUST verify xphoto gain extraction accepts real-image analysis payloads with non-fixed shape and remains deterministic with anti-aliased pyramid downsampling.
 - **TST-077**: MUST verify xphoto estimation-domain selector applies only to estimation (`linear|srgb|source-auto`) without altering single-image float output contracts.
-- **TST-069**: MUST verify `_parse_run_options` accepts `--hdr-merge=OpenCV-Tonemap`, requires exactly one `--opencv-tonemap-algorithm=<drago|reinhard|mantiuk>` selector, and rejects missing or unknown selector values.
+- **TST-069**: MUST verify `_parse_run_options` accepts `--hdr-merge=OpenCV-Tonemap`, defaults omitted `--opencv-tonemap-algorithm` to `reinhard`, accepts one explicit selector, and rejects unknown selector values.
 - **TST-070**: MUST verify `_parse_run_options` rejects `--opencv-tonemap-algorithm` and `--opencv-tonemap-<algorithm>-*` options unless `--hdr-merge=OpenCV-Tonemap` is selected and rejects algorithm-specific knob misuse outside the selected map.
 - **TST-071**: MUST verify OpenCV-Tonemap backend consumes only `ev_zero`, sets `ev_minus` and `ev_plus` to `None`, and prints both extraction skip diagnostics.
 - **TST-072**: MUST verify OpenCV-Tonemap backend dispatches Drago, Reinhard, and Mantiuk implementations with `gamma_inv=1/resolved_merge_gamma` and algorithm-specific optional knobs.
@@ -365,9 +365,9 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | PRJ-004 | `.github/workflows/release-uvx.yml`; excerpt: semantic tag trigger, build job, attestation, and GitHub release upload flow. |
 | PRJ-005 | `scripts/d2j.sh`; excerpt: `exec "${UV_TOOL}" run --project "${BASE_DIR}" python -m dng2jpg "$@"`. |
 | CTN-001 | `src/dng2jpg/dng2jpg.py::_is_supported_runtime_os`; excerpt: returns true only on Linux and prints Linux-only error otherwise. |
-| CTN-002 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: parses `--hdr-merge` from the remaining backend set and defaults to `OpenCV-Merge` when omitted. |
-| CTN-003 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: resolves `ev_delta` from `--bracketing` (absent→1.0 static, numeric→static, auto→auto algorithm). |
-| CTN-007 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: resolves `ev_zero` from `--exposure` (absent→0.0 static, numeric→static, auto→signed numeric minimum of `ev_best`, `ev_ettr`, `ev_detail`). |
+| CTN-002 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: parses `--hdr-merge` from the remaining backend set and defaults to `OpenCV-Tonemap` when omitted. |
+| CTN-003 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: resolves `ev_delta` from `--bracketing` (absent→automatic iterative algorithm, numeric→static, auto→auto algorithm). |
+| CTN-007 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: resolves `ev_zero` from `--exposure` (absent→signed numeric minimum of `ev_best`, `ev_ettr`, `ev_detail`, numeric→static, auto→signed numeric minimum of `ev_best`, `ev_ettr`, `ev_detail`). |
 | CTN-004 | `src/dng2jpg/dng2jpg.py::run`; excerpt: validates `.dng` suffix, input existence, and output parent directory existence. |
 | CTN-005 | `src/dng2jpg/dng2jpg.py::_collect_missing_external_executables`, `run`; excerpt: explicit preflight for selected external commands and deterministic missing-dependency diagnostics. |
 | CTN-006 | `scripts/d2j.sh`; excerpt: compares `${PROJECT_ROOT}` and `${BASE_DIR}` and exits `1` on mismatch. |
@@ -450,7 +450,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-135 | `src/dng2jpg/dng2jpg.py::AutoBrightnessOptions`, `_parse_auto_brightness_options`, `print_help`; excerpt: exposes auto-brightness luminance-preserving desaturation toggle without local-contrast controls. |
 | REQ-136 | `src/dng2jpg/dng2jpg.py::_apply_clahe_luma_rgb_float`; excerpt: applies CLAHE on float-domain luminance, reconstructs RGB with preserved chroma, and blends with original via configured strength. |
 | REQ-137 | `src/dng2jpg/dng2jpg.py::_apply_clahe_luma_rgb_float`; excerpt: keeps auto-adjust CLAHE-luma behavior aligned with the former uint16-based local-contrast stage except for quantization removal. |
-| REQ-107 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `print_help`; excerpt: parses `--hdr-merge OpenCV-Merge` and defaults to `OpenCV-Merge` when omitted. |
+| REQ-107 | `src/dng2jpg/dng2jpg.py::_parse_run_options`, `print_help`; excerpt: parses `--hdr-merge OpenCV-Merge` and defaults to `OpenCV-Tonemap` when omitted. |
 | REQ-108 | `src/dng2jpg/dng2jpg.py::OpenCvMergeOptions`, `_parse_opencv_merge_algorithm_option`, `_parse_opencv_merge_backend_options`, `_run_opencv_merge_backend`, `_run_opencv_merge_radiance`, `_run_opencv_merge_mertens`; excerpt: selects OpenCV `Debevec`, `Robertson`, or `Mertens` and dispatches the matching merge path. |
 | REQ-109 | `src/dng2jpg/dng2jpg.py::_build_opencv_radiance_exposure_times`; excerpt: derives deterministic OpenCV radiance exposure times in seconds from EXIF `ExposureTime` and extracted EV triplet. |
 | REQ-110 | `src/dng2jpg/dng2jpg.py::_run_opencv_merge_backend`, `_to_uint8_image_array`; excerpt: preserves RGB float input/output while confining OpenCV-local quantization to backend merge adaptation boundaries. |
@@ -502,7 +502,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-147 | `src/dng2jpg/dng2jpg.py::_write_debug_rgb_float_tiff`, `run`; excerpt: writes `<input-dng-stem><stage-suffix>.tiff` into the output JPG directory from normalized RGB float payloads. |
 | REQ-148 | `src/dng2jpg/dng2jpg.py::run`, `_write_hdr_merge_debug_checkpoints`, `_postprocess`, `_encode_jpg`; excerpt: emits one progressive checkpoint per executed stage output, including HDR merge final and explicit pre/post merge-gamma boundaries when available. |
 | REQ-149 | `src/dng2jpg/dng2jpg.py::run`; excerpt: keeps debug TIFF outputs outside `TemporaryDirectory(...)` while still cleaning the temporary workspace after execution. |
-| TST-001 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_ev_defaults_and_auto_selectors`; verifies default static `ev_delta=1.0`/`ev_zero=0.0`, `--bracketing=auto`, `--exposure=auto`, finite selectors, and `--hdr-merge` parsing. |
+| TST-001 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_ev_defaults_and_auto_selectors`; verifies default automatic `ev_delta`/`ev_zero`, `--bracketing=auto`, `--exposure=auto`, finite selectors, and `--hdr-merge` parsing. |
 | TST-002 | `src/dng2jpg/dng2jpg.py::run`; branches for unsupported OS and dependency failures returning `1`. |
 | TST-003 | `src/dng2jpg/dng2jpg.py::run`; success branch prints `HDR JPG created: ...` and returns `0`. |
 | TST-004 | `tests/test_uint16_postprocess_pipeline.py::test_select_ev_zero_candidate_chooses_numeric_minimum`, `test_select_ev_zero_candidate_uses_unclamped_values`; verifies `ev_zero=min(ev_best, ev_ettr, ev_detail)` with preserved signs when `--exposure=auto`. |
@@ -514,7 +514,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | TST-010 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; branch checks for `--auto-levels <enable|disable>` coupling and `--al-*` knob validations. |
 | TST-011 | `tests/test_uint16_postprocess_pipeline.py::test_apply_auto_brightness_rgb_float_executes_original_stage_order`; verifies float-interface auto-brightness stage order and optional desaturation without CLAHE local contrast. |
 | TST-012 | `tests/test_uint16_postprocess_pipeline.py::test_encode_jpg_quantizes_once_at_final_boundary`; verifies one final float-to-uint8 conversion at the JPEG boundary after dedicated `_postprocess` stage completion. |
-| TST-013 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_accepts_hdr_merge_opencv_backend`, `test_parse_run_options_rejects_unknown_hdr_merge_backend`, `test_parse_run_options_defaults_hdr_merge_to_opencv`; validates remaining hdr-merge selection, default, and invalid-value rejection. |
+| TST-013 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_accepts_hdr_merge_opencv_backend`, `test_parse_run_options_rejects_unknown_hdr_merge_backend`, `test_parse_run_options_defaults_hdr_merge_to_opencv_tonemap`; validates remaining hdr-merge selection, default, and invalid-value rejection. |
 | TST-014 | `tests/test_uint16_postprocess_pipeline.py::test_build_ev_times_from_ev_zero_and_delta_matches_bracket_sequence`; verifies deterministic unit-base EV-time sequence generation delegated from the EXIF-based radiance timing helper. |
 | TST-015 | `tests/test_uint16_postprocess_pipeline.py::test_normalize_debevec_hdr_to_unit_range_clamps_to_valid_interval`, `test_run_opencv_merge_backend_keeps_mertens_inputs_as_float32`, `test_run_opencv_merge_backend_dispatches_debevec_direct_float_path_with_tonemap`, `test_run_opencv_merge_backend_dispatches_robertson_direct_float_path`; verifies OpenCV merge outputs remain normalized RGB float images bounded to `[0,1]`. |
 | TST-016 | `tests/test_uint16_postprocess_pipeline.py::test_parse_auto_levels_options_defaults_match_rawtherapee`; verifies parser default values for clip percentage, gamut clipping, method, and gain threshold. |
@@ -581,8 +581,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | TST-075 | `tests/test_uint16_postprocess_pipeline.py::test_apply_auto_white_balance_stage_float_uses_transient_auto_brightness_preprocessing`; verifies transient auto-brightness estimation does not replace stage output with preprocessed pixels. |
 | TST-076 | `tests/test_uint16_postprocess_pipeline.py::test_extract_white_balance_channel_gains_from_xphoto_accepts_real_image_payload_shape`, `test_extract_white_balance_channel_gains_from_xphoto_uses_inter_area_pyramid_downsampling`; verifies non-fixed payload shape and anti-aliased pyramid downsampling for xphoto estimation. |
 | TST-077 | `tests/test_uint16_postprocess_pipeline.py::test_estimate_xphoto_white_balance_gains_source_auto_resolves_srgb_domain`, `test_run_routes_auto_white_balance_to_post_merge_stage`; verifies estimation-domain selector remains estimation-only and runtime stage ordering routes auto-white-balance to post-merge processing. |
-| REQ-189 | `src/dng2jpg/dng2jpg.py::_parse_hdr_merge_option`, `_parse_run_options`, `run`; excerpt: accepts `OpenCV-Tonemap` selector and routes backend execution only when selected. |
-| REQ-190 | `src/dng2jpg/dng2jpg.py::_parse_opencv_tonemap_backend_options`, `_parse_run_options`; excerpt: requires exactly one `--opencv-tonemap-algorithm=<drago|reinhard|mantiuk>` selector in OpenCV-Tonemap mode. |
+| REQ-189 | `src/dng2jpg/dng2jpg.py::_parse_hdr_merge_option`, `_parse_run_options`, `run`; excerpt: accepts `OpenCV-Tonemap` selector and routes backend execution when selected or by default. |
+| REQ-190 | `src/dng2jpg/dng2jpg.py::_parse_opencv_tonemap_backend_options`, `_parse_run_options`; excerpt: accepts zero or one `--opencv-tonemap-algorithm=<drago|reinhard|mantiuk>` selector in OpenCV-Tonemap mode with default `reinhard`. |
 | REQ-191 | `src/dng2jpg/dng2jpg.py::_parse_run_options`; excerpt: rejects `--opencv-tonemap-algorithm` and `--opencv-tonemap-<algorithm>-*` options unless OpenCV-Tonemap backend is selected. |
 | REQ-192 | `src/dng2jpg/dng2jpg.py::_run_opencv_tonemap_backend`; excerpt: processes only bracket index `1` (`ev_zero`) and ignores minus/plus brackets. |
 | REQ-193 | `src/dng2jpg/dng2jpg.py::_run_opencv_tonemap_backend`; excerpt: dispatches selected Drago/Reinhard/Mantiuk implementation with `gamma_inv=1/resolved_merge_gamma` from merge-gamma curve resolution. |
@@ -591,7 +591,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-196 | `src/dng2jpg/dng2jpg.py::OpenCvTonemapOptions`, `_parse_opencv_tonemap_backend_options`, `print_help`; excerpt: exposes and defaults Mantiuk optional knobs. |
 | REQ-197 | `src/dng2jpg/dng2jpg.py::_run_opencv_tonemap_backend`; excerpt: applies resolved merge gamma only as backend-final step after tone mapping. |
 | REQ-198 | `src/dng2jpg/dng2jpg.py::_run_opencv_tonemap_backend`, `_apply_merge_gamma_float_no_clip`; excerpt: preserves float dynamic range without stage-local clipping in OpenCV-Tonemap backend. |
-| TST-069 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_accepts_opencv_tonemap_backend_and_requires_single_selector`; verifies OpenCV-Tonemap `--opencv-tonemap-algorithm=<drago|reinhard|mantiuk>` parsing and mandatory selector enforcement. |
+| TST-069 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_accepts_opencv_tonemap_backend_and_default_selector`; verifies OpenCV-Tonemap `--opencv-tonemap-algorithm=<drago|reinhard|mantiuk>` parsing with omitted-selector default `reinhard`. |
 | TST-070 | `tests/test_uint16_postprocess_pipeline.py::test_parse_run_options_rejects_tonemap_options_without_opencv_tonemap_backend`; verifies `--opencv-tonemap-algorithm` and `--opencv-tonemap-<algorithm>-*` backend coupling plus selector/knob misuse rejections. |
 | TST-071 | `tests/test_uint16_postprocess_pipeline.py::test_run_opencv_tonemap_backend_uses_ev_zero_only`; verifies ev-zero-only consumption and minus/plus exclusion. |
 | TST-072 | `tests/test_uint16_postprocess_pipeline.py::test_run_opencv_tonemap_backend_dispatches_algorithms_with_fixed_gamma`; verifies Drago/Reinhard/Mantiuk dispatch and `gamma_inv=1/resolved_merge_gamma`. |

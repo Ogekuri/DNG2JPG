@@ -1359,7 +1359,7 @@ def test_parse_run_options_accepts_white_balance_modes_and_selector_defaults() -
     """Parser must accept white-balance selectors and default xphoto selector."""
 
     parsed_default = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--ev-bracketing=1"]
+        ["input.dng", "output.jpg", "--bracketing=1"]
     )
     assert parsed_default is not None
     assert (
@@ -1377,7 +1377,7 @@ def test_parse_run_options_accepts_white_balance_modes_and_selector_defaults() -
             [
                 "input.dng",
                 "output.jpg",
-                "--ev-bracketing=1",
+                "--bracketing=1",
                 f"--white-balance={raw_white_balance_mode}",
             ]
         )
@@ -1395,7 +1395,7 @@ def test_parse_run_options_accepts_white_balance_modes_and_selector_defaults() -
             [
                 "input.dng",
                 "output.jpg",
-                "--ev-bracketing=1",
+                "--bracketing=1",
                 f"--auto-white-balance={white_balance_mode}",
             ]
         )
@@ -1406,7 +1406,7 @@ def test_parse_run_options_accepts_white_balance_modes_and_selector_defaults() -
             == dng2jpg_module.DEFAULT_WHITE_BALANCE_XPHOTO_DOMAIN
         )
     parsed_explicit_disable = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--ev-bracketing=1", "--auto-white-balance=DISABLE"]
+        ["input.dng", "output.jpg", "--bracketing=1", "--auto-white-balance=DISABLE"]
     )
     assert parsed_explicit_disable is not None
     assert parsed_explicit_disable[4].white_balance_mode is None
@@ -1418,7 +1418,7 @@ def test_parse_run_options_accepts_white_balance_modes_and_selector_defaults() -
         [
             "input.dng",
             "output.jpg",
-            "--ev-bracketing=1",
+            "--bracketing=1",
             "--auto-white-balance=Simple",
             "--white-balance-xphoto-domain=srgb",
         ]
@@ -1434,22 +1434,22 @@ def test_parse_run_options_rejects_invalid_white_balance_mode_or_selectors() -> 
     """Parser must reject unsupported white-balance mode and selector values."""
 
     invalid_raw_white_balance = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--ev-bracketing=1", "--white-balance=invalid-mode"]
+        ["input.dng", "output.jpg", "--bracketing=1", "--white-balance=invalid-mode"]
     )
     assert invalid_raw_white_balance is None
     parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--ev-bracketing=1", "--auto-white-balance=invalid-mode"]
+        ["input.dng", "output.jpg", "--bracketing=1", "--auto-white-balance=invalid-mode"]
     )
     assert parsed is None
     missing = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--ev-bracketing=1", "--auto-white-balance"]
+        ["input.dng", "output.jpg", "--bracketing=1", "--auto-white-balance"]
     )
     assert missing is None
     removed_analysis_source = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         [
             "input.dng",
             "output.jpg",
-            "--ev-bracketing=1",
+            "--bracketing=1",
             "--auto-white-balance=Simple",
             "--white-balance-analysis-source=linear-base",
         ]
@@ -1459,7 +1459,7 @@ def test_parse_run_options_rejects_invalid_white_balance_mode_or_selectors() -> 
         [
             "input.dng",
             "output.jpg",
-            "--ev-bracketing=1",
+            "--bracketing=1",
             "--auto-white-balance=Simple",
             "--white-balance-xphoto-domain=invalid",
         ]
@@ -1716,7 +1716,7 @@ def test_parse_run_options_accepts_hdr_merge_opencv_backend() -> None:
     """Parser must accept `--hdr-merge=OpenCV-Merge` as backend selector."""
 
     parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--ev-bracketing=1", "--hdr-merge=OpenCV-Merge"]
+        ["input.dng", "output.jpg", "--bracketing=1", "--hdr-merge=OpenCV-Merge"]
     )
     assert parsed is not None
     _input_path = parsed[0]
@@ -1741,24 +1741,26 @@ def test_parse_run_options_accepts_hdr_merge_opencv_backend() -> None:
         == dng2jpg_module.DEFAULT_OPENCV_MERGE_ALGORITHM
     )
     assert opencv_merge_options.tonemap_enabled is True
-    assert opencv_merge_options.tonemap_gamma == 0.9
+    assert opencv_merge_options.tonemap_gamma == 1.0
 
 
-def test_parse_run_options_defaults_hdr_merge_to_opencv() -> None:
-    """Parser must default backend selector to OpenCV when omitted."""
+def test_parse_run_options_defaults_hdr_merge_to_opencv_tonemap() -> None:
+    """Parser must default backend selector to OpenCV-Tonemap when omitted."""
 
     parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--ev-bracketing=1"]
+        ["input.dng", "output.jpg", "--bracketing=1"]
     )
     assert parsed is not None
-    assert parsed[6] is True
+    assert parsed[4].opencv_tonemap_options is not None
+    assert parsed[4].opencv_tonemap_options.tonemap_map == "reinhard"
+    assert parsed[6] is False
     assert parsed[5] is False
     assert parsed[10] is False
 
 
-def test_parse_run_options_accepts_opencv_tonemap_backend_and_requires_single_selector(
+def test_parse_run_options_accepts_opencv_tonemap_backend_and_default_selector(
 ) -> None:
-    """Parser must accept OpenCV-Tonemap and require exactly one selector option."""
+    """Parser must accept OpenCV-Tonemap and default omitted selector to reinhard."""
 
     parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         [
@@ -1780,7 +1782,10 @@ def test_parse_run_options_accepts_opencv_tonemap_backend_and_requires_single_se
     missing_selector = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         ["input.dng", "output.jpg", "--bracketing=1", "--hdr-merge=OpenCV-Tonemap"]
     )
-    assert missing_selector is None
+    assert missing_selector is not None
+    missing_postprocess = missing_selector[4]
+    assert missing_postprocess.opencv_tonemap_options is not None
+    assert missing_postprocess.opencv_tonemap_options.tonemap_map == "reinhard"
 
     multiple_selectors = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         [
@@ -2006,9 +2011,9 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
     assert "Effective only when `--hdr-merge=OpenCV-Tonemap`" in output
     assert "Effective only when `--hdr-merge=HDR-Plus`." in output
     assert "Effective only when `--hdr-merge=Luminace-HDR`." in output
-    assert "Default: `OpenCV-Merge`." in output
+    assert "Default: `OpenCV-Tonemap`." in output
     assert output.count("Default:\n                                    `20`.") >= 2
-    assert "Default: `Robertson`." in output
+    assert "Default: `Debevec`." in output
     assert "Default: `enable`." in output
     assert "Default by algorithm: `Debevec=1`, `Robertson=0.9`, `Mertens=0.8`." in output
     assert "Static postprocess defaults when omitted:" in output
@@ -2026,13 +2031,13 @@ def test_parse_run_options_rejects_unknown_hdr_merge_backend() -> None:
     """Parser must reject unknown `--hdr-merge` selector values."""
 
     parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--ev-bracketing=1", "--hdr-merge=unknown-backend"]
+        ["input.dng", "output.jpg", "--bracketing=1", "--hdr-merge=unknown-backend"]
     )
     assert parsed is None
 
 
 def test_parse_run_options_auto_ev_defaults_and_explicit_ev_auto() -> None:
-    """Auto exposure must default to enabled and be selectable by `--ev-bracketing=auto`."""
+    """Auto exposure must default to enabled and be selectable by `--bracketing=auto`."""
 
     parsed_default_auto = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         ["input.dng", "output.jpg"]
@@ -2045,7 +2050,7 @@ def test_parse_run_options_auto_ev_defaults_and_explicit_ev_auto() -> None:
     assert auto_ev_options.highlight_clipping_pct == 20.0
 
     parsed_explicit_auto = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--ev-bracketing=auto"]
+        ["input.dng", "output.jpg", "--bracketing=auto"]
     )
     assert parsed_explicit_auto is not None
     assert parsed_explicit_auto[2] is None
@@ -2064,23 +2069,23 @@ def test_parse_run_options_rejects_removed_auto_ev_option(capsys) -> None:
 
 
 def test_parse_run_options_static_ev_defaults_ev_zero_to_zero_with_unspecified_flag() -> None:
-    """Static `--ev` without `--ev-zero` must preserve the unset manual-center flag."""
+    """Static `--ev` without `--exposure` must preserve the unset manual-center flag."""
 
     parsed_static = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--ev-bracketing=1.25"]
+        ["input.dng", "output.jpg", "--bracketing=1.25"]
     )
     assert parsed_static is not None
     assert parsed_static[2] == 1.25
     assert parsed_static[3] is False
     assert parsed_static[11] == 0.0
-    assert parsed_static[12] is False
+    assert parsed_static[12] is True
 
 
 def test_parse_run_options_static_ev_preserves_manual_ev_zero() -> None:
-    """Static `--ev` with `--ev-zero` must preserve the manual center and flag."""
+    """Static `--ev` with `--exposure` must preserve the manual center and flag."""
 
     parsed_static = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--ev-bracketing=1.25", "--ev-zero=0.5"]
+        ["input.dng", "output.jpg", "--bracketing=1.25", "--exposure=0.5"]
     )
     assert parsed_static is not None
     assert parsed_static[2] == 1.25
@@ -2090,14 +2095,14 @@ def test_parse_run_options_static_ev_preserves_manual_ev_zero() -> None:
 
 
 def test_parse_run_options_rejects_ev_zero_without_ev(capsys) -> None:
-    """`--ev-zero` must require static `--ev` mode."""
+    """`--exposure` must require static `--ev` mode."""
 
     parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--ev-zero=0.5"]
+        ["input.dng", "output.jpg", "--exposure=0.5"]
     )
     assert parsed is None
     captured = capsys.readouterr()
-    assert "--ev-zero requires numeric --ev-bracketing value" in captured.err
+    assert "--exposure requires numeric --bracketing value" in captured.err
 
 
 def test_parse_run_options_rejects_removed_auto_zero_options(capsys) -> None:
@@ -2125,7 +2130,7 @@ def test_parse_run_options_accepts_new_auto_ev_clipping_options() -> None:
         [
             "input.dng",
             "output.jpg",
-            "--ev-bracketing=auto",
+            "--bracketing=auto",
             "--auto-ev-shadow-clipping=4",
             "--auto-ev-highlight-clipping=6",
             "--auto-ev-step=0.2",
@@ -2163,6 +2168,8 @@ def test_parse_run_options_defaults_enable_auto_adjust() -> None:
         ["input.dng", "output.jpg"]
     )
     assert parsed is not None
+    assert parsed[4].auto_brightness_enabled is False
+    assert parsed[4].auto_levels_enabled is True
     assert parsed[4].auto_adjust_enabled is True
 
 
@@ -2193,7 +2200,7 @@ def test_parse_run_options_enables_debug_flag() -> None:
         [
             "input.dng",
             "output.jpg",
-            "--ev-bracketing=1",
+            "--bracketing=1",
             "--hdr-merge=OpenCV-Merge",
             "--debug",
         ]
@@ -2577,21 +2584,21 @@ def test_parse_run_options_accepts_opencv_controls_and_defaults() -> None:
     """Parser must expose OpenCV algorithm and tone-map controls with defaults."""
 
     parsed_default = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--ev-bracketing=1", "--hdr-merge=OpenCV-Merge"]
+        ["input.dng", "output.jpg", "--bracketing=1", "--hdr-merge=OpenCV-Merge"]
     )
     assert parsed_default is not None
     default_options = parsed_default[8]
     assert default_options == dng2jpg_module.OpenCvMergeOptions(
-        merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_ROBERTSON,
+        merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_DEBEVEC,
         tonemap_enabled=True,
-        tonemap_gamma=0.9,
+        tonemap_gamma=1.0,
     )
 
     parsed_override = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         [
             "input.dng",
             "output.jpg",
-            "--ev-bracketing=1",
+            "--bracketing=1",
             "--hdr-merge=OpenCV-Merge",
             "--opencv-merge-algorithm=Debevec",
             "--opencv-merge-tonemap=off",
@@ -2614,7 +2621,7 @@ def test_parse_run_options_rejects_invalid_opencv_controls() -> None:
         [
             "input.dng",
             "output.jpg",
-            "--ev-bracketing=1",
+            "--bracketing=1",
             "--hdr-merge=OpenCV-Merge",
             "--opencv-merge-algorithm=unknown",
         ]
@@ -2625,7 +2632,7 @@ def test_parse_run_options_rejects_invalid_opencv_controls() -> None:
         [
             "input.dng",
             "output.jpg",
-            "--ev-bracketing=1",
+            "--bracketing=1",
             "--hdr-merge=OpenCV-Merge",
             "--opencv-merge-tonemap=maybe",
         ]
@@ -2636,7 +2643,7 @@ def test_parse_run_options_rejects_invalid_opencv_controls() -> None:
         [
             "input.dng",
             "output.jpg",
-            "--ev-bracketing=1",
+            "--bracketing=1",
             "--hdr-merge=HDR-Plus",
             "--opencv-merge-tonemap=on",
         ]
@@ -2651,7 +2658,7 @@ def test_parse_run_options_rejects_tonemap_options_without_opencv_tonemap_backen
         [
             "input.dng",
             "output.jpg",
-            "--ev-bracketing=1",
+            "--bracketing=1",
             "--hdr-merge=OpenCV-Merge",
             "--opencv-tonemap-algorithm=drago",
         ]
@@ -2662,7 +2669,7 @@ def test_parse_run_options_rejects_tonemap_options_without_opencv_tonemap_backen
         [
             "input.dng",
             "output.jpg",
-            "--ev-bracketing=1",
+            "--bracketing=1",
             "--hdr-merge=OpenCV-Merge",
             "--opencv-tonemap-drago-saturation=1.2",
         ]
@@ -2673,7 +2680,7 @@ def test_parse_run_options_rejects_tonemap_options_without_opencv_tonemap_backen
         [
             "input.dng",
             "output.jpg",
-            "--ev-bracketing=1",
+            "--bracketing=1",
             "--hdr-merge=OpenCV-Tonemap",
             "--opencv-tonemap-algorithm=drago",
             "--opencv-tonemap-reinhard-intensity=0.2",
@@ -2689,7 +2696,7 @@ def test_parse_run_options_accepts_post_gamma_auto_and_knobs() -> None:
         [
             "input.dng",
             "output.jpg",
-            "--ev-bracketing=1",
+            "--bracketing=1",
             "--post-gamma=auto",
             "--post-gamma-auto-target-gray=0.42",
             "--post-gamma-auto-luma-min=0.02",
@@ -2715,7 +2722,7 @@ def test_parse_run_options_rejects_post_gamma_auto_knobs_without_auto() -> None:
         [
             "input.dng",
             "output.jpg",
-            "--ev-bracketing=1",
+            "--bracketing=1",
             "--post-gamma=1.2",
             "--post-gamma-auto-target-gray=0.42",
         ]
@@ -3396,7 +3403,7 @@ def test_parse_run_options_defaults_gamma_to_auto() -> None:
     """Parser must default merge gamma to automatic EXIF/source resolution."""
 
     parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--ev-bracketing=1"]
+        ["input.dng", "output.jpg", "--bracketing=1"]
     )
 
     assert parsed is not None
@@ -3407,7 +3414,7 @@ def test_parse_run_options_accepts_custom_gamma() -> None:
     """Parser must accept custom merge-gamma coefficient pairs."""
 
     parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--ev-bracketing=1", "--gamma=4.5,0.45"]
+        ["input.dng", "output.jpg", "--bracketing=1", "--gamma=4.5,0.45"]
     )
 
     assert parsed is not None
@@ -3422,10 +3429,10 @@ def test_parse_run_options_rejects_invalid_gamma_payload() -> None:
     """Parser must reject malformed or non-positive merge-gamma payloads."""
 
     invalid_shape = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--ev-bracketing=1", "--gamma=4.5"]
+        ["input.dng", "output.jpg", "--bracketing=1", "--gamma=4.5"]
     )
     invalid_non_positive = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
-        ["input.dng", "output.jpg", "--ev-bracketing=1", "--gamma=0,0.45"]
+        ["input.dng", "output.jpg", "--bracketing=1", "--gamma=0,0.45"]
     )
 
     assert invalid_shape is None
@@ -4194,7 +4201,7 @@ def test_parse_run_options_accepts_extended_auto_levels_knobs() -> None:
         [
             "input.dng",
             "output.jpg",
-            "--ev-bracketing=1",
+            "--bracketing=1",
             "--auto-levels=enable",
             "--al-clip-pct=0.5",
             "--al-clip-out-of-gamut=false",
@@ -4224,7 +4231,7 @@ def test_parse_run_options_method_does_not_enable_highlight_reconstruction() -> 
         [
             "input.dng",
             "output.jpg",
-            "--ev-bracketing=1",
+            "--bracketing=1",
             "--auto-levels=enable",
             "--al-highlight-reconstruction-method=Color Propagation",
             "--hdr-merge=OpenCV-Merge",
@@ -4557,7 +4564,7 @@ def test_parse_run_options_accepts_hdrplus_controls() -> None:
         [
             "input.dng",
             "output.jpg",
-            "--ev-bracketing=1",
+            "--bracketing=1",
             "--hdr-merge=HDR-Plus",
             "--hdrplus-proxy-mode=bt709",
             "--hdrplus-search-radius=3",
@@ -4587,7 +4594,7 @@ def test_parse_run_options_rejects_invalid_hdrplus_controls() -> None:
         [
             "input.dng",
             "output.jpg",
-            "--ev-bracketing=1",
+            "--bracketing=1",
             "--hdr-merge=HDR-Plus",
             "--hdrplus-temporal-min-dist=30",
             "--hdrplus-temporal-max-dist=30",
@@ -5099,7 +5106,7 @@ def test_run_debug_writes_extraction_and_merge_checkpoints(monkeypatch, tmp_path
         [
             str(input_dng),
             str(output_jpg),
-            "--ev-bracketing=1",
+            "--bracketing=1",
             "--hdr-merge=OpenCV-Merge",
             "--debug",
         ]
@@ -5212,7 +5219,7 @@ def test_run_auto_ev_prints_joint_candidate_diagnostics(monkeypatch, tmp_path, c
         [
             str(input_dng),
             str(output_jpg),
-            "--ev-bracketing=auto",
+            "--bracketing=auto",
             "--hdr-merge=OpenCV-Merge",
         ]
     )
@@ -5326,8 +5333,8 @@ def test_run_static_ev_uses_manual_center_and_reports_static_mode(
         [
             str(input_dng),
             str(output_jpg),
-            "--ev-bracketing=1",
-            "--ev-zero=0.5",
+            "--bracketing=1",
+            "--exposure=0.5",
             "--hdr-merge=OpenCV-Merge",
         ]
     )
@@ -5453,7 +5460,7 @@ def test_run_skips_white_balance_when_mode_not_specified(monkeypatch, tmp_path) 
         [
             str(input_dng),
             str(output_jpg),
-            "--ev-bracketing=1",
+            "--bracketing=1",
             "--hdr-merge=OpenCV-Merge",
         ]
     )
@@ -5578,8 +5585,8 @@ def test_run_routes_auto_white_balance_to_post_merge_stage(
         [
             str(input_dng),
             str(output_jpg),
-            "--ev-bracketing=1",
-            "--ev-zero=1",
+            "--bracketing=1",
+            "--exposure=1",
             "--auto-white-balance=TTL",
             "--hdr-merge=OpenCV-Merge",
         ]
@@ -5707,7 +5714,7 @@ def test_run_prints_source_gamma_diagnostics(monkeypatch, tmp_path, capsys) -> N
         [
             str(input_dng),
             str(output_jpg),
-            "--ev-bracketing=1",
+            "--bracketing=1",
             "--hdr-merge=OpenCV-Merge",
         ]
     )
@@ -5809,7 +5816,7 @@ def test_run_prints_merge_gamma_diagnostics(monkeypatch, tmp_path, capsys) -> No
     )
 
     exit_code = dng2jpg_module.run(
-        [str(input_dng), str(output_jpg), "--ev-bracketing=1", "--hdr-merge=OpenCV-Merge"]
+        [str(input_dng), str(output_jpg), "--bracketing=1", "--hdr-merge=OpenCV-Merge"]
     )
 
     assert exit_code == 0

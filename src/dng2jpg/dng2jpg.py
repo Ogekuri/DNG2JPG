@@ -128,7 +128,7 @@ RAW_WHITE_BALANCE_MODE_GREEN = "GREEN"
 RAW_WHITE_BALANCE_MODE_MAX = "MAX"
 RAW_WHITE_BALANCE_MODE_MIN = "MIN"
 RAW_WHITE_BALANCE_MODE_MEAN = "MEAN"
-DEFAULT_RAW_WHITE_BALANCE_MODE = RAW_WHITE_BALANCE_MODE_MAX
+DEFAULT_RAW_WHITE_BALANCE_MODE = RAW_WHITE_BALANCE_MODE_MEAN
 DEFAULT_WHITE_BALANCE_XPHOTO_DOMAIN = WHITE_BALANCE_XPHOTO_DOMAIN_SOURCE_AUTO
 WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO = "ev-zero"
 WHITE_BALANCE_ANALYSIS_SOURCE_LINEAR_BASE = "linear-base"
@@ -165,13 +165,14 @@ DEFAULT_OPENCV_MERTENS_BRIGHTNESS = 0.9
 DEFAULT_OPENCV_MERTENS_CONTRAST = 1.4
 DEFAULT_OPENCV_MERTENS_SATURATION = 1.1
 DEFAULT_OPENCV_MERTENS_TONEMAP_GAMMA = 0.8
-DEFAULT_OPENCV_POST_GAMMA = DEFAULT_OPENCV_ROBERTSON_POST_GAMMA
-DEFAULT_OPENCV_BRIGHTNESS = DEFAULT_OPENCV_ROBERTSON_BRIGHTNESS
-DEFAULT_OPENCV_CONTRAST = DEFAULT_OPENCV_ROBERTSON_CONTRAST
-DEFAULT_OPENCV_SATURATION = DEFAULT_OPENCV_ROBERTSON_SATURATION
-DEFAULT_OPENCV_MERGE_ALGORITHM = OPENCV_MERGE_ALGORITHM_ROBERTSON
+DEFAULT_OPENCV_POST_GAMMA = DEFAULT_OPENCV_DEBEVEC_POST_GAMMA
+DEFAULT_OPENCV_BRIGHTNESS = DEFAULT_OPENCV_DEBEVEC_BRIGHTNESS
+DEFAULT_OPENCV_CONTRAST = DEFAULT_OPENCV_DEBEVEC_CONTRAST
+DEFAULT_OPENCV_SATURATION = DEFAULT_OPENCV_DEBEVEC_SATURATION
+DEFAULT_OPENCV_MERGE_ALGORITHM = OPENCV_MERGE_ALGORITHM_DEBEVEC
 DEFAULT_OPENCV_TONEMAP_ENABLED = True
-DEFAULT_OPENCV_TONEMAP_GAMMA = DEFAULT_OPENCV_ROBERTSON_TONEMAP_GAMMA
+DEFAULT_OPENCV_TONEMAP_GAMMA = DEFAULT_OPENCV_DEBEVEC_TONEMAP_GAMMA
+DEFAULT_OPENCV_TONEMAP_MAP = OPENCV_TONEMAP_MAP_REINHARD
 DEFAULT_OPENCV_TONEMAP_DRAGO_SATURATION = 1.0
 DEFAULT_OPENCV_TONEMAP_DRAGO_BIAS = 0.85
 DEFAULT_OPENCV_TONEMAP_REINHARD_INTENSITY = 0.0
@@ -1196,15 +1197,15 @@ def print_help(version):
         "--bracketing=<value>",
         "EV bracket half-span selector: use `auto` for iterative automatic delta, or one finite numeric value `>= 0` for static symmetric bracket EV delta.",
         (
-            "Default: `1.0` (static) when omitted.",
-            "Use `--bracketing=auto` to enable the iterative clipping-threshold algorithm.",
+            "Default: `auto` when omitted.",
+            "Use `--bracketing=<value>` to force static symmetric bracket EV delta.",
         ),
     )
     _print_help_option(
         "--exposure=<value>",
         "EV bracket center selector: use `auto` for automatic center selection, or one finite numeric value for static center EV.",
         (
-            "Default: `0.0` (static) when omitted.",
+            "Default: `auto` when omitted.",
             "Use `--exposure=auto` to select ev_zero as min(ev_best, ev_ettr, ev_detail).",
             "No bit-depth-derived upper bound is enforced.",
         ),
@@ -1255,7 +1256,7 @@ def print_help(version):
     )
     _print_help_option(
         f"--hdr-merge=<{HDR_MERGE_MODE_LUMINANCE}|{HDR_MERGE_MODE_OPENCV_MERGE}|{HDR_MERGE_MODE_OPENCV_TONEMAP}|{HDR_MERGE_MODE_HDR_PLUS}>",
-        f"Select HDR merge backend. Default: `{HDR_MERGE_MODE_OPENCV_MERGE}`.",
+        f"Select HDR merge backend. Default: `{HDR_MERGE_MODE_OPENCV_TONEMAP}`.",
     )
     _print_help_option(
         "--gamma=<auto|a,b>",
@@ -1290,7 +1291,7 @@ def print_help(version):
     )
     _print_help_option(
         "--opencv-tonemap-algorithm=<drago|reinhard|mantiuk>",
-        f"Select OpenCV-Tonemap algorithm for `{HDR_MERGE_MODE_OPENCV_TONEMAP}`. Exactly one `--opencv-tonemap-algorithm` selector is required.",
+        f"Select OpenCV-Tonemap algorithm for `{HDR_MERGE_MODE_OPENCV_TONEMAP}`. Default: `{DEFAULT_OPENCV_TONEMAP_MAP}` when omitted.",
     )
     _print_help_option(
         "--opencv-tonemap-drago-saturation=<value>",
@@ -1382,7 +1383,7 @@ def print_help(version):
     _print_help_option(
         "--auto-brightness=<enable|disable>",
         "Enable or disable the auto-brightness stage executed after linear-base extraction and before auto-zero evaluation/bracket generation.",
-        ("Default: `enable`.",),
+        ("Default: `disable`.",),
     )
     _print_help_option(
         "--ab-key-value=<value>",
@@ -1892,9 +1893,9 @@ def _parse_opencv_tonemap_backend_options(
 ):
     """@brief Parse and validate OpenCV-Tonemap backend selector and knobs.
 
-    @details Requires exactly one selector in
-    `--opencv-tonemap-algorithm=<drago|reinhard|mantiuk>`, applies
-    deterministic defaults
+    @details Accepts zero or one selector in
+    `--opencv-tonemap-algorithm=<drago|reinhard|mantiuk>`, applies default
+    selector `reinhard` when omitted, applies deterministic defaults
     for optional algorithm-specific knobs, and rejects knobs that do not belong
     to the selected algorithm.
     @param tonemap_selector_options {list[str]} Ordered list of selected OpenCV-Tonemap selector tokens.
@@ -1904,26 +1905,28 @@ def _parse_opencv_tonemap_backend_options(
     """
 
     selector_count = len(tonemap_selector_options)
-    if selector_count != 1:
+    if selector_count > 1:
         selector_option = _OPENCV_TONEMAP_SELECTOR_OPTIONS[0]
         print_error(
-            "OpenCV-Tonemap requires exactly one selector: "
+            "OpenCV-Tonemap accepts at most one selector: "
             + f"{selector_option}=<{'|'.join(_OPENCV_TONEMAP_MAPS)}>"
         )
         return None
 
-    selector_option = _OPENCV_TONEMAP_SELECTOR_OPTIONS[0]
-    selector_token = tonemap_selector_options[0]
-    selector_prefix = f"{selector_option}="
-    if not selector_token.startswith(selector_prefix):
-        print_error(f"Unknown OpenCV-Tonemap selector: {selector_token}")
-        return None
-    tonemap_map = selector_token[len(selector_prefix) :]
-    if tonemap_map not in _OPENCV_TONEMAP_MAPS:
-        print_error(
-            f"Invalid OpenCV-Tonemap value for {selector_option}: {tonemap_map}"
-        )
-        return None
+    tonemap_map = DEFAULT_OPENCV_TONEMAP_MAP
+    if selector_count == 1:
+        selector_option = _OPENCV_TONEMAP_SELECTOR_OPTIONS[0]
+        selector_token = tonemap_selector_options[0]
+        selector_prefix = f"{selector_option}="
+        if not selector_token.startswith(selector_prefix):
+            print_error(f"Unknown OpenCV-Tonemap selector: {selector_token}")
+            return None
+        tonemap_map = selector_token[len(selector_prefix) :]
+        if tonemap_map not in _OPENCV_TONEMAP_MAPS:
+            print_error(
+                f"Invalid OpenCV-Tonemap value for {selector_option}: {tonemap_map}"
+            )
+            return None
 
     options = OpenCvTonemapOptions(tonemap_map=tonemap_map)
     drago_saturation = options.drago_saturation
@@ -4749,8 +4752,8 @@ def _parse_run_options(args):
     """@brief Parse CLI args into input, output, and EV parameters.
 
     @details Supports positional file arguments, bracket delta selector
-    (`--bracketing=<auto|value>`, default `1.0` static), bracket center selector
-    (`--exposure=<auto|value>`, default `0.0` static), optional
+    (`--bracketing=<auto|value>`, default `auto`), bracket center selector
+    (`--exposure=<auto|value>`, default `auto`), optional
     automatic exposure clipping and step controls, optional RAW white-balance
     normalization selector
     (`--white-balance=<GREEN|MAX|MIN|MEAN>`),
@@ -4762,7 +4765,7 @@ def _parse_run_options(args):
     optional auto-brightness stage and
     `--ab-*` knobs, optional auto-levels stage and `--al-*` knobs,
     optional shared auto-adjust knobs, optional backend selector
-    (`--hdr-merge=<Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>` default `OpenCV-Merge`),
+    (`--hdr-merge=<Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>` default `OpenCV-Tonemap`),
     OpenCV backend controls, OpenCV-Tonemap backend controls, HDR+ backend controls, and luminance backend controls
     including explicit `--tmo*` passthrough options and optional
     auto-adjust enable selector (`--auto-adjust <enable|disable>`), plus
@@ -4776,10 +4779,10 @@ def _parse_run_options(args):
     """
 
     positional = []
-    ev_value = 1.0
-    auto_ev_delta_enabled = False
+    ev_value = None
+    auto_ev_delta_enabled = True
     ev_zero = 0.0
-    auto_ev_zero_enabled = False
+    auto_ev_zero_enabled = True
     auto_ev_options = AutoEvOptions()
     post_gamma = DEFAULT_POST_GAMMA
     post_gamma_mode = DEFAULT_POST_GAMMA_MODE
@@ -4791,7 +4794,7 @@ def _parse_run_options(args):
     brightness_set = False
     contrast_set = False
     saturation_set = False
-    auto_brightness_enabled = True
+    auto_brightness_enabled = False
     auto_brightness_raw_values = {}
     auto_levels_enabled = True
     auto_levels_raw_values = {}
@@ -4803,7 +4806,7 @@ def _parse_run_options(args):
     auto_white_balance_mode = None
     auto_white_balance_analysis_source = WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO
     auto_white_balance_xphoto_domain = DEFAULT_WHITE_BALANCE_XPHOTO_DOMAIN
-    hdr_merge_mode = HDR_MERGE_MODE_OPENCV_MERGE
+    hdr_merge_mode = HDR_MERGE_MODE_OPENCV_TONEMAP
     opencv_raw_values = {}
     opencv_tonemap_selector_options = []
     opencv_tonemap_knob_raw_values = {}
