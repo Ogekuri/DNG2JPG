@@ -12557,23 +12557,204 @@ def _is_supported_runtime_os():
     return False
 
 
+def _print_validated_run_parameters(
+    input_dng,
+    output_jpg,
+    ev_value,
+    auto_ev_delta_enabled,
+    ev_zero,
+    auto_ev_zero_enabled,
+    auto_ev_options,
+    postprocess_options,
+    enable_luminance,
+    enable_opencv,
+    enable_opencv_tonemap,
+    enable_hdr_plus,
+    luminance_options,
+    opencv_merge_options,
+    hdrplus_options,
+):
+    """@brief Emit structured validated CLI parameter summary to stdout.
+
+    @details Prints all resolved CLI parameter values after successful parse and
+    file-path validation, one value per line, grouped under functional category
+    headers. Group headers are printed without indentation; parameter lines are
+    indented with two spaces. Groups are always emitted in fixed order:
+    `Input/Output`, `Exposure`, `White Balance`, `HDR Backend`, `Merge Gamma`,
+    `Postprocess`; conditional groups `Auto-Brightness`, `Auto-Levels`,
+    `Auto-Adjust` are emitted only when the corresponding stage is enabled;
+    `Debug` is always emitted last. Side effects: writes to stdout via
+    `print_info`.
+
+    @param input_dng {Path} Resolved input DNG file path.
+    @param output_jpg {Path} Resolved output JPEG file path.
+    @param ev_value {float|None} Static EV half-span when `auto_ev_delta_enabled=False`; `None` otherwise.
+    @param auto_ev_delta_enabled {bool} `True` when bracketing is resolved via automatic iterative algorithm.
+    @param ev_zero {float} Static EV center when `auto_ev_zero_enabled=False`; unused sentinel otherwise.
+    @param auto_ev_zero_enabled {bool} `True` when EV center is resolved via automatic algorithm.
+    @param auto_ev_options {AutoEvOptions} Resolved iterative bracket search controls.
+    @param postprocess_options {PostprocessOptions} Resolved postprocess option payload.
+    @param enable_luminance {bool} `True` when Luminance-HDR backend is selected.
+    @param enable_opencv {bool} `True` when OpenCV-Merge backend is selected.
+    @param enable_opencv_tonemap {bool} `True` when OpenCV-Tonemap backend is selected.
+    @param enable_hdr_plus {bool} `True` when HDR+ backend is selected.
+    @param luminance_options {LuminanceOptions} Resolved luminance backend knobs.
+    @param opencv_merge_options {OpenCvMergeOptions} Resolved OpenCV merge backend knobs.
+    @param hdrplus_options {HdrPlusOptions} Resolved HDR+ backend knobs.
+    @return {None} No return value; side effect is stdout emission.
+    @satisfies REQ-220, REQ-221
+    """
+    ind = "  "
+
+    print_info("Input/Output:")
+    print_info(f"{ind}input: {input_dng}")
+    print_info(f"{ind}output: {output_jpg}")
+
+    print_info("Exposure:")
+    bracketing_text = "auto" if auto_ev_delta_enabled else f"{ev_value:g}"
+    exposure_text = "auto" if auto_ev_zero_enabled else f"{ev_zero:g}"
+    print_info(f"{ind}bracketing: {bracketing_text}")
+    print_info(f"{ind}exposure: {exposure_text}")
+    print_info(f"{ind}auto-ev-step: {auto_ev_options.step:g}")
+    print_info(f"{ind}auto-ev-shadow-clipping: {auto_ev_options.shadow_clipping_pct:g}")
+    print_info(f"{ind}auto-ev-highlight-clipping: {auto_ev_options.highlight_clipping_pct:g}")
+
+    print_info("White Balance:")
+    print_info(f"{ind}raw-wb-normalization: {postprocess_options.raw_white_balance_mode}")
+    awb_mode = postprocess_options.auto_white_balance_mode
+    if awb_mode is None:
+        print_info(f"{ind}auto-white-balance: disabled")
+    else:
+        print_info(f"{ind}auto-white-balance: {awb_mode}")
+        print_info(f"{ind}xphoto-domain: {postprocess_options.auto_white_balance_xphoto_domain}")
+
+    print_info("HDR Backend:")
+    if enable_luminance:
+        print_info(f"{ind}backend: {HDR_MERGE_MODE_LUMINANCE}")
+        print_info(f"{ind}hdr-model: {luminance_options.hdr_model}")
+        print_info(f"{ind}hdr-weight: {luminance_options.hdr_weight}")
+        print_info(f"{ind}hdr-response-curve: {luminance_options.hdr_response_curve}")
+        print_info(f"{ind}tmo: {luminance_options.tmo}")
+        if luminance_options.tmo_extra_args:
+            print_info(f"{ind}tmo-extra-args: {' '.join(luminance_options.tmo_extra_args)}")
+    elif enable_opencv:
+        print_info(f"{ind}backend: {HDR_MERGE_MODE_OPENCV_MERGE}")
+        print_info(f"{ind}algorithm: {opencv_merge_options.merge_algorithm}")
+        print_info(f"{ind}tonemap: {'enabled' if opencv_merge_options.tonemap_enabled else 'disabled'}")
+        print_info(f"{ind}tonemap-gamma: {opencv_merge_options.tonemap_gamma:g}")
+    elif enable_opencv_tonemap:
+        opencv_tonemap_options = postprocess_options.opencv_tonemap_options
+        if opencv_tonemap_options is None:
+            raise RuntimeError("Missing OpenCV-Tonemap selector configuration")
+        print_info(f"{ind}backend: {HDR_MERGE_MODE_OPENCV_TONEMAP}")
+        print_info(f"{ind}algorithm: {opencv_tonemap_options.tonemap_map}")
+        if opencv_tonemap_options.tonemap_map == OPENCV_TONEMAP_MAP_DRAGO:
+            print_info(f"{ind}drago-saturation: {opencv_tonemap_options.drago_saturation:g}")
+            print_info(f"{ind}drago-bias: {opencv_tonemap_options.drago_bias:g}")
+        elif opencv_tonemap_options.tonemap_map == OPENCV_TONEMAP_MAP_REINHARD:
+            print_info(f"{ind}reinhard-intensity: {opencv_tonemap_options.reinhard_intensity:g}")
+            print_info(f"{ind}reinhard-light_adapt: {opencv_tonemap_options.reinhard_light_adapt:g}")
+            print_info(f"{ind}reinhard-color_adapt: {opencv_tonemap_options.reinhard_color_adapt:g}")
+        else:
+            print_info(f"{ind}mantiuk-scale: {opencv_tonemap_options.mantiuk_scale:g}")
+            print_info(f"{ind}mantiuk-saturation: {opencv_tonemap_options.mantiuk_saturation:g}")
+    elif enable_hdr_plus:
+        print_info(f"{ind}backend: HDR+")
+        print_info(f"{ind}proxy-mode: {hdrplus_options.proxy_mode}")
+        print_info(f"{ind}search-radius: {hdrplus_options.search_radius}")
+        print_info(f"{ind}temporal-factor: {hdrplus_options.temporal_factor:g}")
+        print_info(f"{ind}temporal-min-dist: {hdrplus_options.temporal_min_dist:g}")
+        print_info(f"{ind}temporal-max-dist: {hdrplus_options.temporal_max_dist:g}")
+
+    print_info("Merge Gamma:")
+    merge_gamma_option = postprocess_options.merge_gamma_option
+    if merge_gamma_option.mode == "auto":
+        print_info(f"{ind}gamma: auto")
+    else:
+        print_info(
+            f"{ind}gamma: custom"
+            f"({merge_gamma_option.linear_coeff:g},{merge_gamma_option.exponent:g})"
+        )
+
+    print_info("Postprocess:")
+    post_gamma_text = (
+        "auto"
+        if postprocess_options.post_gamma_mode == "auto"
+        else f"{postprocess_options.post_gamma:g}"
+    )
+    print_info(f"{ind}post-gamma: {post_gamma_text}")
+    if postprocess_options.post_gamma_mode == "auto":
+        print_info(f"{ind}post-gamma-auto-target-gray: {postprocess_options.post_gamma_auto_options.target_gray:g}")
+        print_info(f"{ind}post-gamma-auto-luma-min: {postprocess_options.post_gamma_auto_options.luma_min:g}")
+        print_info(f"{ind}post-gamma-auto-luma-max: {postprocess_options.post_gamma_auto_options.luma_max:g}")
+        print_info(f"{ind}post-gamma-auto-lut-size: {postprocess_options.post_gamma_auto_options.lut_size}")
+    print_info(f"{ind}brightness: {postprocess_options.brightness:g}")
+    print_info(f"{ind}contrast: {postprocess_options.contrast:g}")
+    print_info(f"{ind}saturation: {postprocess_options.saturation:g}")
+    print_info(f"{ind}jpg-compression: {postprocess_options.jpg_compression}")
+
+    if postprocess_options.auto_brightness_enabled:
+        print_info("Auto-Brightness:")
+        resolved_ab_key = postprocess_options.auto_brightness_options.key_value
+        key_text = "auto" if resolved_ab_key is None else f"{resolved_ab_key:g}"
+        print_info(f"{ind}key-value: {key_text}")
+        print_info(f"{ind}white-point-pct: {postprocess_options.auto_brightness_options.white_point_percentile:g}")
+        print_info(f"{ind}key-min: {postprocess_options.auto_brightness_options.a_min:g}")
+        print_info(f"{ind}key-max: {postprocess_options.auto_brightness_options.a_max:g}")
+        print_info(f"{ind}max-auto-boost: {postprocess_options.auto_brightness_options.max_auto_boost_factor:g}")
+        desat_text = "enabled" if postprocess_options.auto_brightness_options.enable_luminance_preserving_desat else "disabled"
+        print_info(f"{ind}luminance-preserving-desat: {desat_text}")
+        print_info(f"{ind}eps: {postprocess_options.auto_brightness_options.eps:g}")
+
+    if postprocess_options.auto_levels_enabled:
+        print_info("Auto-Levels:")
+        print_info(f"{ind}clip-pct: {postprocess_options.auto_levels_options.clip_percent:g}")
+        cog_text = "enabled" if postprocess_options.auto_levels_options.clip_out_of_gamut else "disabled"
+        print_info(f"{ind}clip-out-of-gamut: {cog_text}")
+        hr_text = "enabled" if postprocess_options.auto_levels_options.highlight_reconstruction_enabled else "disabled"
+        print_info(f"{ind}highlight-reconstruction: {hr_text}")
+        print_info(f"{ind}highlight-reconstruction-method: {postprocess_options.auto_levels_options.highlight_reconstruction_method}")
+        print_info(f"{ind}gain-threshold: {postprocess_options.auto_levels_options.gain_threshold:g}")
+
+    if postprocess_options.auto_adjust_enabled:
+        print_info("Auto-Adjust:")
+        print_info(f"{ind}blur-sigma: {postprocess_options.auto_adjust_options.blur_sigma:g}")
+        print_info(f"{ind}blur-threshold-pct: {postprocess_options.auto_adjust_options.blur_threshold_pct:g}")
+        print_info(f"{ind}level-low-pct: {postprocess_options.auto_adjust_options.level_low_pct:g}")
+        print_info(f"{ind}level-high-pct: {postprocess_options.auto_adjust_options.level_high_pct:g}")
+        lc_text = "enabled" if postprocess_options.auto_adjust_options.enable_local_contrast else "disabled"
+        print_info(f"{ind}local-contrast: {lc_text}")
+        print_info(f"{ind}local-contrast-strength: {postprocess_options.auto_adjust_options.local_contrast_strength:g}")
+        print_info(f"{ind}clahe-clip-limit: {postprocess_options.auto_adjust_options.clahe_clip_limit:g}")
+        tile = postprocess_options.auto_adjust_options.clahe_tile_grid_size
+        print_info(f"{ind}clahe-tile-grid-size: {tile[0]}x{tile[1]}")
+        print_info(f"{ind}sigmoid-contrast: {postprocess_options.auto_adjust_options.sigmoid_contrast:g}")
+        print_info(f"{ind}sigmoid-midpoint: {postprocess_options.auto_adjust_options.sigmoid_midpoint:g}")
+        print_info(f"{ind}saturation-gamma: {postprocess_options.auto_adjust_options.saturation_gamma:g}")
+        print_info(f"{ind}highpass-blur-sigma: {postprocess_options.auto_adjust_options.highpass_blur_sigma:g}")
+
+    print_info("Debug:")
+    print_info(f"{ind}debug: {'enabled' if postprocess_options.debug_enabled else 'disabled'}")
+
+
 def run(args):
     """@brief Execute `dng2jpg` command pipeline.
 
-    @details Parses command options, validates dependencies, detects source DNG
-    bits-per-color from RAW metadata, resolves `ev_zero` (static `0.0` default,
-    static `--exposure=<value>`, or auto via `--exposure=auto`) and `ev_delta`
-    (static `1.0` default, static `--bracketing=<value>`, or auto via
-    `--bracketing=auto` with OpenCV-Tonemap-specific fixed-span bypass), extracts
-    one linear HDR base image using selected RAW WB normalization mode, derives
-    bracket payloads in canonical order, executes the selected HDR backend with
-    float input/output interfaces, executes the float-interface post-merge pipeline, optionally emits
-    persistent debug TIFF checkpoints for executed stages, writes the final
-    JPG, and guarantees temporary artifact cleanup through isolated temporary
-    directory lifecycle.
+    @details Parses command options, emits structured validated parameter summary via
+    `_print_validated_run_parameters` after file-path preconditions pass, validates
+    dependencies, detects source DNG bits-per-color from RAW metadata, resolves
+    `ev_zero` (static `0.0` default, static `--exposure=<value>`, or auto via
+    `--exposure=auto`) and `ev_delta` (static `1.0` default, static
+    `--bracketing=<value>`, or auto via `--bracketing=auto` with
+    OpenCV-Tonemap-specific fixed-span bypass), extracts one linear HDR base image
+    using selected RAW WB normalization mode, derives bracket payloads in canonical
+    order, executes the selected HDR backend with float input/output interfaces,
+    executes the float-interface post-merge pipeline, optionally emits persistent
+    debug TIFF checkpoints for executed stages, writes the final JPG, and guarantees
+    temporary artifact cleanup through isolated temporary directory lifecycle.
     @param args {list[str]} Command argument vector excluding command token.
     @return {int} `0` on success; `1` on parse/validation/dependency/processing failure.
-    @satisfies PRJ-001, CTN-001, CTN-004, CTN-005, CTN-007, REQ-008, REQ-009, REQ-010, REQ-011, REQ-012, REQ-013, REQ-014, REQ-015, REQ-032, REQ-037, REQ-050, REQ-052, REQ-100, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-127, REQ-128, REQ-129, REQ-131, REQ-132, REQ-133, REQ-134, REQ-138, REQ-139, REQ-140, REQ-146, REQ-147, REQ-148, REQ-149, REQ-157, REQ-158, REQ-159, REQ-160, REQ-181, REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188, REQ-189, REQ-190, REQ-191, REQ-192, REQ-193, REQ-194, REQ-195, REQ-196, REQ-197, REQ-198, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207, REQ-215, REQ-216, REQ-217, REQ-218, REQ-219
+    @satisfies PRJ-001, CTN-001, CTN-004, CTN-005, CTN-007, REQ-008, REQ-009, REQ-010, REQ-011, REQ-012, REQ-013, REQ-014, REQ-015, REQ-032, REQ-037, REQ-050, REQ-052, REQ-100, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-127, REQ-128, REQ-129, REQ-131, REQ-132, REQ-133, REQ-134, REQ-138, REQ-139, REQ-140, REQ-146, REQ-147, REQ-148, REQ-149, REQ-157, REQ-158, REQ-159, REQ-160, REQ-181, REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188, REQ-189, REQ-190, REQ-191, REQ-192, REQ-193, REQ-194, REQ-195, REQ-196, REQ-197, REQ-198, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207, REQ-215, REQ-216, REQ-217, REQ-218, REQ-219, REQ-220
     """
 
     if not _is_supported_runtime_os():
@@ -12613,6 +12794,23 @@ def run(args):
     if output_parent and not output_parent.exists():
         print_error(f"Output directory does not exist: {output_parent}")
         return 1
+    _print_validated_run_parameters(
+        input_dng=input_dng,
+        output_jpg=output_jpg,
+        ev_value=ev_value,
+        auto_ev_delta_enabled=auto_ev_delta_enabled,
+        ev_zero=ev_zero,
+        auto_ev_zero_enabled=auto_ev_zero_enabled,
+        auto_ev_options=auto_ev_options,
+        postprocess_options=postprocess_options,
+        enable_luminance=enable_luminance,
+        enable_opencv=enable_opencv,
+        enable_opencv_tonemap=enable_opencv_tonemap,
+        enable_hdr_plus=enable_hdr_plus,
+        luminance_options=luminance_options,
+        opencv_merge_options=opencv_merge_options,
+        hdrplus_options=hdrplus_options,
+    )
     debug_context = _build_debug_artifact_context(
         output_jpg=output_jpg,
         input_dng=input_dng,
@@ -12662,144 +12860,6 @@ def run(args):
         piexif_module = _load_piexif_dependency()
         if piexif_module is None:
             return 1
-    print_info(f"Reading DNG input: {input_dng}")
-    post_gamma_text = (
-        "auto"
-        if postprocess_options.post_gamma_mode == "auto"
-        else f"{postprocess_options.post_gamma:g}"
-    )
-    print_info(
-        "Postprocess factors: "
-        f"gamma={post_gamma_text}, "
-        f"brightness={postprocess_options.brightness:g}, "
-        f"contrast={postprocess_options.contrast:g}, "
-        f"saturation={postprocess_options.saturation:g}, "
-        f"jpg-compression={postprocess_options.jpg_compression}, "
-        f"auto-brightness={'enabled' if postprocess_options.auto_brightness_enabled else 'disabled'}, "
-        f"auto-levels={'enabled' if postprocess_options.auto_levels_enabled else 'disabled'}, "
-        f"auto-adjust={'enabled' if postprocess_options.auto_adjust_enabled else 'disabled'}, "
-        f"debug={'enabled' if postprocess_options.debug_enabled else 'disabled'}"
-    )
-    print_info(
-        "RAW WB normalization: "
-        f"mode={postprocess_options.raw_white_balance_mode}"
-    )
-    if postprocess_options.auto_white_balance_mode is None:
-        print_info("Auto-white-balance stage: disabled")
-    else:
-        print_info(
-            "Auto-white-balance stage: "
-            f"mode={postprocess_options.auto_white_balance_mode}, "
-            f"xphoto-domain={postprocess_options.auto_white_balance_xphoto_domain}"
-        )
-    if postprocess_options.post_gamma_mode == "auto":
-        print_info(
-            "Post-gamma auto knobs: "
-            f"target-gray={postprocess_options.post_gamma_auto_options.target_gray:g}, "
-            f"luma-min={postprocess_options.post_gamma_auto_options.luma_min:g}, "
-            f"luma-max={postprocess_options.post_gamma_auto_options.luma_max:g}, "
-            f"lut-size={postprocess_options.post_gamma_auto_options.lut_size}"
-        )
-    if postprocess_options.auto_brightness_enabled:
-        resolved_ab_key = postprocess_options.auto_brightness_options.key_value
-        if resolved_ab_key is None:
-            resolved_ab_key = "auto"
-        print_info(
-            "Auto-brightness knobs: "
-            f"key-value={resolved_ab_key}, "
-            f"white-point-pct={postprocess_options.auto_brightness_options.white_point_percentile:g}, "
-            f"key-min={postprocess_options.auto_brightness_options.a_min:g}, "
-            f"key-max={postprocess_options.auto_brightness_options.a_max:g}, "
-            f"max-auto-boost={postprocess_options.auto_brightness_options.max_auto_boost_factor:g}, "
-            "luminance-preserving-desat="
-            f"{'enabled' if postprocess_options.auto_brightness_options.enable_luminance_preserving_desat else 'disabled'}, "
-            f"eps={postprocess_options.auto_brightness_options.eps:g}"
-        )
-    if postprocess_options.auto_adjust_enabled:
-        print_info(
-            "Auto-adjust knobs: "
-            f"blur-sigma={postprocess_options.auto_adjust_options.blur_sigma:g}, "
-            f"blur-threshold-pct={postprocess_options.auto_adjust_options.blur_threshold_pct:g}, "
-            f"level-low-pct={postprocess_options.auto_adjust_options.level_low_pct:g}, "
-            f"level-high-pct={postprocess_options.auto_adjust_options.level_high_pct:g}, "
-            "local-contrast="
-            f"{'enabled' if postprocess_options.auto_adjust_options.enable_local_contrast else 'disabled'}, "
-            f"local-contrast-strength={postprocess_options.auto_adjust_options.local_contrast_strength:g}, "
-            f"clahe-clip-limit={postprocess_options.auto_adjust_options.clahe_clip_limit:g}, "
-            "clahe-tile-grid-size="
-            f"{postprocess_options.auto_adjust_options.clahe_tile_grid_size[0]}x"
-            f"{postprocess_options.auto_adjust_options.clahe_tile_grid_size[1]}, "
-            f"sigmoid-contrast={postprocess_options.auto_adjust_options.sigmoid_contrast:g}, "
-            f"sigmoid-midpoint={postprocess_options.auto_adjust_options.sigmoid_midpoint:g}, "
-            f"saturation-gamma={postprocess_options.auto_adjust_options.saturation_gamma:g}, "
-            f"highpass-blur-sigma={postprocess_options.auto_adjust_options.highpass_blur_sigma:g}"
-        )
-    if postprocess_options.auto_levels_enabled:
-        print_info(
-            "Auto-levels knobs: "
-            f"clip-pct={postprocess_options.auto_levels_options.clip_percent:g}, "
-            "clip-out-of-gamut="
-            f"{'enabled' if postprocess_options.auto_levels_options.clip_out_of_gamut else 'disabled'}, "
-            f"highlight-reconstruction="
-            f"{'enabled' if postprocess_options.auto_levels_options.highlight_reconstruction_enabled else 'disabled'}, "
-            "highlight-reconstruction-method="
-            f"{postprocess_options.auto_levels_options.highlight_reconstruction_method}, "
-            f"gain-threshold={postprocess_options.auto_levels_options.gain_threshold:g}"
-        )
-    if enable_luminance:
-        extra_args_text = ""
-        if luminance_options.tmo_extra_args:
-            extra_args_text = (
-                f", tmoExtraArgs=[{' '.join(luminance_options.tmo_extra_args)}]"
-            )
-        print_info(
-            "HDR backend: luminance-hdr-cli "
-            f"(hdrModel={luminance_options.hdr_model}, "
-            f"hdrWeight={luminance_options.hdr_weight}, "
-            f"hdrResponseCurve={luminance_options.hdr_response_curve}, "
-            f"tmo={luminance_options.tmo}{extra_args_text})"
-        )
-    elif enable_opencv:
-        print_info(
-            f"HDR backend: {HDR_MERGE_MODE_OPENCV_MERGE} "
-            f"(algorithm={opencv_merge_options.merge_algorithm}, "
-            f"tonemap={'enabled' if opencv_merge_options.tonemap_enabled else 'disabled'}, "
-            f"tonemapGamma={opencv_merge_options.tonemap_gamma:g})"
-        )
-    elif enable_opencv_tonemap:
-        opencv_tonemap_options = postprocess_options.opencv_tonemap_options
-        if opencv_tonemap_options is None:
-            raise RuntimeError("Missing OpenCV-Tonemap selector configuration")
-        if opencv_tonemap_options.tonemap_map == OPENCV_TONEMAP_MAP_DRAGO:
-            tonemap_details = (
-                f"drago-saturation={opencv_tonemap_options.drago_saturation:g}, "
-                f"drago-bias={opencv_tonemap_options.drago_bias:g}"
-            )
-        elif opencv_tonemap_options.tonemap_map == OPENCV_TONEMAP_MAP_REINHARD:
-            tonemap_details = (
-                f"reinhard-intensity={opencv_tonemap_options.reinhard_intensity:g}, "
-                f"reinhard-light_adapt={opencv_tonemap_options.reinhard_light_adapt:g}, "
-                f"reinhard-color_adapt={opencv_tonemap_options.reinhard_color_adapt:g}"
-            )
-        else:
-            tonemap_details = (
-                f"mantiuk-scale={opencv_tonemap_options.mantiuk_scale:g}, "
-                f"mantiuk-saturation={opencv_tonemap_options.mantiuk_saturation:g}"
-            )
-        print_info(
-            f"HDR backend: {HDR_MERGE_MODE_OPENCV_TONEMAP} "
-            f"(map={opencv_tonemap_options.tonemap_map}, gamma=merge-gamma-inverse, {tonemap_details})"
-        )
-    elif enable_hdr_plus:
-        print_info(
-            "HDR backend: HDR+ "
-            f"(proxy={hdrplus_options.proxy_mode}, "
-            f"searchRadius={hdrplus_options.search_radius}, "
-            f"temporalFactor={hdrplus_options.temporal_factor:g}, "
-            f"temporalMinDist={hdrplus_options.temporal_min_dist:g}, "
-            f"temporalMaxDist={hdrplus_options.temporal_max_dist:g}, "
-            "reference=ev_zero, temporal=tile L1 inverse-distance, spatial=raised-cosine)"
-        )
     processing_errors = _collect_processing_errors(rawpy_module)
 
     with tempfile.TemporaryDirectory(prefix="dng2jpg-") as temp_dir_raw:

@@ -137,7 +137,7 @@ import subprocess
 
 ---
 
-# dng2jpg.py | Python | 13107L | 422 symbols | 32 imports | 272 comments
+# dng2jpg.py | Python | 13167L | 423 symbols | 32 imports | 273 comments
 > Path: `src/dng2jpg/dng2jpg.py`
 
 ## Imports
@@ -2966,12 +2966,41 @@ RGB float output without any file round-trip.
 - @return {bool} `True` when runtime OS is Linux; `False` otherwise.
 - @satisfies REQ-055, REQ-059
 
-### fn `def run(args)` (L12560-12759)
+### fn `def _print_validated_run_parameters(` `priv` (L12560-12575)
+
+### fn `def run(args)` (L12740-12939)
+- @brief Emit structured validated CLI parameter summary to stdout.
 - @brief Execute `dng2jpg` command pipeline.
-- @details Parses command options, validates dependencies, detects source DNG bits-per-color from RAW metadata, resolves `ev_zero` (static `0.0` default, static `--exposure=<value>`, or auto via `--exposure=auto`) and `ev_delta` (static `1.0` default, static `--bracketing=<value>`, or auto via `--bracketing=auto` with OpenCV-Tonemap-specific fixed-span bypass), extracts one linear HDR base image using selected RAW WB normalization mode, derives bracket payloads in canonical order, executes the selected HDR backend with float input/output interfaces, executes the float-interface post-merge pipeline, optionally emits persistent debug TIFF checkpoints for executed stages, writes the final JPG, and guarantees temporary artifact cleanup through isolated temporary directory lifecycle.
+- @details Prints all resolved CLI parameter values after successful parse and
+file-path validation, one value per line, grouped under functional category
+headers. Group headers are printed without indentation; parameter lines are
+indented with two spaces. Groups are always emitted in fixed order:
+`Input/Output`, `Exposure`, `White Balance`, `HDR Backend`, `Merge Gamma`,
+`Postprocess`; conditional groups `Auto-Brightness`, `Auto-Levels`,
+`Auto-Adjust` are emitted only when the corresponding stage is enabled;
+`Debug` is always emitted last. Side effects: writes to stdout via
+`print_info`.
+- @details Parses command options, emits structured validated parameter summary via `_print_validated_run_parameters` after file-path preconditions pass, validates dependencies, detects source DNG bits-per-color from RAW metadata, resolves `ev_zero` (static `0.0` default, static `--exposure=<value>`, or auto via `--exposure=auto`) and `ev_delta` (static `1.0` default, static `--bracketing=<value>`, or auto via `--bracketing=auto` with OpenCV-Tonemap-specific fixed-span bypass), extracts one linear HDR base image using selected RAW WB normalization mode, derives bracket payloads in canonical order, executes the selected HDR backend with float input/output interfaces, executes the float-interface post-merge pipeline, optionally emits persistent debug TIFF checkpoints for executed stages, writes the final JPG, and guarantees temporary artifact cleanup through isolated temporary directory lifecycle.
+- @param input_dng {Path} Resolved input DNG file path.
+- @param output_jpg {Path} Resolved output JPEG file path.
+- @param ev_value {float|None} Static EV half-span when `auto_ev_delta_enabled=False`; `None` otherwise.
+- @param auto_ev_delta_enabled {bool} `True` when bracketing is resolved via automatic iterative algorithm.
+- @param ev_zero {float} Static EV center when `auto_ev_zero_enabled=False`; unused sentinel otherwise.
+- @param auto_ev_zero_enabled {bool} `True` when EV center is resolved via automatic algorithm.
+- @param auto_ev_options {AutoEvOptions} Resolved iterative bracket search controls.
+- @param postprocess_options {PostprocessOptions} Resolved postprocess option payload.
+- @param enable_luminance {bool} `True` when Luminance-HDR backend is selected.
+- @param enable_opencv {bool} `True` when OpenCV-Merge backend is selected.
+- @param enable_opencv_tonemap {bool} `True` when OpenCV-Tonemap backend is selected.
+- @param enable_hdr_plus {bool} `True` when HDR+ backend is selected.
+- @param luminance_options {LuminanceOptions} Resolved luminance backend knobs.
+- @param opencv_merge_options {OpenCvMergeOptions} Resolved OpenCV merge backend knobs.
+- @param hdrplus_options {HdrPlusOptions} Resolved HDR+ backend knobs.
 - @param args {list[str]} Command argument vector excluding command token.
+- @return {None} No return value; side effect is stdout emission.
 - @return {int} `0` on success; `1` on parse/validation/dependency/processing failure.
-- @satisfies PRJ-001, CTN-001, CTN-004, CTN-005, CTN-007, REQ-008, REQ-009, REQ-010, REQ-011, REQ-012, REQ-013, REQ-014, REQ-015, REQ-032, REQ-037, REQ-050, REQ-052, REQ-100, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-127, REQ-128, REQ-129, REQ-131, REQ-132, REQ-133, REQ-134, REQ-138, REQ-139, REQ-140, REQ-146, REQ-147, REQ-148, REQ-149, REQ-157, REQ-158, REQ-159, REQ-160, REQ-181, REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188, REQ-189, REQ-190, REQ-191, REQ-192, REQ-193, REQ-194, REQ-195, REQ-196, REQ-197, REQ-198, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207, REQ-215, REQ-216, REQ-217, REQ-218, REQ-219
+- @satisfies REQ-220, REQ-221
+- @satisfies PRJ-001, CTN-001, CTN-004, CTN-005, CTN-007, REQ-008, REQ-009, REQ-010, REQ-011, REQ-012, REQ-013, REQ-014, REQ-015, REQ-032, REQ-037, REQ-050, REQ-052, REQ-100, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-127, REQ-128, REQ-129, REQ-131, REQ-132, REQ-133, REQ-134, REQ-138, REQ-139, REQ-140, REQ-146, REQ-147, REQ-148, REQ-149, REQ-157, REQ-158, REQ-159, REQ-160, REQ-181, REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188, REQ-189, REQ-190, REQ-191, REQ-192, REQ-193, REQ-194, REQ-195, REQ-196, REQ-197, REQ-198, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207, REQ-215, REQ-216, REQ-217, REQ-218, REQ-219, REQ-220
 
 ## Symbol Index
 |Symbol|Kind|Vis|Lines|Sig|
@@ -3397,7 +3426,8 @@ RGB float output without any file round-trip.
 |`_encode_jpg`|fn|priv|12443-12451|def _encode_jpg(|
 |`_collect_processing_errors`|fn|priv|12511-12539|def _collect_processing_errors(rawpy_module)|
 |`_is_supported_runtime_os`|fn|priv|12540-12559|def _is_supported_runtime_os()|
-|`run`|fn|pub|12560-12759|def run(args)|
+|`_print_validated_run_parameters`|fn|priv|12560-12575|def _print_validated_run_parameters(|
+|`run`|fn|pub|12740-12939|def run(args)|
 
 
 ---
