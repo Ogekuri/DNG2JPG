@@ -3021,6 +3021,24 @@ def _resolve_auto_ev_delta(
     return (round(iteration_steps[-1].ev_delta, 6), tuple(iteration_steps))
 
 
+def _resolve_opencv_tonemap_auto_ev_delta():
+    """@brief Resolve OpenCV-Tonemap automatic bracket half-span without iteration.
+
+    @details Skips clipping-threshold iteration when OpenCV-Tonemap runs with
+    `--bracketing=auto`, emits deterministic skip diagnostics, and returns the
+    fixed half-span `0.1` EV.
+    @return {float} Fixed OpenCV-Tonemap automatic bracket half-span.
+    @satisfies REQ-216, REQ-217
+    """
+
+    print_info("Bracket step: skipped")
+    print_info(
+        "Exposure planning selected bracket half-span: "
+        f"{DEFAULT_AUTO_EV_STEP:.6f} EV"
+    )
+    return float(DEFAULT_AUTO_EV_STEP)
+
+
 def _resolve_joint_auto_ev_solution(
     auto_ev_options,
     auto_adjust_dependencies=None,
@@ -6701,22 +6719,25 @@ def _extract_bracket_images_float(
     multipliers,
     base_rgb_float=None,
     raw_white_balance_mode=DEFAULT_RAW_WHITE_BALANCE_MODE,
+    extract_side_brackets=True,
 ):
-    """@brief Extract three normalized RGB float brackets from one RAW handle.
+    """@brief Extract normalized RGB float brackets from one RAW handle.
 
     @details Reuses an optional precomputed normalized linear base tensor when
     available, otherwise executes one deterministic linear camera-WB-aware RAW
     postprocess call, and derives canonical bracket tensors by NumPy EV
     scaling and `[0,1]` clipping without exposing TIFF artifacts outside this
-    step. Complexity: O(H*W). Side effects: at most one RAW postprocess
-    invocation.
+    step. When `extract_side_brackets` is false, derives only `ev_zero` and
+    returns side brackets as `None`. Complexity: O(H*W). Side effects: at most
+    one RAW postprocess invocation.
     @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
     @param np_module {ModuleType} Imported numpy module.
     @param multipliers {tuple[float, float, float]} Ordered exposure multipliers.
     @param base_rgb_float {object|None} Optional precomputed normalized linear RGB float base tensor.
     @param raw_white_balance_mode {str} RAW WB normalization mode selector used when base extraction executes in this function.
-    @return {list[object]} Ordered RGB float bracket tensors.
-    @satisfies REQ-010, REQ-157, REQ-158, REQ-159, REQ-160, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207
+    @param extract_side_brackets {bool} When false, skip `ev_minus`/`ev_plus` extraction and set both bracket outputs to `None`.
+    @return {list[object|None]} Ordered bracket payloads `(ev_minus, ev_zero, ev_plus)`.
+    @satisfies REQ-010, REQ-157, REQ-158, REQ-159, REQ-160, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207, REQ-215, REQ-219
     """
 
     labels = ("ev_minus", "ev_zero", "ev_plus")
@@ -6726,6 +6747,23 @@ def _extract_bracket_images_float(
             np_module=np_module,
             raw_white_balance_mode=raw_white_balance_mode,
         )
+    if not extract_side_brackets:
+        linear_base = _ensure_three_channel_float_array_no_range_adjust(
+            np_module=np_module,
+            image_data=base_rgb_float,
+        ).astype(np_module.float32, copy=False)
+        ev_zero_multiplier = float(multipliers[1])
+        ev_zero = np_module.clip(
+            linear_base.astype(np_module.float64) * ev_zero_multiplier,
+            0.0,
+            1.0,
+        ).astype(np_module.float32)
+        print_info("Extracting bracket ev_minus: skipped")
+        print_info(
+            f"Extracting bracket ev_zero: ev-scale={ev_zero_multiplier:.4f}x from linear base"
+        )
+        print_info("Extracting bracket ev_plus: skipped")
+        return [None, ev_zero, None]
     bracket_images_float = _build_bracket_images_from_linear_base_float(
         np_module=np_module,
         base_rgb_float=base_rgb_float,
@@ -12455,19 +12493,18 @@ def run(args):
 
     @details Parses command options, validates dependencies, detects source DNG
     bits-per-color from RAW metadata, resolves `ev_zero` (static `0.0` default,
-    static `--exposure=<value>`, or auto via `--exposure=auto`) and `ev_delta` (static `1.0`
-    default, static `--bracketing=<value>`, or auto via `--bracketing=auto`),
-    extracts one linear HDR
-    base image using selected RAW WB normalization mode and derives three
-    normalized RGB float brackets, executes the selected HDR backend with float
-    input/output interfaces,
-    executes the float-interface post-merge pipeline, optionally emits
+    static `--exposure=<value>`, or auto via `--exposure=auto`) and `ev_delta`
+    (static `1.0` default, static `--bracketing=<value>`, or auto via
+    `--bracketing=auto` with OpenCV-Tonemap-specific fixed-span bypass), extracts
+    one linear HDR base image using selected RAW WB normalization mode, derives
+    bracket payloads in canonical order, executes the selected HDR backend with
+    float input/output interfaces, executes the float-interface post-merge pipeline, optionally emits
     persistent debug TIFF checkpoints for executed stages, writes the final
     JPG, and guarantees temporary artifact cleanup through isolated temporary
     directory lifecycle.
     @param args {list[str]} Command argument vector excluding command token.
     @return {int} `0` on success; `1` on parse/validation/dependency/processing failure.
-    @satisfies PRJ-001, CTN-001, CTN-004, CTN-005, CTN-007, REQ-008, REQ-009, REQ-010, REQ-011, REQ-012, REQ-013, REQ-014, REQ-015, REQ-032, REQ-037, REQ-050, REQ-052, REQ-100, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-127, REQ-128, REQ-129, REQ-131, REQ-132, REQ-133, REQ-134, REQ-138, REQ-139, REQ-140, REQ-146, REQ-147, REQ-148, REQ-149, REQ-157, REQ-158, REQ-159, REQ-160, REQ-181, REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188, REQ-189, REQ-190, REQ-191, REQ-192, REQ-193, REQ-194, REQ-195, REQ-196, REQ-197, REQ-198, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207
+    @satisfies PRJ-001, CTN-001, CTN-004, CTN-005, CTN-007, REQ-008, REQ-009, REQ-010, REQ-011, REQ-012, REQ-013, REQ-014, REQ-015, REQ-032, REQ-037, REQ-050, REQ-052, REQ-100, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-127, REQ-128, REQ-129, REQ-131, REQ-132, REQ-133, REQ-134, REQ-138, REQ-139, REQ-140, REQ-146, REQ-147, REQ-148, REQ-149, REQ-157, REQ-158, REQ-159, REQ-160, REQ-181, REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188, REQ-189, REQ-190, REQ-191, REQ-192, REQ-193, REQ-194, REQ-195, REQ-196, REQ-197, REQ-198, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207, REQ-215, REQ-216, REQ-217, REQ-218, REQ-219
     """
 
     if not _is_supported_runtime_os():
@@ -12760,24 +12797,48 @@ def run(args):
                         estimation_input_is_auto_brightness_preprocessed=postprocess_options.auto_brightness_enabled,
                     )
                 if auto_ev_zero_enabled and auto_ev_delta_enabled:
-                    joint_solution = _resolve_joint_auto_ev_solution(
-                        auto_ev_options=auto_ev_options,
-                        auto_adjust_dependencies=auto_adjust_dependencies,
-                        base_rgb_float=base_rgb_float,
-                    )
-                    resolved_ev_zero = joint_solution.ev_zero
-                    effective_ev_value = joint_solution.ev_delta
+                    if enable_opencv_tonemap:
+                        if auto_adjust_dependencies is None:
+                            raise RuntimeError("Missing auto-adjust dependencies for --exposure=auto")
+                        cv2_module_for_ev, np_module_for_ev = auto_adjust_dependencies
+                        evaluations = _calculate_auto_zero_evaluations(
+                            cv2_module=cv2_module_for_ev,
+                            np_module=np_module_for_ev,
+                            image_rgb_float=base_rgb_float,
+                        )
+                        print_info(f"Exposure Misure EV ev_best: {evaluations.ev_best:+.1f} EV")
+                        print_info(f"Exposure Misure EV ev_ettr: {evaluations.ev_ettr:+.1f} EV")
+                        print_info(f"Exposure Misure EV ev_detail: {evaluations.ev_detail:+.1f} EV")
+                        resolved_ev_zero, _selected_source = _select_ev_zero_candidate(
+                            evaluations=evaluations,
+                        )
+                        print_info(
+                            "Exposure planning selected ev_zero: "
+                            f"{resolved_ev_zero:+.6f} EV (source={_selected_source})"
+                        )
+                        effective_ev_value = _resolve_opencv_tonemap_auto_ev_delta()
+                    else:
+                        joint_solution = _resolve_joint_auto_ev_solution(
+                            auto_ev_options=auto_ev_options,
+                            auto_adjust_dependencies=auto_adjust_dependencies,
+                            base_rgb_float=base_rgb_float,
+                        )
+                        resolved_ev_zero = joint_solution.ev_zero
+                        effective_ev_value = joint_solution.ev_delta
                 elif auto_ev_delta_enabled:
                     resolved_ev_zero = ev_zero
-                    if auto_adjust_dependencies is None:
-                        raise RuntimeError("Missing auto-adjust dependencies for --bracketing=auto")
-                    _cv2_unused, np_module_for_delta = auto_adjust_dependencies
-                    effective_ev_value, _iteration_steps = _resolve_auto_ev_delta(
-                        np_module=np_module_for_delta,
-                        base_rgb_float=base_rgb_float,
-                        ev_zero=resolved_ev_zero,
-                        auto_ev_options=auto_ev_options,
-                    )
+                    if enable_opencv_tonemap:
+                        effective_ev_value = _resolve_opencv_tonemap_auto_ev_delta()
+                    else:
+                        if auto_adjust_dependencies is None:
+                            raise RuntimeError("Missing auto-adjust dependencies for --bracketing=auto")
+                        _cv2_unused, np_module_for_delta = auto_adjust_dependencies
+                        effective_ev_value, _iteration_steps = _resolve_auto_ev_delta(
+                            np_module=np_module_for_delta,
+                            base_rgb_float=base_rgb_float,
+                            ev_zero=resolved_ev_zero,
+                            auto_ev_options=auto_ev_options,
+                        )
                 elif auto_ev_zero_enabled:
                     if auto_adjust_dependencies is None:
                         raise RuntimeError("Missing auto-adjust dependencies for --exposure=auto")
@@ -12860,6 +12921,7 @@ def run(args):
                     multipliers=multipliers,
                     base_rgb_float=base_rgb_float,
                     raw_white_balance_mode=postprocess_options.raw_white_balance_mode,
+                    extract_side_brackets=not enable_opencv_tonemap,
                 )
                 if debug_context is not None:
                     extraction_suffixes = (
@@ -12877,6 +12939,8 @@ def run(args):
                     for stage_suffix, bracket_image_float in zip(
                         extraction_suffixes, bracket_images_float
                     ):
+                        if bracket_image_float is None:
+                            continue
                         _write_debug_rgb_float_tiff(
                             imageio_module=imageio_module,
                             np_module=numpy_module,

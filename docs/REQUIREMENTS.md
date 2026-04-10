@@ -113,11 +113,12 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-006**: MUST reject unknown options, missing option values, and invalid option values with explicit parse errors.
 - **REQ-007**: MUST reject `--aa-*` options when `--auto-adjust` resolves to `disable` and MUST reject `--ab-*` options when `--auto-brightness` resolves to `disable`.
 - **REQ-008**: MUST compute `ev_best`, `ev_ettr`, and `ev_detail` from the normalized linear HDR base image only when `--exposure=auto` or `--bracketing=auto` is active.
-- **REQ-009**: MUST compute one symmetric EV triplet `(ev_zero-ev_delta, ev_zero, ev_zero+ev_delta)`; MUST derive `ev_delta` from the iterative clipping-threshold algorithm only when `--bracketing=auto`, else use the resolved static value.
+- **REQ-009**: MUST compute one symmetric EV triplet `(ev_zero-ev_delta, ev_zero, ev_zero+ev_delta)`.
 - **REQ-010**: MUST extract one maximum-resolution demosaiced RGB base image using one neutral linear `rawpy.postprocess` call with `gamma=(1,1)`, `no_auto_bright=True`, `output_bps=16`, `use_camera_wb=False`, `user_wb=[1,1,1,1]`, `output_color=raw`, and `no_auto_scale=True`.
 - **REQ-158**: MUST normalize neutral base extraction using sensor dynamic range `(white_level - mean(black_level_per_channel))`, then apply camera white-balance gains normalized by the resolved RAW white-balance normalization mode before any bracket arithmetic.
-- **REQ-159**: MUST derive `ev_minus`, `ev_zero`, and `ev_plus` only by EV scaling and `[0,1]` clipping of the normalized HDR base image.
-- **REQ-160**: MUST preserve the ordered float triplet `(ev_minus, ev_zero, ev_plus)` as the only cross-stage HDR bracket contract.
+- **REQ-159**: MUST derive `ev_zero` only by EV scaling and `[0,1]` clipping of the normalized HDR base image.
+- **REQ-160**: MUST preserve the ordered bracket contract `(ev_minus, ev_zero, ev_plus)` and allow backend-specific optional side brackets to be represented as `None`.
+- **REQ-215**: MUST derive `ev_minus` and `ev_plus` by EV scaling and `[0,1]` clipping only when the selected backend consumes side brackets.
 - **REQ-011**: MUST run `luminance-hdr-cli` with deterministic HDR/TMO arguments including `--ldrTiff 32b` for luminance backend, MUST print the full executed command syntax with parameters to runtime output, confine any required float32 TIFF intermediates to the backend step, and return normalized RGB float output.
 - **REQ-174**: MUST serialize luminance backend input bracket images from DNG2JPG RGB float `[0,1]` working format into TIFF float32 files before `luminance-hdr-cli` execution.
 - **REQ-175**: MUST import `luminance-hdr-cli` output TIFF float32 data and normalize it back to DNG2JPG RGB float `[0,1]` working format.
@@ -158,7 +159,10 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-209**: MUST format every numeric coefficient in RAW WB normalization diagnostics as fixed-point float with exactly four fractional digits.
 - **REQ-032**: MUST evaluate `ev_best`, `ev_ettr`, and `ev_detail` on the normalized linear gamma=`1` RGB image after optional auto-brightness and auto-white-balance only when `--exposure=auto` is active, and MUST select `ev_zero` as `min(ev_best, ev_ettr, ev_detail)` preserving candidate signs.
 - **REQ-166**: MUST expose `--auto-ev-step` as a positive configurable EV increment for iterative bracket expansion, defaulting to `0.1`.
-- **REQ-167**: MUST derive `ev_delta` by iterating from `auto_ev_step`, evaluating unclipped bracket images at `ev_zero-ev_delta` and `ev_zero+ev_delta`, and stopping at the first step where shadow clipping exceeds `--auto-ev-shadow-clipping` or highlight clipping reaches `--auto-ev-highlight-clipping`.
+- **REQ-167**: MUST derive `ev_delta` by iterating from `auto_ev_step`, evaluating unclipped `ev_zero±ev_delta` images, and stopping at first threshold breach only when `--bracketing=auto` and backend is not `OpenCV-Tonemap`.
+- **REQ-216**: MUST resolve `ev_delta=0.1` and skip clipping-threshold bracket iteration when `--bracketing=auto` and `--hdr-merge=OpenCV-Tonemap`.
+- **REQ-217**: MUST print `Bracket step: skipped` and `Exposure planning selected bracket half-span: 0.100000 EV` when `--bracketing=auto` and `--hdr-merge=OpenCV-Tonemap`.
+- **REQ-218**: MUST print iterative bracket-step clipping metrics and final `ev_delta` only when `--bracketing=auto` and backend is not `OpenCV-Tonemap`.
 - **REQ-168**: MUST measure highlight clipping as the percentage of pixels in the plus image with any channel `>=1` and shadow clipping as the percentage of pixels in the minus image with any channel `<=0`.
 - **REQ-033**: MUST parse and preserve `--tmo*` passthrough option payloads for luminance command forwarding.
 - **REQ-034**: MUST order luminance backend bracket inputs as `ev_minus`, `ev_zero`, `ev_plus`.
@@ -178,7 +182,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-049**: SHOULD provide both `dng2jpg` and `d2j` as equivalent user-invokable CLI aliases.
 - **REQ-050**: MUST implement `/tmp/auto-brightness.py` auto-brightness on normalized RGB float `[0,1]` in linear gamma `1.0`: compute BT.709 luminance, tonemap luminance, rescale RGB, optionally desaturate overflow, and return linear gamma `1.0` output without sRGB encode/decode.
 - **REQ-051**: MUST support exactly one auto-adjust pipeline with one validated knob model containing shared controls and CLAHE-luma controls.
-- **REQ-052**: MUST print deterministic runtime diagnostics for input path, gamma, postprocess factors, backend, exposure mode, EV triplet, and OpenCV radiance exposure calculations/results; MUST print `Exposure Misure EV` values and selected `ev_zero` only when `--exposure=auto` is active; MUST print iterative bracket-step clipping metrics and final `ev_delta` only when `--bracketing=auto` is active.
+- **REQ-052**: MUST print deterministic runtime diagnostics for input path, gamma, postprocess factors, backend, exposure mode, EV triplet, and OpenCV radiance exposure calculations/results; MUST print `Exposure Misure EV` values and selected `ev_zero` only when `--exposure=auto` is active.
 - **REQ-103**: MUST classify normalized BT.709 luminance as `low-key` when `median<0.35 && p95<0.85`, `high-key` when `median>0.65 && p05>0.15`, else `normal-key`.
 - **REQ-104**: MUST map luminance with `L=(a/Lw_bar)*Y`, percentile-derived robust `Lwhite`, and burn-out compression `Ld=(L*(1+L/Lwhite^2))/(1+L)` before linear-domain chromaticity-preserving RGB scaling.
 - **REQ-105**: MUST desaturate only overflowing linear RGB pixels by blending toward `(Ld,Ld,Ld)` with the minimal factor that restores `max(R,G,B)<=1` while preserving luminance.
@@ -260,7 +264,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-189**: MUST accept `--hdr-merge=OpenCV-Tonemap` as HDR backend selector and execute OpenCV-Tonemap backend behavior only when selected.
 - **REQ-190**: MUST require exactly one `--opencv-tonemap-algorithm=<drago|reinhard|mantiuk>` selector when `--hdr-merge=OpenCV-Tonemap` is selected.
 - **REQ-191**: MUST reject `--opencv-tonemap-algorithm` and any `--opencv-tonemap-<algorithm>-*` knob unless `--hdr-merge=OpenCV-Tonemap` is selected.
-- **REQ-192**: MUST execute OpenCV-Tonemap only on `ev_zero` and MUST ignore `ev_minus` and `ev_plus` bracket images.
+- **REQ-192**: MUST execute OpenCV-Tonemap only on `ev_zero`; extraction stage MUST skip `ev_minus` and `ev_plus`, set both images to `None`, and log both skip events.
+- **REQ-219**: MUST print `Extracting bracket ev_minus: skipped` and `Extracting bracket ev_plus: skipped` when `--hdr-merge=OpenCV-Tonemap`.
 - **REQ-193**: MUST invoke OpenCV `createTonemapDrago`, `createTonemapReinhard`, or `createTonemapMantiuk` with `gamma_inv=1/resolved_merge_gamma` derived from merge-gamma curve resolution and keep the selected algorithm as the only active implementation.
 - **REQ-194**: MUST expose OpenCV-Tonemap Drago knobs `--opencv-tonemap-drago-saturation` and `--opencv-tonemap-drago-bias`, defaulting to `1.0` and `0.85`.
 - **REQ-195**: MUST expose OpenCV-Tonemap Reinhard knobs `--opencv-tonemap-reinhard-intensity`, `--opencv-tonemap-reinhard-light_adapt`, and `--opencv-tonemap-reinhard-color_adapt`, defaulting to `0.0`, `0.0`, and `0.0`.
@@ -286,8 +291,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-014**: MUST verify OpenCV radiance exposure derivation preserves bracket order, uses EXIF exposure seconds, maps the sequence to `(ev_zero-ev_delta, ev_zero, ev_zero+ev_delta)`, and remains deterministic for variable bracket spans.
 - **TST-015**: MUST verify OpenCV merge outputs for `Debevec`, `Robertson`, and `Mertens` remain normalized RGB float images bounded to `[0,1]` after float-only backend execution.
 - **TST-047**: MUST verify `_parse_run_options` rejects removed `--auto-ev`, `--auto-ev-shadow-target`, `--auto-ev-highlight-target`, and `--auto-ev-pct`, and accepts `--auto-ev-shadow-clipping`, `--auto-ev-highlight-clipping`, and `--auto-ev-step` with deterministic defaults and validation.
-- **TST-048**: MUST verify iterative bracket expansion stops on the first step where plus-image highlight clipping reaches threshold or minus-image shadow clipping exceeds threshold and returns that step as `ev_delta`.
-- **TST-049**: MUST verify runtime diagnostics rename `Auto-EV heuristic` to `Exposure Misure EV`, print per-step clipping percentages for the iterative bracket search, and print the final `ev_zero` and `ev_delta` selection.
+- **TST-048**: MUST verify iterative bracket expansion for non-OpenCV-Tonemap backends stops at first threshold breach and returns that step as `ev_delta`.
+- **TST-049**: MUST verify runtime diagnostics print iterative clipping percentages and final `ev_delta` only for non-OpenCV-Tonemap backends when `--bracketing=auto`.
 - **TST-016**: MUST verify auto-levels parser defaults `clip_pct=0.02`, `clip_out_of_gamut=true`, `highlight_reconstruction=false`, `highlight_reconstruction_method=Inpaint Opposed`, and `gain_threshold=1.0`.
 - **TST-017**: MUST verify auto-levels histogram calibration reproduces RawTherapee-compatible `expcomp`, `black`, `brightness`, `contrast`, `hlcompr`, and `hlcomprthresh` for deterministic synthetic histograms.
 - **TST-018**: MUST verify auto-levels tonal transformation consumes the RawTherapee-compatible metric set in normalized float space, preserves float-only internal math, and matches RawTherapee mixed-overflow channel handling.
@@ -343,11 +348,12 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-077**: MUST verify xphoto estimation-domain selector applies only to estimation (`linear|srgb|source-auto`) without altering single-image float output contracts.
 - **TST-069**: MUST verify `_parse_run_options` accepts `--hdr-merge=OpenCV-Tonemap`, requires exactly one `--opencv-tonemap-algorithm=<drago|reinhard|mantiuk>` selector, and rejects missing or unknown selector values.
 - **TST-070**: MUST verify `_parse_run_options` rejects `--opencv-tonemap-algorithm` and `--opencv-tonemap-<algorithm>-*` options unless `--hdr-merge=OpenCV-Tonemap` is selected and rejects algorithm-specific knob misuse outside the selected map.
-- **TST-071**: MUST verify OpenCV-Tonemap backend consumes only `ev_zero` from the bracket triplet and does not read `ev_minus` or `ev_plus`.
+- **TST-071**: MUST verify OpenCV-Tonemap backend consumes only `ev_zero`, sets `ev_minus` and `ev_plus` to `None`, and prints both extraction skip diagnostics.
 - **TST-072**: MUST verify OpenCV-Tonemap backend dispatches Drago, Reinhard, and Mantiuk implementations with `gamma_inv=1/resolved_merge_gamma` and algorithm-specific optional knobs.
 - **TST-073**: MUST verify OpenCV-Tonemap backend applies resolved merge gamma only after selected tone mapping execution.
 - **TST-074**: MUST verify OpenCV-Tonemap backend does not clip float values at backend input, tone-map output, merge-gamma output, or backend return boundary.
 - **TST-078**: MUST verify `_postprocess` forwards merge-backend float outputs without entry clipping and normalizes only external non-float payloads before stage execution.
+- **TST-079**: MUST verify `--bracketing=auto` with `--hdr-merge=OpenCV-Tonemap` sets `ev_delta=0.1`, prints `Bracket step: skipped`, and prints `Exposure planning selected bracket half-span: 0.100000 EV`.
 
 ## 5. Evidence Matrix
 
