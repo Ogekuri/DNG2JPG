@@ -5754,10 +5754,12 @@ def _normalize_ifd_integer_like_values_for_piexif_dump(piexif_module, exif_dict)
     single integer sequence for `piexif.dump` compatibility.
     Scalar conversion is additionally constrained by `piexif.TAGS` integer
     field types when tag metadata is available.
+    Type-7 (UNDEFINED) tags stored as a scalar `int` are dropped; only
+    tuple-of-int values are converted to `bytes` for type-7 compatibility.
     @param piexif_module {ModuleType} Imported piexif module.
     @param exif_dict {dict[str, object]} EXIF dictionary loaded via piexif.
     @return {None} Mutates `exif_dict` in place.
-    @satisfies REQ-066, REQ-077, REQ-078
+    @satisfies REQ-042, REQ-066, REQ-077, REQ-078
     """
 
     integer_type_ids = {1, 3, 4, 6, 8, 9}
@@ -5873,6 +5875,9 @@ def _normalize_ifd_integer_like_values_for_piexif_dump(piexif_module, exif_dict)
                     for item in normalized_value
                 ):
                     normalized_value = bytes(normalized_value)
+            elif tag_type == 7 and isinstance(normalized_value, int):
+                ifd_mapping.pop(tag_id, None)
+                continue
             if normalized_value is not raw_value:
                 ifd_mapping[tag_id] = normalized_value
 

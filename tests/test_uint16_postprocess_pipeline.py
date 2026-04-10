@@ -5851,3 +5851,40 @@ def test_run_opencv_merge_backend_requires_exif_exposure_time_for_radiance_modes
             ),
             auto_adjust_dependencies=(fake_cv2, np),
         )
+
+
+def test_normalize_ifd_drops_scalar_int_for_undefined_type_7_tag() -> None:
+    """Scalar int values for UNDEFINED (type-7) EXIF tags must be dropped before piexif.dump.
+
+    Regression: tag 41729 (SceneType, type UNDEFINED) stored as scalar int
+    in source DNG EXIF caused piexif.dump to raise a TypeError at runtime.
+    _normalize_ifd_integer_like_values_for_piexif_dump must drop such entries.
+    @satisfies REQ-042
+    """
+
+    class _FakePiexifModule:
+        """Minimal piexif shim exposing TAGS with tag 41729 as type 7 (UNDEFINED)."""
+
+        TAGS = {
+            "Exif": {
+                41729: {"name": "SceneType", "type": 7},
+            },
+        }
+
+    exif_ifd: dict[int, object] = {41729: 1}
+    exif_dict: dict[str, object] = {
+        "0th": {},
+        "Exif": exif_ifd,
+        "GPS": {},
+        "Interop": {},
+        "1st": {},
+    }
+
+    dng2jpg_module._normalize_ifd_integer_like_values_for_piexif_dump(  # pylint: disable=protected-access
+        piexif_module=_FakePiexifModule(),
+        exif_dict=exif_dict,
+    )
+
+    assert 41729 not in exif_ifd, (
+        "scalar int value for type-7 UNDEFINED tag 41729 must be dropped"
+    )
