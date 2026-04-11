@@ -5888,3 +5888,295 @@ def test_normalize_ifd_drops_scalar_int_for_undefined_type_7_tag() -> None:
     assert 41729 not in exif_ifd, (
         "scalar int value for type-7 UNDEFINED tag 41729 must be dropped"
     )
+
+
+def test_to_float32_image_array_replaces_non_finite_samples_with_zero() -> None:
+    """Float32 normalization must clear `NaN` and infinities before clipping."""
+
+    source = np.array(
+        [[[np.nan, np.inf, -np.inf], [0.25, 1.5, 0.5]]],
+        dtype=np.float32,
+    )
+
+    output = dng2jpg_module._to_float32_image_array(  # pylint: disable=protected-access
+        np_module=np,
+        image_data=source,
+    )
+
+    assert output.dtype == np.float32
+    assert bool(np.all(np.isfinite(output)))
+    np.testing.assert_allclose(
+        output,
+        np.array([[[0.0, 0.0, 0.0], [0.25, 1.0, 0.5]]], dtype=np.float32),
+        rtol=0.0,
+        atol=0.0,
+    )
+
+
+def test_ensure_three_channel_float_array_no_range_adjust_sanitizes_non_finite_payloads() -> None:
+    """Three-channel no-range helper must sanitize grayscale and RGBA non-finite samples."""
+
+    grayscale = np.array(
+        [[np.nan, np.inf], [-np.inf, 0.5]],
+        dtype=np.float32,
+    )
+    grayscale_output = (
+        dng2jpg_module._ensure_three_channel_float_array_no_range_adjust(  # pylint: disable=protected-access
+            np_module=np,
+            image_data=grayscale,
+        )
+    )
+    assert grayscale_output.shape == (2, 2, 3)
+    assert bool(np.all(np.isfinite(grayscale_output)))
+    np.testing.assert_allclose(grayscale_output[0, 0], [0.0, 0.0, 0.0], rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(grayscale_output[1, 1], [0.5, 0.5, 0.5], rtol=0.0, atol=0.0)
+
+    rgba = np.array([[[0.2, np.nan, 0.4, np.inf]]], dtype=np.float32)
+    rgba_output = dng2jpg_module._ensure_three_channel_float_array_no_range_adjust(  # pylint: disable=protected-access
+        np_module=np,
+        image_data=rgba,
+    )
+    assert rgba_output.shape == (1, 1, 3)
+    assert bool(np.all(np.isfinite(rgba_output)))
+    np.testing.assert_allclose(
+        rgba_output[0, 0],
+        [0.2, 0.0, 0.4],
+        rtol=0.0,
+        atol=1e-8,
+    )
+
+
+def test_resolve_auto_ev_delta_rejects_all_non_finite_base_rgb() -> None:
+    """Auto EV planning must fail fast when base RGB has no finite samples."""
+
+    invalid_base = np.full((1, 2, 3), np.nan, dtype=np.float32)
+
+    try:
+        dng2jpg_module._resolve_auto_ev_delta(  # pylint: disable=protected-access
+            np_module=np,
+            base_rgb_float=invalid_base,
+            ev_zero=0.0,
+            auto_ev_options=dng2jpg_module.AutoEvOptions(step=0.5),
+        )
+    except ValueError as error:
+        assert "finite RGB sample" in str(error)
+    else:
+        raise AssertionError("Expected ValueError for all-non-finite base RGB input")
+
+
+def test_resolve_auto_ev_delta_enforces_iteration_guard_for_unreachable_thresholds() -> None:
+    """Auto EV planning must fail deterministically when thresholds cannot be reached."""
+
+    base_rgb_float = np.full((2, 2, 3), 0.5, dtype=np.float32)
+
+    try:
+        dng2jpg_module._resolve_auto_ev_delta(  # pylint: disable=protected-access
+            np_module=np,
+            base_rgb_float=base_rgb_float,
+            ev_zero=0.0,
+            auto_ev_options=dng2jpg_module.AutoEvOptions(
+                shadow_clipping_pct=101.0,
+                highlight_clipping_pct=101.0,
+                step=0.1,
+            ),
+        )
+    except ValueError as error:
+        assert "maximum" in str(error)
+    else:
+        raise AssertionError("Expected deterministic ValueError when auto EV cannot converge")
+
+
+def test_resolve_auto_ev_delta_terminates_with_sparse_non_finite_samples() -> None:
+    """Auto EV planning must terminate when base RGB includes sparse non-finite samples."""
+
+    base_rgb_float = np.array(
+        [[[0.5, np.nan, 0.5], [0.25, 0.25, np.inf]]],
+        dtype=np.float32,
+    )
+    ev_delta, iteration_steps = dng2jpg_module._resolve_auto_ev_delta(  # pylint: disable=protected-access
+        np_module=np,
+        base_rgb_float=base_rgb_float,
+        ev_zero=0.0,
+        auto_ev_options=dng2jpg_module.AutoEvOptions(
+            shadow_clipping_pct=5.0,
+            highlight_clipping_pct=5.0,
+            step=0.5,
+        ),
+    )
+    assert ev_delta >= 0.5
+    assert len(iteration_steps) >= 1
+    assert np.isfinite(ev_delta)
+    assert np.isfinite(iteration_steps[-1].shadow_clipping_pct)
+    assert np.isfinite(iteration_steps[-1].highlight_clipping_pct)
+
+
+def test_analyze_luminance_key_ignores_non_finite_samples() -> None:
+    """Luminance-key analysis must compute finite stats from finite-only samples."""
+
+    luminance = np.array(
+        [[0.0, np.nan, 0.8], [np.inf, 0.4, -np.inf]],
+        dtype=np.float64,
+    )
+    analysis = dng2jpg_module._analyze_luminance_key(  # pylint: disable=protected-access
+        np_module=np,
+        luminance=luminance,
+        eps=1e-6,
+    )
+    assert analysis["key_type"] in {"low-key", "normal-key", "high-key"}
+    assert all(
+        np.isfinite(float(analysis[key]))
+        for key in ("log_avg_lum", "median_lum", "p05", "p95", "shadow_clip_in", "highlight_clip_in")
+    )
+
+
+def test_analyze_luminance_key_rejects_all_non_finite_samples() -> None:
+    """Luminance-key analysis must fail with explicit error for invalid luminance."""
+
+    luminance = np.array([[np.nan, np.inf], [-np.inf, np.nan]], dtype=np.float64)
+
+    try:
+        dng2jpg_module._analyze_luminance_key(  # pylint: disable=protected-access
+            np_module=np,
+            luminance=luminance,
+            eps=1e-6,
+        )
+    except ValueError as error:
+        assert "finite luminance sample" in str(error)
+    else:
+        raise AssertionError("Expected ValueError for all-non-finite luminance input")
+
+
+def test_apply_auto_post_gamma_float_falls_back_when_gamma_is_non_finite() -> None:
+    """Auto gamma must return identity when resolved gamma is non-finite."""
+
+    image_rgb_float = np.full((2, 2, 3), 1.0, dtype=np.float32)
+    options = dng2jpg_module.PostGammaAutoOptions(
+        target_gray=0.5,
+        luma_min=0.0,
+        luma_max=1.1,
+        lut_size=64,
+    )
+
+    output, resolved_gamma = dng2jpg_module._apply_auto_post_gamma_float(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_float=image_rgb_float,
+        post_gamma_auto_options=options,
+    )
+
+    assert resolved_gamma == 1.0
+    assert bool(np.all(np.isfinite(output)))
+    np.testing.assert_allclose(output, image_rgb_float, rtol=0.0, atol=0.0)
+
+
+def test_apply_auto_levels_float_sanitizes_non_finite_input() -> None:
+    """Auto-levels output must remain finite when source RGB contains non-finite samples."""
+
+    image_rgb_float = np.array(
+        [[[np.nan, 0.2, np.inf], [-np.inf, 0.4, 0.6]]],
+        dtype=np.float32,
+    )
+
+    output = dng2jpg_module._apply_auto_levels_float(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_float=image_rgb_float,
+        auto_levels_options=dng2jpg_module.AutoLevelsOptions(),
+    )
+
+    assert output.shape == image_rgb_float.shape
+    assert output.dtype == np.float32
+    assert bool(np.all(np.isfinite(output)))
+
+
+def test_apply_clahe_luminance_float_sanitizes_non_finite_luminance() -> None:
+    """Float CLAHE must sanitize non-finite luminance before histogram indexing."""
+
+    luminance = np.array(
+        [[np.nan, 0.2], [np.inf, -np.inf]],
+        dtype=np.float64,
+    )
+    output = dng2jpg_module._apply_clahe_luminance_float(  # pylint: disable=protected-access
+        np_module=np,
+        luminance_float=luminance,
+        clip_limit=1.6,
+        tile_grid_size=(2, 2),
+    )
+    assert output.shape == luminance.shape
+    assert bool(np.all(np.isfinite(output)))
+    assert float(np.min(output)) >= 0.0
+    assert float(np.max(output)) <= 1.0
+
+
+def test_vibrance_hsl_gamma_sanitizes_non_finite_rgb_samples() -> None:
+    """HSL vibrance stage must sanitize non-finite RGB channel values."""
+
+    rgb = np.array(
+        [[[np.nan, 0.5, 0.2], [0.3, np.inf, -np.inf]]],
+        dtype=np.float64,
+    )
+    output = dng2jpg_module._vibrance_hsl_gamma(  # pylint: disable=protected-access
+        np_module=np,
+        rgb=rgb,
+        saturation_gamma=0.8,
+    )
+    assert output.shape == rgb.shape
+    assert bool(np.all(np.isfinite(output)))
+
+
+def test_apply_validated_auto_adjust_pipeline_sanitizes_stage_outputs(
+    monkeypatch,
+) -> None:
+    """Auto-adjust must keep final RGB output finite even with non-finite stage payloads."""
+
+    image_rgb_float = np.array(
+        [[[np.nan, 0.5, np.inf], [0.4, -np.inf, 0.1]]],
+        dtype=np.float32,
+    )
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_selective_blur_contrast_gated_vectorized",
+        lambda _np_module, rgb, sigma, threshold_percent: rgb,
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_level_per_channel_adaptive",
+        lambda _np_module, rgb, low_pct, high_pct: rgb,
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_apply_clahe_luma_rgb_float",
+        lambda cv2_module, np_module, image_rgb_float, auto_adjust_options: image_rgb_float,
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_sigmoidal_contrast",
+        lambda _np_module, rgb, contrast, midpoint: rgb,
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_vibrance_hsl_gamma",
+        lambda _np_module, rgb, saturation_gamma: rgb,
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_high_pass_math_gray",
+        lambda cv2_module, np_module, rgb, blur_sigma: np.array(
+            [[np.nan, np.inf]],
+            dtype=np.float64,
+        ),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_overlay_composite",
+        lambda np_module, base_rgb, overlay_gray: base_rgb + overlay_gray[..., None],
+    )
+
+    output = dng2jpg_module._apply_validated_auto_adjust_pipeline(  # pylint: disable=protected-access
+        image_rgb_float=image_rgb_float,
+        cv2_module=object(),
+        np_module=np,
+        auto_adjust_options=dng2jpg_module.AutoAdjustOptions(),
+    )
+    assert output.shape == image_rgb_float.shape
+    assert output.dtype == np.float32
+    assert bool(np.all(np.isfinite(output)))

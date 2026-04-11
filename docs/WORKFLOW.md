@@ -1,5 +1,23 @@
 ## Execution Units Index
 
+## Behavioral Notes (2026-04-11)
+
+- Float-stage ingress sanitization is now centralized through
+  `_sanitize_finite_float_array(...)` and applied by
+  `_to_float32_image_array(...)` and
+  `_ensure_three_channel_float_array_no_range_adjust(...)` before downstream
+  numeric stages.
+- Automatic EV planning (`_resolve_auto_ev_delta(...)`) now validates finite
+  inputs, rejects all-non-finite base tensors, treats non-finite clipping
+  metrics as clipped pixels, and enforces deterministic iteration/span guards to
+  prevent non-terminating loops.
+- Auto-brightness and auto-gamma statistics now consume finite-only luminance
+  samples and fallback deterministically to identity gamma when resolved gamma
+  becomes non-finite.
+- Auto-levels and validated auto-adjust stages now sanitize non-finite
+  luminance/RGB intermediates before histogram indexing, percentiles, HSL,
+  sigmoidal mapping, CLAHE, and final stage outputs.
+
 - id: PROC:launcher
   - type: process
   - parent_process: null

@@ -53,6 +53,8 @@ DEFAULT_JPG_COMPRESSION = 15
 DEFAULT_AUTO_EV_SHADOW_CLIPPING = 20.0
 DEFAULT_AUTO_EV_HIGHLIGHT_CLIPPING = 20.0
 DEFAULT_AUTO_EV_STEP = 0.1
+DEFAULT_AUTO_EV_MAX_DELTA = 64.0
+DEFAULT_AUTO_EV_MAX_ITERATIONS = 1024
 DEFAULT_AA_BLUR_SIGMA = 0.9
 DEFAULT_AA_BLUR_THRESHOLD_PCT = 5.0
 DEFAULT_AA_LEVEL_LOW_PCT = 0.1
@@ -2968,10 +2970,10 @@ def _measure_any_channel_highlight_clipping_pct(np_module, image_rgb_float):
     @satisfies REQ-168
     """
 
-    return round(
-        float(np_module.mean(np_module.any(image_rgb_float >= 1.0, axis=2)) * 100.0),
-        6,
-    )
+    image_rgb = np_module.asarray(image_rgb_float, dtype=np_module.float64)
+    finite_pixel_mask = np_module.all(np_module.isfinite(image_rgb), axis=2)
+    clipped_pixel_mask = np_module.any(image_rgb >= 1.0, axis=2) | (~finite_pixel_mask)
+    return round(float(np_module.mean(clipped_pixel_mask) * 100.0), 6)
 
 
 
@@ -2986,10 +2988,10 @@ def _measure_any_channel_shadow_clipping_pct(np_module, image_rgb_float):
     @satisfies REQ-168
     """
 
-    return round(
-        float(np_module.mean(np_module.any(image_rgb_float <= 0.0, axis=2)) * 100.0),
-        6,
-    )
+    image_rgb = np_module.asarray(image_rgb_float, dtype=np_module.float64)
+    finite_pixel_mask = np_module.all(np_module.isfinite(image_rgb), axis=2)
+    clipped_pixel_mask = np_module.any(image_rgb <= 0.0, axis=2) | (~finite_pixel_mask)
+    return round(float(np_module.mean(clipped_pixel_mask) * 100.0), 6)
 
 
 
@@ -3013,12 +3015,35 @@ def _resolve_auto_ev_delta(
     @satisfies REQ-009, REQ-052, REQ-167, REQ-168
     """
 
-    ev_delta = float(auto_ev_options.step)
+    step_value = float(auto_ev_options.step)
+    if not math.isfinite(step_value) or step_value <= 0.0:
+        raise ValueError("Automatic exposure planning requires a finite positive EV step")
+    if not math.isfinite(float(ev_zero)):
+        raise ValueError("Automatic exposure planning requires a finite ev_zero")
+    base_array = np_module.asarray(base_rgb_float, dtype=np_module.float64)
+    finite_base_mask = np_module.isfinite(base_array)
+    if base_array.size > 0 and not bool(np_module.any(finite_base_mask)):
+        raise ValueError(
+            "Automatic exposure planning requires at least one finite RGB sample"
+        )
+    sanitized_base_rgb = _normalize_float_rgb_image(
+        np_module=np_module,
+        image_data=base_rgb_float,
+    ).astype(np_module.float32, copy=False)
+    if not bool(np_module.all(np_module.isfinite(sanitized_base_rgb))):
+        raise ValueError(
+            "Automatic exposure planning failed to sanitize non-finite RGB samples"
+        )
+    maximum_iterations = min(
+        int(DEFAULT_AUTO_EV_MAX_ITERATIONS),
+        max(1, int(math.ceil(DEFAULT_AUTO_EV_MAX_DELTA / step_value))),
+    )
+    ev_delta = step_value
     iteration_steps = []
-    while True:
+    for _iteration_index in range(maximum_iterations):
         ev_minus, _ev_center, ev_plus = _build_unclipped_bracket_images_from_linear_base_float(
             np_module=np_module,
-            base_rgb_float=base_rgb_float,
+            base_rgb_float=sanitized_base_rgb,
             ev_delta=ev_delta,
             ev_zero=ev_zero,
         )
@@ -3036,7 +3061,18 @@ def _resolve_auto_ev_delta(
             or shadow_pct > auto_ev_options.shadow_clipping_pct
         ):
             break
-        ev_delta += auto_ev_options.step
+        ev_delta += step_value
+        if ev_delta > DEFAULT_AUTO_EV_MAX_DELTA:
+            raise ValueError(
+                "Automatic exposure planning exceeded maximum bracket half-span "
+                f"({DEFAULT_AUTO_EV_MAX_DELTA:.6f} EV) without crossing clipping "
+                "thresholds"
+            )
+    else:
+        raise ValueError(
+            "Automatic exposure planning exceeded maximum iteration budget "
+            f"({maximum_iterations}) without crossing clipping thresholds"
+        )
     for step in iteration_steps:
         print_info(
             "Bracket step: "
@@ -8387,7 +8423,11 @@ def _to_float32_image_array(np_module, image_data):
     elif dtype_name == "uint8":
         numeric_data = image_data.astype(np_module.float32) / 255.0
     else:
-        numeric_data = np_module.array(image_data, dtype=np_module.float32)
+        numeric_data = _sanitize_finite_float_array(
+            np_module=np_module,
+            image_data=np_module.array(image_data, dtype=np_module.float32),
+            dtype=np_module.float32,
+        )
         minimum_value = float(np_module.min(numeric_data)) if numeric_data.size else 0.0
         maximum_value = float(np_module.max(numeric_data)) if numeric_data.size else 0.0
         if minimum_value >= 0.0 and maximum_value > 1.0:
@@ -8395,7 +8435,31 @@ def _to_float32_image_array(np_module, image_data):
                 numeric_data = numeric_data / 255.0
             elif maximum_value <= 65535.0:
                 numeric_data = numeric_data / 65535.0
+    numeric_data = _sanitize_finite_float_array(
+        np_module=np_module,
+        image_data=numeric_data,
+        dtype=np_module.float32,
+    )
     return np_module.clip(numeric_data, 0.0, 1.0).astype(np_module.float32)
+
+
+def _sanitize_finite_float_array(np_module, image_data, dtype):
+    """@brief Replace non-finite float samples with zero while preserving shape.
+
+    @details Converts one numeric payload to the requested float dtype, replaces
+    `NaN`, `+Inf`, and `-Inf` with `0.0`, and preserves original tensor shape.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_data {object} Numeric tensor-like payload.
+    @param dtype {object} Numpy float dtype for output tensor.
+    @return {object} Finite-only tensor with the requested dtype.
+    @satisfies REQ-012, REQ-222
+    """
+
+    numeric_data = np_module.asarray(image_data, dtype=dtype)
+    finite_mask = np_module.isfinite(numeric_data)
+    if bool(np_module.all(finite_mask)):
+        return numeric_data
+    return np_module.where(finite_mask, numeric_data, 0.0).astype(dtype, copy=False)
 
 
 def _normalize_float_rgb_image(np_module, image_data):
@@ -8834,7 +8898,11 @@ def _ensure_three_channel_float_array_no_range_adjust(np_module, image_data):
     @satisfies REQ-178
     """
 
-    numeric_data = np_module.asarray(image_data, dtype=np_module.float64)
+    numeric_data = _sanitize_finite_float_array(
+        np_module=np_module,
+        image_data=image_data,
+        dtype=np_module.float64,
+    )
     if len(numeric_data.shape) == 2:
         numeric_data = numeric_data[:, :, None]
     if len(numeric_data.shape) == 3 and numeric_data.shape[2] == 1:
@@ -8873,15 +8941,26 @@ def _apply_auto_post_gamma_float(np_module, image_rgb_float, post_gamma_auto_opt
         + (0.7152 * validated_input[:, :, 1])
         + (0.0722 * validated_input[:, :, 2])
     )
-    mean_luminance = float(np_module.mean(luminance)) if luminance.size else 0.0
+    finite_luminance = _extract_finite_luminance_samples(
+        np_module=np_module,
+        luminance=luminance,
+    )
+    if finite_luminance.size == 0:
+        return (validated_input.astype(np_module.float32), 1.0)
+    mean_luminance = float(np_module.mean(finite_luminance))
+    if not math.isfinite(mean_luminance):
+        return (validated_input.astype(np_module.float32), 1.0)
     if (
         mean_luminance <= float(post_gamma_auto_options.luma_min)
         or mean_luminance >= float(post_gamma_auto_options.luma_max)
     ):
         return (validated_input.astype(np_module.float32), 1.0)
-    resolved_gamma = math.log(float(post_gamma_auto_options.target_gray)) / math.log(
-        mean_luminance
-    )
+    denominator = math.log(mean_luminance) if mean_luminance > 0.0 else float("nan")
+    if not math.isfinite(denominator) or abs(denominator) <= 1e-12:
+        return (validated_input.astype(np_module.float32), 1.0)
+    resolved_gamma = math.log(float(post_gamma_auto_options.target_gray)) / denominator
+    if not math.isfinite(resolved_gamma) or resolved_gamma <= 0.0:
+        return (validated_input.astype(np_module.float32), 1.0)
     lut_domain, lut_values = _build_auto_post_gamma_lut_float(
         np_module=np_module,
         gamma_value=resolved_gamma,
@@ -8889,7 +8968,12 @@ def _apply_auto_post_gamma_float(np_module, image_rgb_float, post_gamma_auto_opt
     )
     flattened_input = validated_input.astype(np_module.float64, copy=False).reshape(-1)
     mapped_flat = np_module.interp(flattened_input, lut_domain, lut_values)
-    mapped = mapped_flat.reshape(validated_input.shape).astype(np_module.float32)
+    mapped = mapped_flat.reshape(validated_input.shape)
+    mapped = _sanitize_finite_float_array(
+        np_module=np_module,
+        image_data=mapped,
+        dtype=np_module.float32,
+    )
     return (mapped, float(resolved_gamma))
 
 
@@ -9148,6 +9232,22 @@ def _compute_bt709_luminance(np_module, linear_rgb):
     )
 
 
+def _extract_finite_luminance_samples(np_module, luminance):
+    """@brief Extract finite luminance samples from one luminance tensor.
+
+    @details Flattens one luminance payload, keeps only finite entries, and
+    returns them as a contiguous float64 vector for robust statistics.
+    @param np_module {ModuleType} Imported numpy module.
+    @param luminance {object} Luminance tensor.
+    @return {object} Flat finite luminance samples as float64 vector.
+    @satisfies REQ-050, REQ-177
+    """
+
+    luminance_values = np_module.asarray(luminance, dtype=np_module.float64)
+    finite_mask = np_module.isfinite(luminance_values)
+    return np_module.asarray(luminance_values[finite_mask], dtype=np_module.float64)
+
+
 def _analyze_luminance_key(np_module, luminance, eps):
     """@brief Analyze luminance distribution and classify scene key.
 
@@ -9162,15 +9262,28 @@ def _analyze_luminance_key(np_module, luminance, eps):
     @satisfies REQ-050, REQ-103, REQ-121
     """
 
-    luminance_clamped = np_module.clip(luminance, 0.0, 1.0)
+    eps_value = float(eps)
+    if not math.isfinite(eps_value) or eps_value <= 0.0:
+        raise ValueError("Auto-brightness requires a finite positive epsilon")
+    finite_luminance = _extract_finite_luminance_samples(np_module=np_module, luminance=luminance)
+    if finite_luminance.size == 0:
+        raise ValueError(
+            "Auto-brightness requires at least one finite luminance sample"
+        )
+    luminance_clamped = np_module.clip(finite_luminance, 0.0, 1.0)
     log_average = float(
-        np_module.exp(np_module.mean(np_module.log(eps + luminance_clamped)))
+        np_module.exp(np_module.mean(np_module.log(eps_value + luminance_clamped)))
     )
     median_luminance = float(np_module.median(luminance_clamped))
     p05 = float(np_module.percentile(luminance_clamped, 5.0))
     p95 = float(np_module.percentile(luminance_clamped, 95.0))
     shadow_clip = float(np_module.mean(luminance_clamped <= (1.0 / 255.0)))
     highlight_clip = float(np_module.mean(luminance_clamped >= (254.0 / 255.0)))
+    if not all(
+        math.isfinite(value)
+        for value in (log_average, median_luminance, p05, p95, shadow_clip, highlight_clip)
+    ):
+        raise ValueError("Auto-brightness luminance statistics must be finite")
     if median_luminance < 0.35 and p95 < 0.85:
         key_type = "low-key"
     elif median_luminance > 0.65 and p05 > 0.15:
@@ -9255,13 +9368,51 @@ def _reinhard_global_tonemap_luminance(
     @satisfies REQ-050, REQ-104
     """
 
-    luminance_clamped = np_module.clip(luminance, 0.0, 1.0)
-    lw_bar = float(np_module.exp(np_module.mean(np_module.log(eps + luminance_clamped))))
-    scaled_luminance = (key_value / (lw_bar + eps)) * luminance_clamped
-    lwhite = float(np_module.percentile(scaled_luminance, white_point_percentile))
-    lwhite = max(lwhite, eps)
+    eps_value = float(eps)
+    if not math.isfinite(eps_value) or eps_value <= 0.0:
+        raise ValueError("Auto-brightness requires a finite positive epsilon")
+    if not math.isfinite(float(key_value)):
+        raise ValueError("Auto-brightness requires a finite key value")
+    percentile_value = float(white_point_percentile)
+    if not math.isfinite(percentile_value):
+        raise ValueError("Auto-brightness requires a finite white-point percentile")
+
+    luminance_sanitized = _sanitize_finite_float_array(
+        np_module=np_module,
+        image_data=luminance,
+        dtype=np_module.float64,
+    )
+    finite_luminance = _extract_finite_luminance_samples(
+        np_module=np_module,
+        luminance=luminance,
+    )
+    if finite_luminance.size == 0:
+        raise ValueError(
+            "Auto-brightness requires at least one finite luminance sample"
+        )
+    finite_luminance = np_module.clip(finite_luminance, 0.0, 1.0)
+    luminance_clamped = np_module.clip(luminance_sanitized, 0.0, 1.0)
+    lw_bar = float(np_module.exp(np_module.mean(np_module.log(eps_value + finite_luminance))))
+    if not math.isfinite(lw_bar):
+        raise ValueError("Auto-brightness computed a non-finite log-average luminance")
+    scaled_luminance = (float(key_value) / (lw_bar + eps_value)) * luminance_clamped
+    scaled_finite = _extract_finite_luminance_samples(
+        np_module=np_module,
+        luminance=scaled_luminance,
+    )
+    if scaled_finite.size == 0:
+        raise ValueError("Auto-brightness produced no finite scaled luminance samples")
+    lwhite = float(np_module.percentile(scaled_finite, percentile_value))
+    if not math.isfinite(lwhite):
+        raise ValueError("Auto-brightness computed a non-finite white point")
+    lwhite = max(lwhite, eps_value)
     ld = (scaled_luminance * (1.0 + (scaled_luminance / (lwhite * lwhite)))) / (
         1.0 + scaled_luminance
+    )
+    ld = _sanitize_finite_float_array(
+        np_module=np_module,
+        image_data=ld,
+        dtype=np_module.float64,
     )
     debug = {
         "Lw_bar": lw_bar,
@@ -9270,6 +9421,8 @@ def _reinhard_global_tonemap_luminance(
         "Ld_min": float(np_module.min(ld)),
         "Ld_max": float(np_module.max(ld)),
     }
+    if not all(math.isfinite(float(debug[key])) for key in debug):
+        raise ValueError("Auto-brightness produced non-finite tonemap statistics")
     return np_module.clip(ld, 0.0, 1.0), debug
 
 
@@ -9356,6 +9509,11 @@ def _quantize_clahe_luminance_bins(np_module, luminance_values, histogram_size):
     """
 
     max_bin = float(histogram_size - 1)
+    luminance_values = _sanitize_finite_float_array(
+        np_module=np_module,
+        image_data=luminance_values,
+        dtype=np_module.float64,
+    )
     scaled = np_module.clip(
         np_module.rint(
             np_module.asarray(luminance_values, dtype=np_module.float64) * max_bin
@@ -9643,6 +9801,14 @@ def _apply_clahe_luminance_float(np_module, luminance_float, clip_limit, tile_gr
     @satisfies REQ-136, REQ-137
     """
 
+    luminance_float = _clamp01(
+        np_module,
+        _sanitize_finite_float_array(
+            np_module=np_module,
+            image_data=luminance_float,
+            dtype=np_module.float64,
+        ),
+    )
     histogram_size = 1 << 16
     tile_luts, tile_height, tile_width = _build_clahe_tile_luts_float(
         np_module=np_module,
@@ -9705,7 +9871,11 @@ def _apply_clahe_luma_rgb_float(cv2_module, np_module, image_rgb_float, auto_adj
 
     rgb_float = _clamp01(
         np_module,
-        np_module.asarray(image_rgb_float, dtype=np_module.float64),
+        _sanitize_finite_float_array(
+            np_module=np_module,
+            image_data=image_rgb_float,
+            dtype=np_module.float64,
+        ),
     )
     if not auto_adjust_options.enable_local_contrast:
         return rgb_float
@@ -9730,7 +9900,17 @@ def _apply_clahe_luma_rgb_float(cv2_module, np_module, image_rgb_float, auto_adj
         cr_channel=ycrcb_float[..., 1],
         cb_channel=ycrcb_float[..., 2],
     )
+    rgb_clahe = _sanitize_finite_float_array(
+        np_module=np_module,
+        image_data=rgb_clahe,
+        dtype=np_module.float64,
+    )
     blended = ((1.0 - strength) * rgb_float) + (strength * rgb_clahe)
+    blended = _sanitize_finite_float_array(
+        np_module=np_module,
+        image_data=blended,
+        dtype=np_module.float64,
+    )
     return _clamp01(np_module, blended)
 
 
@@ -9934,6 +10114,12 @@ def _build_autoexp_histogram_rgb_float(np_module, image_rgb_float, histcompr):
         + _AUTO_LEVELS_LUMINANCE_WEIGHTS[1] * normalized[..., 1]
         + _AUTO_LEVELS_LUMINANCE_WEIGHTS[2] * normalized[..., 2]
     )
+    luminance = _sanitize_finite_float_array(
+        np_module=np_module,
+        image_data=luminance,
+        dtype=np_module.float64,
+    )
+    luminance = np_module.clip(luminance, 0.0, 1.0)
     histogram_index = np_module.clip(
         (luminance / bin_width).astype(np_module.int64),
         0,
@@ -10001,15 +10187,57 @@ def _compute_auto_levels_from_histogram(np_module, histogram, histcompr, clip_pe
         raise ValueError(
             f"histogram size must be {hist_size} for histcompr={histcompr}"
         )
+    histogram_flat = _sanitize_finite_float_array(
+        np_module=np_module,
+        image_data=histogram_flat,
+        dtype=np_module.float64,
+    )
+    histogram_flat = np_module.maximum(histogram_flat, 0.0)
 
     total = float(histogram_flat.sum())
+    if not math.isfinite(total) or total <= 0.0:
+        return _pack_auto_levels_metrics(
+            expcomp=0.0,
+            gain=1.0,
+            black=0.0,
+            brightness=0,
+            contrast=0,
+            hlcompr=0,
+            hlcomprthresh=0,
+            whiteclip=0.0,
+            rawmax=0.0,
+            shc=0.0,
+            median=0.0,
+            average=0.0,
+            overex=0,
+            ospread=0.0,
+        )
     weighted = float(
         np_module.dot(
             histogram_flat,
             np_module.arange(hist_size, dtype=np_module.float64),
         )
     )
+    if not math.isfinite(weighted):
+        return _pack_auto_levels_metrics(
+            expcomp=0.0,
+            gain=1.0,
+            black=0.0,
+            brightness=0,
+            contrast=0,
+            hlcompr=0,
+            hlcomprthresh=0,
+            whiteclip=0.0,
+            rawmax=0.0,
+            shc=0.0,
+            median=0.0,
+            average=0.0,
+            overex=0,
+            ospread=0.0,
+        )
     average_index = weighted / total if total > 0 else 0.0
+    if not math.isfinite(average_index) or average_index < 0.0:
+        average_index = 0.0
     if total <= 0.0:
         return _pack_auto_levels_metrics(
             expcomp=0.0,
@@ -10104,6 +10332,11 @@ def _compute_auto_levels_from_histogram(np_module, histogram, histcompr, clip_pe
         overex = 1
     octile_6 = float(octile[6])
     octile_7 = float(octile[7])
+    octile = _sanitize_finite_float_array(
+        np_module=np_module,
+        image_data=octile,
+        dtype=np_module.float64,
+    )
     for octile_index in range(1, 8):
         if octile[octile_index] == 0.0:
             octile[octile_index] = octile[octile_index - 1]
@@ -10114,7 +10347,7 @@ def _compute_auto_levels_from_histogram(np_module, histogram, histcompr, clip_pe
             denominator = max(0.5, (octile[3] - octile[octile_index]))
         ospread += (octile[octile_index + 1] - octile[octile_index]) / denominator
     ospread /= 5.0
-    if ospread <= 0.0:
+    if not math.isfinite(ospread) or ospread <= 0.0:
         return _pack_auto_levels_metrics(
             expcomp=0.0,
             gain=1.0,
@@ -10178,7 +10411,9 @@ def _compute_auto_levels_from_histogram(np_module, histogram, histcompr, clip_pe
             (hist_log_span - (2.0 * octile[7] - octile[6]))
             - math.log(max(rawmax, 1e-12), 2.0)
         )
-    if abs(expcomp1) - abs(expcomp2) > 1.0:
+    if not math.isfinite(expcomp1) or not math.isfinite(expcomp2):
+        expcomp = 0.0
+    elif abs(expcomp1) - abs(expcomp2) > 1.0:
         denominator = abs(expcomp1) + abs(expcomp2)
         expcomp = (
             expcomp1 * abs(expcomp2) + expcomp2 * abs(expcomp1)
@@ -10187,14 +10422,20 @@ def _compute_auto_levels_from_histogram(np_module, histogram, histcompr, clip_pe
         expcomp = 0.5 * expcomp1 + 0.5 * expcomp2
 
     gain = math.exp(expcomp * math.log(2.0))
+    if not math.isfinite(gain) or gain <= 0.0:
+        gain = 1.0
     corr = math.sqrt(gain / max(rawmax, 1e-12))
+    if not math.isfinite(corr) or corr <= 0.0:
+        corr = 1.0
     black = shc * corr
     hlcomprthresh = 0
     comp = (gain * whiteclip - 1.0) * 2.3
     hlcompr = int(100.0 * comp / (max(0.0, expcomp) + 1.0))
     hlcompr = max(0, min(100, hlcompr))
 
-    midtmp = gain * math.sqrt(median * average)
+    midtmp = gain * math.sqrt(max(median * average, 0.0))
+    if not math.isfinite(midtmp):
+        midtmp = _AUTO_LEVELS_RT_MIDGRAY
     if midtmp < 0.1:
         brightness = int(
             (_AUTO_LEVELS_RT_MIDGRAY - midtmp) * 15.0 / max(midtmp, 1e-12)
@@ -10229,9 +10470,39 @@ def _compute_auto_levels_from_histogram(np_module, histogram, histcompr, clip_pe
             whiteclip_gamma = max_whiteclip
 
     whiteclip_gamma = float(_rt_igamma2(np_module, whiteclip_gamma))
+    if not math.isfinite(whiteclip_gamma):
+        whiteclip_gamma = 1.0
     black = black / whiteclip_gamma if whiteclip_gamma > 0 else 0.0
     expcomp = max(-5.0, min(12.0, float(expcomp)))
     brightness = max(-100, min(100, int(brightness)))
+    finite_metric_values = (
+        expcomp,
+        gain,
+        black,
+        whiteclip,
+        rawmax,
+        shc,
+        median,
+        average,
+        ospread,
+    )
+    if not all(math.isfinite(float(value)) for value in finite_metric_values):
+        return _pack_auto_levels_metrics(
+            expcomp=0.0,
+            gain=1.0,
+            black=0.0,
+            brightness=0,
+            contrast=0,
+            hlcompr=0,
+            hlcomprthresh=0,
+            whiteclip=0.0,
+            rawmax=0.0,
+            shc=0.0,
+            median=0.0,
+            average=0.0,
+            overex=0,
+            ospread=0.0,
+        )
     return _pack_auto_levels_metrics(
         expcomp=float(expcomp),
         gain=float(gain),
@@ -10536,6 +10807,12 @@ def _build_auto_levels_full_histogram_rgb_float(np_module, image_rgb_float):
         + _AUTO_LEVELS_TONECURVE_LUMINANCE_WEIGHTS[1] * normalized[..., 1]
         + _AUTO_LEVELS_TONECURVE_LUMINANCE_WEIGHTS[2] * normalized[..., 2]
     )
+    luminance = _sanitize_finite_float_array(
+        np_module=np_module,
+        image_data=luminance,
+        dtype=np_module.float64,
+    )
+    luminance = np_module.clip(luminance, 0.0, 1.0)
     histogram_index = np_module.clip(
         (luminance * _AUTO_LEVELS_CODE_MAX).astype(np_module.int64),
         0,
@@ -10578,6 +10855,43 @@ def _rt_hlcurve_float(np_module, exp_scale, comp, hlrange, levels_code):
     return np_module.log1p(y_value) * ratio
 
 
+def _read_finite_metric(metric_values, metric_key, default_value):
+    """@brief Read one finite scalar metric value with deterministic fallback.
+
+    @details Converts one dictionary value to float and falls back to the
+    provided default when conversion fails or the value is non-finite.
+    @param metric_values {dict[str, int|float]} Metrics dictionary.
+    @param metric_key {str} Metric key to read.
+    @param default_value {int|float} Default value used on invalid input.
+    @return {float} Finite scalar metric value.
+    @satisfies REQ-100, REQ-225
+    """
+
+    raw_value = metric_values.get(metric_key, default_value)
+    try:
+        numeric_value = float(raw_value)
+    except (TypeError, ValueError, OverflowError):
+        return float(default_value)
+    if not math.isfinite(numeric_value):
+        return float(default_value)
+    return numeric_value
+
+
+def _read_finite_int_metric(metric_values, metric_key, default_value):
+    """@brief Read one finite integer metric value with deterministic fallback.
+
+    @details Reads the metric as finite float through `_read_finite_metric(...)`
+    and rounds it to integer for discrete auto-levels controls.
+    @param metric_values {dict[str, int|float]} Metrics dictionary.
+    @param metric_key {str} Metric key to read.
+    @param default_value {int} Default value used on invalid input.
+    @return {int} Finite integer metric value.
+    @satisfies REQ-100, REQ-225
+    """
+
+    return int(round(_read_finite_metric(metric_values, metric_key, default_value)))
+
+
 def _build_auto_levels_tone_curve_state(np_module, image_rgb_float, auto_levels_metrics):
     """@brief Build RawTherapee-equivalent auto-levels curve state.
 
@@ -10596,23 +10910,23 @@ def _build_auto_levels_tone_curve_state(np_module, image_rgb_float, auto_levels_
         np_module=np_module,
         image_rgb_float=image_rgb_float,
     ).astype(np_module.float64)
-    gain = float(auto_levels_metrics.get("gain", 1.0))
-    expcomp = float(
-        auto_levels_metrics.get(
-            "expcomp",
-            math.log(max(gain, 1e-12), 2.0),
-        )
+    gain = _read_finite_metric(auto_levels_metrics, "gain", 1.0)
+    if gain <= 0.0:
+        gain = 1.0
+    expcomp = _read_finite_metric(
+        auto_levels_metrics,
+        "expcomp",
+        math.log(max(gain, 1e-12), 2.0),
     )
-    black = float(
-        auto_levels_metrics.get(
-            "black_normalized",
-            float(auto_levels_metrics.get("black", 0.0)) / _AUTO_LEVELS_CODE_MAX,
-        )
+    black = _read_finite_metric(
+        auto_levels_metrics,
+        "black_normalized",
+        _read_finite_metric(auto_levels_metrics, "black", 0.0) / _AUTO_LEVELS_CODE_MAX,
     )
-    brightness = int(auto_levels_metrics.get("brightness", 0))
-    contrast = int(auto_levels_metrics.get("contrast", 0))
-    hlcompr = int(auto_levels_metrics.get("hlcompr", 0))
-    hlcomprthresh = int(auto_levels_metrics.get("hlcomprthresh", 0))
+    brightness = _read_finite_int_metric(auto_levels_metrics, "brightness", 0)
+    contrast = _read_finite_int_metric(auto_levels_metrics, "contrast", 0)
+    hlcompr = _read_finite_int_metric(auto_levels_metrics, "hlcompr", 0)
+    hlcomprthresh = _read_finite_int_metric(auto_levels_metrics, "hlcomprthresh", 0)
 
     brightness_curve = None
     if brightness != 0:
@@ -10640,12 +10954,20 @@ def _build_auto_levels_tone_curve_state(np_module, image_rgb_float, auto_levels_
         )
 
     exp_scale = math.pow(2.0, expcomp)
+    if not math.isfinite(exp_scale) or exp_scale <= 0.0:
+        exp_scale = 1.0
     comp = (max(0.0, expcomp) + 1.0) * float(hlcompr) / 100.0
+    if not math.isfinite(comp) or comp < 0.0:
+        comp = 0.0
     shoulder = (
         (float(_AUTO_LEVELS_CODE_BIN_COUNT) / max(1.0, exp_scale))
         * (float(hlcomprthresh) / 200.0)
     ) + 0.1
+    if not math.isfinite(shoulder):
+        shoulder = 0.1
     hlrange = float(_AUTO_LEVELS_CODE_BIN_COUNT) - shoulder
+    if not math.isfinite(hlrange) or hlrange <= 0.0:
+        hlrange = float(_AUTO_LEVELS_CODE_BIN_COUNT)
 
     highlight_curve = np_module.full(
         _AUTO_LEVELS_CODE_BIN_COUNT,
@@ -10669,6 +10991,11 @@ def _build_auto_levels_tone_curve_state(np_module, image_rgb_float, auto_levels_
             highlight_curve[start_index:] = np_module.log1p(
                 r_value * exp_scale
             ) / r_value
+    highlight_curve = _sanitize_finite_float_array(
+        np_module=np_module,
+        image_data=highlight_curve,
+        dtype=np_module.float64,
+    )
 
     shadow_curve = np_module.ones(
         _AUTO_LEVELS_CODE_BIN_COUNT,
@@ -10692,6 +11019,11 @@ def _build_auto_levels_tone_curve_state(np_module, image_rgb_float, auto_levels_
             ],
             dtype=np_module.float64,
         )
+    shadow_curve = _sanitize_finite_float_array(
+        np_module=np_module,
+        image_data=shadow_curve,
+        dtype=np_module.float64,
+    )
 
     code_indices = np_module.arange(
         _AUTO_LEVELS_CODE_BIN_COUNT,
@@ -10713,6 +11045,12 @@ def _build_auto_levels_tone_curve_state(np_module, image_rgb_float, auto_levels_
         )
     else:
         dcurve = gamma_curve
+    dcurve = _sanitize_finite_float_array(
+        np_module=np_module,
+        image_data=dcurve,
+        dtype=np_module.float64,
+    )
+    dcurve = np_module.clip(dcurve, 0.0, 1.0)
 
     if contrast != 0:
         highlighted_codes = code_indices * highlight_curve
@@ -10728,9 +11066,14 @@ def _build_auto_levels_tone_curve_state(np_module, image_rgb_float, auto_levels_
             indices=contrasted_input,
         )
         histogram_sum = float(histogram.sum())
-        average_luminance = float(
-            np_module.dot(dcurve_samples, histogram) / max(histogram_sum, 1.0)
-        )
+        if not math.isfinite(histogram_sum) or histogram_sum <= 0.0:
+            average_luminance = 0.5
+        else:
+            average_luminance = float(
+                np_module.dot(dcurve_samples, histogram) / max(histogram_sum, 1.0)
+            )
+        if not math.isfinite(average_luminance):
+            average_luminance = 0.5
         contrast_curve = _build_rt_nurbs_curve_lut(
             np_module=np_module,
             x_points=(
@@ -10756,8 +11099,19 @@ def _build_auto_levels_tone_curve_state(np_module, image_rgb_float, auto_levels_
             lut_values=contrast_curve,
             indices=dcurve * _AUTO_LEVELS_CODE_MAX,
         )
+        dcurve = _sanitize_finite_float_array(
+            np_module=np_module,
+            image_data=dcurve,
+            dtype=np_module.float64,
+        )
+        dcurve = np_module.clip(dcurve, 0.0, 1.0)
 
-    tone_curve = _rt_igamma2(np_module, dcurve).astype(np_module.float64)
+    tone_curve = _sanitize_finite_float_array(
+        np_module=np_module,
+        image_data=_rt_igamma2(np_module, dcurve),
+        dtype=np_module.float64,
+    )
+    tone_curve = np_module.clip(tone_curve, 0.0, 1.0)
     return {
         "highlight_curve": highlight_curve,
         "shadow_curve": shadow_curve,
@@ -10945,10 +11299,15 @@ def _apply_auto_levels_float(np_module, image_rgb_float, auto_levels_options):
     @satisfies REQ-100, REQ-101, REQ-102, REQ-119, REQ-120, REQ-165
     """
 
-    normalized_input = _normalize_float_rgb_image(
+    normalized_input = _sanitize_finite_float_array(
         np_module=np_module,
-        image_data=image_rgb_float,
+        image_data=_normalize_float_rgb_image(
+            np_module=np_module,
+            image_data=image_rgb_float,
+        ),
+        dtype=np_module.float32,
     )
+    normalized_input = np_module.clip(normalized_input, 0.0, 1.0)
     histogram = _build_autoexp_histogram_rgb_float(
         np_module=np_module,
         image_rgb_float=normalized_input,
@@ -11020,6 +11379,11 @@ def _apply_auto_levels_float(np_module, image_rgb_float, auto_levels_options):
             )
         else:
             raise ValueError(f"Unsupported highlight reconstruction method: {method}")
+        image_float = _sanitize_finite_float_array(
+            np_module=np_module,
+            image_data=image_float,
+            dtype=np_module.float64,
+        )
     if auto_levels_options.clip_out_of_gamut:
         image_float = _call_auto_levels_compat_helper(
             np_module=np_module,
@@ -11029,6 +11393,11 @@ def _apply_auto_levels_float(np_module, image_rgb_float, auto_levels_options):
             image_rgb=image_float,
             maxval=1.0,
         )
+    image_float = _sanitize_finite_float_array(
+        np_module=np_module,
+        image_data=image_float,
+        dtype=np_module.float64,
+    )
     return image_float.astype(np_module.float32)
 
 
@@ -11998,6 +12367,14 @@ def _selective_blur_contrast_gated_vectorized(
     @satisfies REQ-075
     """
 
+    rgb = _clamp01(
+        np_module,
+        _sanitize_finite_float_array(
+            np_module=np_module,
+            image_data=rgb,
+            dtype=np_module.float64,
+        ),
+    )
     height, width, _channels = rgb.shape
     kernel = _gaussian_kernel_2d(np_module, sigma=sigma)
     radius = kernel.shape[0] // 2
@@ -12046,6 +12423,14 @@ def _level_per_channel_adaptive(np_module, rgb, low_pct=0.1, high_pct=99.9):
     @satisfies REQ-075
     """
 
+    rgb = _clamp01(
+        np_module,
+        _sanitize_finite_float_array(
+            np_module=np_module,
+            image_data=rgb,
+            dtype=np_module.float64,
+        ),
+    )
     output = np_module.empty_like(rgb)
     for channel_index in range(3):
         channel = rgb[..., channel_index]
@@ -12069,7 +12454,14 @@ def _sigmoidal_contrast(np_module, rgb, contrast=3.0, midpoint=0.5):
     @satisfies REQ-075
     """
 
-    x_values = _clamp01(np_module, rgb)
+    x_values = _clamp01(
+        np_module,
+        _sanitize_finite_float_array(
+            np_module=np_module,
+            image_data=rgb,
+            dtype=np_module.float64,
+        ),
+    )
 
     def logistic(z_values):
         return 1.0 / (1.0 + np_module.exp(-z_values))
@@ -12093,6 +12485,14 @@ def _vibrance_hsl_gamma(np_module, rgb, saturation_gamma=0.8):
     @satisfies REQ-075
     """
 
+    rgb = _clamp01(
+        np_module,
+        _sanitize_finite_float_array(
+            np_module=np_module,
+            image_data=rgb,
+            dtype=np_module.float64,
+        ),
+    )
     hue, saturation, lightness = _rgb_to_hsl(np_module, rgb)
     saturation = _clamp01(np_module, saturation) ** (1.0 / saturation_gamma)
     output = _hsl_to_rgb(np_module, hue, saturation, lightness)
@@ -12194,16 +12594,30 @@ def _apply_validated_auto_adjust_pipeline(
     @satisfies REQ-051, REQ-075, REQ-106, REQ-123, REQ-136, REQ-137, REQ-148
     """
 
+    def _sanitize_auto_adjust_stage(stage_rgb):
+        """@brief Sanitize one auto-adjust RGB stage payload to finite `[0,1]`."""
+
+        return _clamp01(
+            np_module,
+            _sanitize_finite_float_array(
+                np_module=np_module,
+                image_data=stage_rgb,
+                dtype=np_module.float64,
+            ),
+        )
+
     rgb_float = _normalize_float_rgb_image(
         np_module=np_module,
         image_data=image_rgb_float,
     ).astype(np_module.float64)
+    rgb_float = _sanitize_auto_adjust_stage(rgb_float)
     rgb_float = _selective_blur_contrast_gated_vectorized(
         np_module,
         rgb_float,
         sigma=auto_adjust_options.blur_sigma,
         threshold_percent=auto_adjust_options.blur_threshold_pct,
     )
+    rgb_float = _sanitize_auto_adjust_stage(rgb_float)
     if imageio_module is not None and debug_context is not None:
         _write_debug_rgb_float_tiff(
             imageio_module=imageio_module,
@@ -12218,6 +12632,7 @@ def _apply_validated_auto_adjust_pipeline(
         low_pct=auto_adjust_options.level_low_pct,
         high_pct=auto_adjust_options.level_high_pct,
     )
+    rgb_float = _sanitize_auto_adjust_stage(rgb_float)
     if imageio_module is not None and debug_context is not None:
         _write_debug_rgb_float_tiff(
             imageio_module=imageio_module,
@@ -12232,6 +12647,7 @@ def _apply_validated_auto_adjust_pipeline(
         image_rgb_float=rgb_float,
         auto_adjust_options=auto_adjust_options,
     )
+    rgb_float = _sanitize_auto_adjust_stage(rgb_float)
     if imageio_module is not None and debug_context is not None:
         _write_debug_rgb_float_tiff(
             imageio_module=imageio_module,
@@ -12246,6 +12662,7 @@ def _apply_validated_auto_adjust_pipeline(
         contrast=auto_adjust_options.sigmoid_contrast,
         midpoint=auto_adjust_options.sigmoid_midpoint,
     )
+    rgb_float = _sanitize_auto_adjust_stage(rgb_float)
     if imageio_module is not None and debug_context is not None:
         _write_debug_rgb_float_tiff(
             imageio_module=imageio_module,
@@ -12257,6 +12674,7 @@ def _apply_validated_auto_adjust_pipeline(
     rgb_float = _vibrance_hsl_gamma(
         np_module, rgb_float, saturation_gamma=auto_adjust_options.saturation_gamma
     )
+    rgb_float = _sanitize_auto_adjust_stage(rgb_float)
     if imageio_module is not None and debug_context is not None:
         _write_debug_rgb_float_tiff(
             imageio_module=imageio_module,
@@ -12271,8 +12689,16 @@ def _apply_validated_auto_adjust_pipeline(
         rgb_float,
         blur_sigma=auto_adjust_options.highpass_blur_sigma,
     )
+    high_pass_gray = _clamp01(
+        np_module,
+        _sanitize_finite_float_array(
+            np_module=np_module,
+            image_data=high_pass_gray,
+            dtype=np_module.float64,
+        ),
+    )
     rgb_float = _overlay_composite(np_module, rgb_float, high_pass_gray)
-    rgb_float = np_module.clip(rgb_float, 0.0, 1.0).astype(np_module.float32)
+    rgb_float = _sanitize_auto_adjust_stage(rgb_float).astype(np_module.float32)
     if imageio_module is not None and debug_context is not None:
         _write_debug_rgb_float_tiff(
             imageio_module=imageio_module,

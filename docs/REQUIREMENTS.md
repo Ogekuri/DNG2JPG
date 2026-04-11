@@ -122,7 +122,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-011**: MUST run `luminance-hdr-cli` with deterministic HDR/TMO arguments including `--ldrTiff 32b` for luminance backend, MUST print the full executed command syntax with parameters to runtime output, confine any required float32 TIFF intermediates to the backend step, and return normalized RGB float output.
 - **REQ-174**: MUST serialize luminance backend input bracket images from DNG2JPG RGB float `[0,1]` working format into TIFF float32 files before `luminance-hdr-cli` execution.
 - **REQ-175**: MUST import `luminance-hdr-cli` output TIFF float32 data and normalize it back to DNG2JPG RGB float `[0,1]` working format.
-- **REQ-012**: MUST exchange RGB float tensors across linear-base extraction, auto-brightness, auto-white-balance, auto-zero evaluation, bracket generation, merge, dedicated postprocess orchestration, auto-adjust, and final-save preparation stages.
+- **REQ-012**: MUST exchange RGB float tensors across linear-base extraction, auto-brightness, auto-white-balance, auto-zero evaluation, bracket generation, merge, dedicated postprocess orchestration, auto-adjust, and final-save preparation stages with finite-safe sample handling at stage boundaries.
 - **REQ-013**: MUST execute optional auto-brightness after `_extract_base_rgb_linear_float` and before `_calculate_auto_zero_evaluations`; static postprocess MUST keep `gamma->brightness->contrast->saturation`, and its brightness substage MUST apply only static/manual brightness.
 - **REQ-106**: MUST execute optional auto-adjust stage after static postprocess and before final JPEG quantization/write, preserve RGB float input/output interfaces, and confine any required float-to-uint16 or TIFF16 conversions to the auto-adjust step itself.
 - **REQ-014**: MUST synchronize output file timestamps from EXIF datetime only after refreshed EXIF metadata has been written when EXIF datetime metadata is available.
@@ -159,11 +159,11 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-209**: MUST format every numeric coefficient in RAW WB normalization diagnostics as fixed-point float with exactly four fractional digits.
 - **REQ-032**: MUST evaluate `ev_best`, `ev_ettr`, and `ev_detail` on the normalized linear gamma=`1` RGB image after optional auto-brightness and auto-white-balance only when `--exposure=auto` is active, and MUST select `ev_zero` as `min(ev_best, ev_ettr, ev_detail)` preserving candidate signs.
 - **REQ-166**: MUST expose `--auto-ev-step` as a positive configurable EV increment for iterative bracket expansion, defaulting to `0.1`.
-- **REQ-167**: MUST derive `ev_delta` by iterating from `auto_ev_step`, evaluating unclipped `ev_zero±ev_delta` images, and stopping at first threshold breach only when `--bracketing=auto` and backend is not `OpenCV-Tonemap`.
+- **REQ-167**: MUST derive `ev_delta` by iterating from `auto_ev_step`, evaluating unclipped `ev_zero±ev_delta` images, and stopping at first threshold breach or deterministic iteration safety bound when `--bracketing=auto` and backend is not `OpenCV-Tonemap`.
 - **REQ-216**: MUST resolve `ev_delta=0.1` and skip clipping-threshold bracket iteration when `--bracketing=auto` and `--hdr-merge=OpenCV-Tonemap`.
 - **REQ-217**: MUST print `Bracket step: skipped` and `Exposure planning selected bracket half-span: 0.100000 EV` when `--bracketing=auto` and `--hdr-merge=OpenCV-Tonemap`.
 - **REQ-218**: MUST print iterative bracket-step clipping metrics and final `ev_delta` only when `--bracketing=auto` and backend is not `OpenCV-Tonemap`.
-- **REQ-168**: MUST measure highlight clipping as the percentage of pixels in the plus image with any channel `>=1` and shadow clipping as the percentage of pixels in the minus image with any channel `<=0`.
+- **REQ-168**: MUST measure highlight clipping as the percentage of pixels in the plus image with any channel `>=1` and shadow clipping as the percentage of pixels in the minus image with any channel `<=0` using finite-safe bracket tensors.
 - **REQ-033**: MUST parse and preserve `--tmo*` passthrough option payloads for luminance command forwarding.
 - **REQ-034**: MUST order luminance backend bracket inputs as `ev_minus`, `ev_zero`, `ev_plus`.
 - **REQ-035**: MUST execute `luminance-hdr-cli` from output TIFF parent directory to isolate sidecar artifacts in temporary workspace.
@@ -180,7 +180,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-047**: MUST publish release assets from `dist/**/*` using `softprops/action-gh-release@v2` with `fail_on_unmatched_files: true`.
 - **REQ-048**: MUST include project script entrypoints `dng2jpg` and `d2j` mapped to `dng2jpg.core:main`.
 - **REQ-049**: SHOULD provide both `dng2jpg` and `d2j` as equivalent user-invokable CLI aliases.
-- **REQ-050**: MUST implement `/tmp/auto-brightness.py` auto-brightness on normalized RGB float `[0,1]` in linear gamma `1.0`: compute BT.709 luminance, tonemap luminance, rescale RGB, optionally desaturate overflow, and return linear gamma `1.0` output without sRGB encode/decode.
+- **REQ-050**: MUST implement `/tmp/auto-brightness.py` auto-brightness on normalized RGB float `[0,1]` in linear gamma `1.0`: compute BT.709 luminance, tonemap luminance, rescale RGB, optionally desaturate overflow, and return linear gamma `1.0` output without sRGB encode/decode using finite-safe luminance statistics.
 - **REQ-051**: MUST support exactly one auto-adjust pipeline with one validated knob model containing shared controls and CLAHE-luma controls.
 - **REQ-052**: MUST print deterministic runtime diagnostics for EV triplet and OpenCV radiance exposure calculations/results; MUST print `Exposure Misure EV` values and selected `ev_zero` only when `--exposure=auto` is active.
 - **REQ-220**: After `_parse_run_options` returns non-`None` and CTN-004 file-path preconditions pass, MUST invoke `_print_validated_run_parameters` before any dependency resolution or image processing step.
@@ -188,7 +188,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-103**: MUST classify normalized BT.709 luminance as `low-key` when `median<0.35 && p95<0.85`, `high-key` when `median>0.65 && p05>0.15`, else `normal-key`.
 - **REQ-104**: MUST map luminance with `L=(a/Lw_bar)*Y`, percentile-derived robust `Lwhite`, and burn-out compression `Ld=(L*(1+L/Lwhite^2))/(1+L)` before linear-domain chromaticity-preserving RGB scaling.
 - **REQ-105**: MUST desaturate only overflowing linear RGB pixels by blending toward `(Ld,Ld,Ld)` with the minimal factor that restores `max(R,G,B)<=1` while preserving luminance.
-- **REQ-100**: MUST execute auto-levels after static postprocess when `--auto-levels` resolves to `enable`, preserving RGB float input/output buffers and float internal calculations across histogram analysis and tonal transformation.
+- **REQ-100**: MUST execute auto-levels after static postprocess when `--auto-levels` resolves to `enable`, preserving RGB float input/output buffers and float internal calculations across histogram analysis and tonal transformation with finite-safe histogram and tone-curve metrics.
 - **REQ-101**: MUST parse `--auto-levels <enable|disable>`, `--al-clip-pct`, `--al-clip-out-of-gamut`, `--al-highlight-reconstruction`, `--al-highlight-reconstruction-method`, and `--al-gain-threshold`, default omitted `--auto-levels` to `enable`, and require resolved auto-levels state `enable` before any `--al-*` option.
 - **REQ-102**: MUST accept highlight reconstruction methods `Luminance Recovery`, `CIELab Blending`, `Blend`, `Color Propagation`, and `Inpaint Opposed`.
 - **REQ-116**: MUST default auto-levels knobs to `clip_pct=0.02`, `clip_out_of_gamut=true`, `highlight_reconstruction=disabled`, `highlight_reconstruction_method=Inpaint Opposed`, and `gain_threshold=1.0`.
@@ -199,7 +199,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-165**: MUST apply `Clip out-of-gamut colors` after the complete auto-levels tonal transformation and optional highlight reconstruction using the RawTherapee `filmlike_clip` hue-stable clipping family instead of isotropic ratio-preserving normalization.
 - **REQ-121**: MUST compute `log_avg_lum`, `median_lum`, `p05`, `p95`, `shadow_clip_in<=1/255`, and `highlight_clip_in>=254/255` from normalized luminance before key-value selection.
 - **REQ-122**: MUST auto-select base Reinhard `a` as `0.09`, `0.18`, or `0.36`, boost when `p95<0.60 && median<0.35`, attenuate when `p05>0.40 && median>0.65`, then clamp to `[a_min,a_max]`.
-- **REQ-123**: MUST execute auto-adjust stages in this exact order on RGB float buffers: selective blur, adaptive level, CLAHE-luma, sigmoidal contrast, HSL vibrance, and high-pass overlay.
+- **REQ-123**: MUST execute auto-adjust stages in this exact order on RGB float buffers: selective blur, adaptive level, CLAHE-luma, sigmoidal contrast, HSL vibrance, and high-pass overlay, with finite-safe sample handling before stage-local statistics.
 - **REQ-124**: MUST expose auto-brightness CLI knobs for `key_value`, `white_point_percentile`, `a_min`, `a_max`, `max_auto_boost_factor`, and `eps`.
 - **REQ-125**: MUST expose `--aa-enable-local-contrast`, `--aa-local-contrast-strength`, `--aa-clahe-clip-limit`, and `--aa-clahe-tile-grid-size` as auto-adjust CLAHE-luma controls.
 - **REQ-135**: MUST expose `--ab-enable-luminance-preserving-desat` as the auto-brightness desaturation toggle.
@@ -240,7 +240,11 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-134**: MUST preserve legacy numeric static equations in float domain, execute `gamma->brightness->contrast->saturation`, and MUST NOT apply stage-local `[0,1]` clipping in postprocess entry adaptation or static substage equations.
 - **REQ-214**: MUST normalize postprocess entry payloads only when they originate from non-float image encodings; merge-backend outputs already expressed as RGB float32 MUST be forwarded without entry normalization, clamping, or clipping.
 - **REQ-176**: MUST parse `--post-gamma=auto` as an alternative to numeric `--post-gamma=<value>` and replace only the static gamma substage, preserving downstream static `brightness->contrast->saturation` execution unchanged.
-- **REQ-177**: MUST compute auto-gamma from grayscale mean luminance `L` using `gamma=log(target_gray)/log(L)` when `luma_min < L < luma_max`, and MUST return input unchanged with resolved gamma `1.0` otherwise.
+- **REQ-177**: MUST compute auto-gamma from grayscale mean luminance `L` using `gamma=log(target_gray)/log(L)` when `luma_min < L < luma_max` and all required statistics are finite, and MUST return input unchanged with resolved gamma `1.0` otherwise.
+- **REQ-222**: MUST replace `NaN`, `+Inf`, and `-Inf` samples with `0.0` in float-ingress helpers `_to_float32_image_array` and `_ensure_three_channel_float_array_no_range_adjust` before numeric reductions.
+- **REQ-223**: MUST fail auto `--bracketing` exposure planning with explicit processing diagnostics when finite-safe inputs are unavailable after sanitization.
+- **REQ-224**: MUST build auto-gamma LUTs only from finite resolved gamma values and fallback to identity mapping with deterministic diagnostics when gamma is non-finite.
+- **REQ-225**: MUST sanitize non-finite luminance samples before CLAHE, percentile, histogram-index, logarithmic, and exponential computations across auto-levels and auto-adjust pipelines.
 - **REQ-178**: MUST apply auto-gamma by LUT-domain mapping in RGB float space using `output=input^gamma` with configurable LUT size, without stage-local clipping or quantized intermediates.
 - **REQ-179**: MUST expose auto-gamma knobs `--post-gamma-auto-target-gray`, `--post-gamma-auto-luma-min`, `--post-gamma-auto-luma-max`, and `--post-gamma-auto-lut-size` with defaults `0.5`, `0.01`, `0.99`, and `256`.
 - **REQ-180**: MUST reject `--post-gamma-auto-*` options unless `--post-gamma=auto` is selected.
@@ -293,11 +297,13 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-014**: MUST verify OpenCV radiance exposure derivation preserves bracket order, uses EXIF exposure seconds, maps the sequence to `(ev_zero-ev_delta, ev_zero, ev_zero+ev_delta)`, and remains deterministic for variable bracket spans.
 - **TST-015**: MUST verify OpenCV merge outputs for `Debevec`, `Robertson`, and `Mertens` remain normalized RGB float images bounded to `[0,1]` after float-only backend execution.
 - **TST-047**: MUST verify `_parse_run_options` rejects removed `--auto-ev`, `--auto-ev-shadow-target`, `--auto-ev-highlight-target`, and `--auto-ev-pct`, and accepts `--auto-ev-shadow-clipping`, `--auto-ev-highlight-clipping`, and `--auto-ev-step` with deterministic defaults and validation.
-- **TST-048**: MUST verify iterative bracket expansion for non-OpenCV-Tonemap backends stops at first threshold breach and returns that step as `ev_delta`.
+- **TST-048**: MUST verify iterative bracket expansion for non-OpenCV-Tonemap backends stops at first threshold breach or deterministic safety bound and always terminates.
 - **TST-049**: MUST verify runtime diagnostics print iterative clipping percentages and final `ev_delta` only for non-OpenCV-Tonemap backends when `--bracketing=auto`.
+- **TST-082**: MUST verify `_resolve_auto_ev_delta` handles `NaN`-contaminated base images without non-terminating loops.
+- **TST-083**: MUST verify `_resolve_auto_ev_delta` raises deterministic processing errors when sanitized base images do not contain finite samples.
 - **TST-016**: MUST verify auto-levels parser defaults `clip_pct=0.02`, `clip_out_of_gamut=true`, `highlight_reconstruction=false`, `highlight_reconstruction_method=Inpaint Opposed`, and `gain_threshold=1.0`.
-- **TST-017**: MUST verify auto-levels histogram calibration reproduces RawTherapee-compatible `expcomp`, `black`, `brightness`, `contrast`, `hlcompr`, and `hlcomprthresh` for deterministic synthetic histograms.
-- **TST-018**: MUST verify auto-levels tonal transformation consumes the RawTherapee-compatible metric set in normalized float space, preserves float-only internal math, and matches RawTherapee mixed-overflow channel handling.
+- **TST-017**: MUST verify auto-levels histogram calibration reproduces RawTherapee-compatible `expcomp`, `black`, `brightness`, `contrast`, `hlcompr`, and `hlcomprthresh` for deterministic synthetic histograms with finite-safe luminance indexing.
+- **TST-018**: MUST verify auto-levels tonal transformation consumes the RawTherapee-compatible metric set in normalized float space, preserves float-only internal math, and rejects or sanitizes non-finite tone-curve inputs deterministically.
 - **TST-046**: MUST verify `Clip out-of-gamut colors` executes the RawTherapee `filmlike_clip` hue-stable clipping family instead of isotropic ratio-preserving normalization.
 - **TST-045**: MUST verify `Color Propagation` and `Inpaint Opposed` selectors execute only when `--al-highlight-reconstruction` resolves to enabled and preserve deterministic RGB float outputs.
 - **TST-019**: MUST verify auto-brightness CLI parsing defaults omitted `--auto-brightness` to `disable` and exposes key-value, white-point, boost, epsilon, and desaturation controls with deterministic defaults and validation.
@@ -310,8 +316,10 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-026**: MUST verify `_apply_static_postprocess_float` preserves float I/O and does not call uint16 adaptation helpers or legacy uint16 static-stage helpers.
 - **TST-027**: MUST verify `_apply_static_postprocess_float` bypasses when all static factors are neutral and otherwise executes only non-neutral substages in strict `gamma->brightness->contrast->saturation` order.
 - **TST-028**: MUST verify auto-adjust CLI parsing accepts `enable|disable`, defaults to `enable`, and exposes CLAHE-luma enable, strength, clip-limit, and tile-grid controls with deterministic defaults and validation.
-- **TST-029**: MUST verify `_apply_validated_auto_adjust_pipeline` preserves float I/O and executes `blur -> level -> CLAHE-luma -> sigmoid -> vibrance -> high-pass`.
-- **TST-030**: MUST verify float-domain auto-adjust CLAHE-luma preserves blend semantics and remains within quantization-only deviation from the former uint16 implementation on deterministic fixtures.
+- **TST-029**: MUST verify `_apply_validated_auto_adjust_pipeline` preserves float I/O, executes `blur -> level -> CLAHE-luma -> sigmoid -> vibrance -> high-pass`, and sanitizes non-finite intermediates deterministically.
+- **TST-030**: MUST verify float-domain auto-adjust CLAHE-luma preserves blend semantics and remains within quantization-only deviation from the former uint16 implementation on deterministic finite fixtures.
+- **TST-084**: MUST verify CLAHE luminance processing receives finite-safe luminance tensors when input contains `NaN` or `Inf`.
+- **TST-085**: MUST verify HSL vibrance and sigmoidal contrast processing returns finite outputs for inputs containing non-finite channel samples.
 - **TST-031**: MUST verify `_resolve_default_postprocess` returns the exact per-variant tuples required by REQ-145 for `HDR-Plus`, `Luminace-HDR` (`mantiuk08`,`reinhard02`), `OpenCV-Merge` (`Debevec`,`Mertens`,`Robertson`), and `OpenCV-Tonemap` (`drago`,`mantiuk`,`reinhard`).
 - **TST-041**: MUST verify `print_help` renders conversion help in pipeline execution order, colocates per-stage configuration options with the described stage, and keeps canonical `dng2jpg` usage formatting.
 - **TST-042**: MUST verify `print_help` documents every accepted conversion CLI option with allowed values or activation conditions and prints effective defaults for omitted options.
@@ -333,8 +341,12 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-055**: MUST verify `_parse_run_options` accepts `--post-gamma=auto`, applies auto-gamma defaults, and parses `--post-gamma-auto-*` overrides.
 - **TST-056**: MUST verify `_parse_run_options` rejects `--post-gamma-auto-*` options when `--post-gamma=auto` is not selected.
 - **TST-057**: MUST verify `_apply_static_postprocess_float` executes `auto-gamma->brightness->contrast->saturation` when `--post-gamma=auto`, preserving numeric static behavior for `brightness->contrast->saturation`.
-- **TST-058**: MUST verify auto-gamma luminance anchoring computes `gamma=log(target_gray)/log(mean_luminance)` and returns unchanged image when mean luminance is outside configured guard bounds.
-- **TST-059**: MUST verify auto-gamma LUT-domain mapping runs in float space without quantized intermediates and without stage-local clipping.
+- **TST-058**: MUST verify auto-gamma luminance anchoring computes `gamma=log(target_gray)/log(mean_luminance)` only for finite luminance statistics and returns unchanged image when statistics are outside guard bounds.
+- **TST-059**: MUST verify auto-gamma LUT-domain mapping runs in float space without quantized intermediates, without stage-local clipping, and with identity fallback when resolved gamma is non-finite.
+- **TST-086**: MUST verify auto-brightness returns finite outputs for luminance inputs containing `NaN` and `Inf`.
+- **TST-087**: MUST verify `_to_float32_image_array` replaces non-finite grayscale, RGB, and alpha-channel samples with `0.0` while preserving shape semantics.
+- **TST-088**: MUST verify `_ensure_three_channel_float_array_no_range_adjust` replaces non-finite samples with `0.0` for grayscale, RGB, and RGBA inputs while preserving channel adaptation behavior.
+- **TST-089**: MUST verify `_build_autoexp_histogram_rgb_float` rejects or sanitizes non-finite luminance samples before histogram-index casting.
 - **TST-040**: MUST verify float-only OpenCV Mertens output applies OpenCV-equivalent `255x` exposure-fusion scaling before final `[0,1]` normalization.
 - **TST-060**: MUST verify `_parse_run_options` defaults auto-white-balance to disabled, defaults xphoto domain to `source-auto`, defaults RAW white-balance normalization mode to `MEAN`, and accepts all supported auto-white-balance selectors.
 - **TST-061**: MUST verify `_parse_run_options` rejects missing or unsupported `--auto-white-balance` and `--white-balance-xphoto-domain` values with deterministic diagnostics.
