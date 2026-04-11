@@ -11,9 +11,10 @@
   inputs, rejects all-non-finite base tensors, treats non-finite clipping
   metrics as clipped pixels, and enforces deterministic iteration/span guards to
   prevent non-terminating loops.
-- Auto-brightness and auto-gamma statistics now consume finite-only luminance
-  samples and fallback deterministically to identity gamma when resolved gamma
-  becomes non-finite.
+- Auto-brightness now routes low-variance/low-sample luminance through a
+  fallback simple Reinhard safeguard while preserving finite-only luminance
+  statistics; auto-gamma still falls back deterministically to identity gamma
+  when resolved gamma becomes non-finite.
 - Auto-levels and validated auto-adjust stages now sanitize non-finite
   luminance/RGB intermediates before histogram indexing, percentiles, HSL,
   sigmoidal mapping, CLAHE, and final stage outputs.
@@ -186,6 +187,14 @@
         - _normalize_white_balance_gains_rgb(...): gain normalization [src/dng2jpg/dng2jpg.py]
         - _apply_normalized_white_balance_to_rgb_float(...): gain application [src/dng2jpg/dng2jpg.py]
       - _apply_auto_brightness_rgb_float(...): optional auto-brightness stage [src/dng2jpg/dng2jpg.py]
+        - _compute_bt709_luminance(...): BT.709 linear luminance derivation [src/dng2jpg/dng2jpg.py]
+        - _analyze_luminance_key(...): key-distribution statistics and scene-class classification [src/dng2jpg/dng2jpg.py]
+        - _choose_auto_key_value(...): automatic key-value resolution with conservative boost/attenuation [src/dng2jpg/dng2jpg.py]
+        - _reinhard_global_tonemap_luminance(...): safeguarded Reinhard luminance operator dispatch [src/dng2jpg/dng2jpg.py]
+          - _sanitize_finite_float_array(...): finite-safe luminance tensor sanitization [src/dng2jpg/dng2jpg.py]
+          - _extract_finite_luminance_samples(...): finite luminance sampling for robust statistics [src/dng2jpg/dng2jpg.py]
+          - _should_use_low_variance_auto_brightness_fallback(...): low-variance/low-sample fallback gate [src/dng2jpg/dng2jpg.py]
+        - _luminance_preserving_desaturate_to_fit(...): overflow-only luminance-preserving desaturation [src/dng2jpg/dng2jpg.py]
       - _apply_auto_white_balance_stage_float(...): optional auto white-balance stage [src/dng2jpg/dng2jpg.py]
         - _estimate_xphoto_white_balance_gains_rgb(...): xphoto mode dispatch with per-algorithm uint16 capability probe [src/dng2jpg/dng2jpg.py]
           - _probe_xphoto_uint16_payload_support(...): runtime uint16 payload probe for selected xphoto algorithm [src/dng2jpg/dng2jpg.py]

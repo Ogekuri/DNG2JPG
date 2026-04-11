@@ -77,6 +77,8 @@ DEFAULT_AB_EPS = 1e-6
 DEFAULT_AB_LOW_KEY_VALUE = 0.09
 DEFAULT_AB_NORMAL_KEY_VALUE = 0.18
 DEFAULT_AB_HIGH_KEY_VALUE = 0.36
+DEFAULT_AB_LOW_VARIANCE_SPREAD_THRESHOLD = 0.02
+DEFAULT_AB_LOW_VARIANCE_MIN_SAMPLE_COUNT = 4
 DEFAULT_AL_CLIP_PERCENT = 0.02
 DEFAULT_AL_CLIP_OUT_OF_GAMUT = True
 DEFAULT_AL_GAIN_THRESHOLD = 1.0
@@ -9476,6 +9478,64 @@ def _analyze_luminance_key(np_module, luminance, eps):
     }
 
 
+def _should_use_low_variance_auto_brightness_fallback(
+    np_module,
+    finite_luminance_samples,
+    spread_threshold=DEFAULT_AB_LOW_VARIANCE_SPREAD_THRESHOLD,
+    min_sample_count=DEFAULT_AB_LOW_VARIANCE_MIN_SAMPLE_COUNT,
+):
+    """@brief Evaluate low-variance safeguard for auto-brightness tone mapping.
+
+    @details Computes one robust luminance spread proxy (`p99-p01`) on finite
+    normalized luminance samples and enables fallback simple Reinhard operator
+    when the sample count is below the configured minimum or the spread is
+    below the configured threshold.
+    @param np_module {ModuleType} Imported numpy module.
+    @param finite_luminance_samples {object} Flat or tensor-like luminance payload used for guard evaluation.
+    @param spread_threshold {float} Non-negative spread threshold for low-variance fallback routing.
+    @param min_sample_count {int} Minimum finite-sample count that permits modified-Reinhard execution.
+    @return {tuple[bool, dict[str, float|int]]} Fallback activation flag and guard statistics.
+    @exception ValueError Raised when thresholds are invalid, when samples are missing, or when guard statistics are non-finite.
+    @satisfies REQ-050, REQ-104, REQ-226
+    """
+
+    spread_threshold_value = float(spread_threshold)
+    if not math.isfinite(spread_threshold_value) or spread_threshold_value < 0.0:
+        raise ValueError(
+            "Auto-brightness low-variance spread threshold must be finite and non-negative"
+        )
+    min_sample_count_value = int(min_sample_count)
+    if min_sample_count_value < 1:
+        raise ValueError(
+            "Auto-brightness low-variance minimum sample count must be positive"
+        )
+    luminance_values = np_module.asarray(finite_luminance_samples, dtype=np_module.float64)
+    finite_luminance = np_module.asarray(
+        luminance_values[np_module.isfinite(luminance_values)],
+        dtype=np_module.float64,
+    )
+    if finite_luminance.size == 0:
+        raise ValueError(
+            "Auto-brightness low-variance safeguard requires finite luminance samples"
+        )
+    luminance_clamped = np_module.clip(finite_luminance, 0.0, 1.0)
+    p01 = float(np_module.percentile(luminance_clamped, 1.0))
+    p99 = float(np_module.percentile(luminance_clamped, 99.0))
+    spread = float(max(0.0, p99 - p01))
+    if not all(math.isfinite(value) for value in (p01, p99, spread)):
+        raise ValueError(
+            "Auto-brightness low-variance safeguard produced non-finite statistics"
+        )
+    sample_count = int(luminance_clamped.size)
+    use_fallback = sample_count < min_sample_count_value or spread < spread_threshold_value
+    return use_fallback, {
+        "sample_count": sample_count,
+        "spread_p01_p99": spread,
+        "spread_threshold": spread_threshold_value,
+        "min_sample_count": float(min_sample_count_value),
+    }
+
+
 def _choose_auto_key_value(key_analysis, auto_brightness_options):
     """@brief Select Reinhard key value from key-analysis metrics.
 
@@ -9529,18 +9589,20 @@ def _reinhard_global_tonemap_luminance(
     white_point_percentile,
     eps,
 ):
-    """@brief Apply Reinhard global tonemap on luminance with robust `Lwhite`.
+    """@brief Apply safeguarded Reinhard global tonemap on luminance payload.
 
     @details Executes photographic operator: `Lw_bar=exp(mean(log(eps+Y)))`,
-    `L=(a/Lw_bar)*Y`, robust `Lwhite` from percentile of `L`, then burn-out
-    compression `Ld=(L*(1+L/(Lwhite^2)))/(1+L)`.
+    `L=(a/Lw_bar)*Y`, then selects tonemap branch by low-variance safeguard.
+    Non-degenerate luminance uses modified Reinhard with robust percentile
+    `Lwhite`; low-variance or low-sample luminance uses fallback simple
+    Reinhard `Ld=L/(1+L)`.
     @param np_module {ModuleType} Imported numpy module.
     @param luminance {object} BT.709 luminance float tensor.
     @param key_value {float} Reinhard key value `a`.
     @param white_point_percentile {float} Percentile in `(0,100)` for robust white point.
     @param eps {float} Positive numerical stability guard.
     @return {tuple[object, dict[str, float]]} Tonemapped luminance tensor and debug statistics dictionary.
-    @satisfies REQ-050, REQ-104
+    @satisfies REQ-050, REQ-104, REQ-226
     """
 
     eps_value = float(eps)
@@ -9570,20 +9632,30 @@ def _reinhard_global_tonemap_luminance(
     lw_bar = float(np_module.exp(np_module.mean(np_module.log(eps_value + finite_luminance))))
     if not math.isfinite(lw_bar):
         raise ValueError("Auto-brightness computed a non-finite log-average luminance")
+    use_low_variance_fallback, low_variance_metrics = (
+        _should_use_low_variance_auto_brightness_fallback(
+            np_module=np_module,
+            finite_luminance_samples=finite_luminance,
+        )
+    )
     scaled_luminance = (float(key_value) / (lw_bar + eps_value)) * luminance_clamped
-    scaled_finite = _extract_finite_luminance_samples(
-        np_module=np_module,
-        luminance=scaled_luminance,
-    )
-    if scaled_finite.size == 0:
-        raise ValueError("Auto-brightness produced no finite scaled luminance samples")
-    lwhite = float(np_module.percentile(scaled_finite, percentile_value))
-    if not math.isfinite(lwhite):
-        raise ValueError("Auto-brightness computed a non-finite white point")
-    lwhite = max(lwhite, eps_value)
-    ld = (scaled_luminance * (1.0 + (scaled_luminance / (lwhite * lwhite)))) / (
-        1.0 + scaled_luminance
-    )
+    if use_low_variance_fallback:
+        lwhite = 0.0
+        ld = scaled_luminance / (1.0 + scaled_luminance)
+    else:
+        scaled_finite = _extract_finite_luminance_samples(
+            np_module=np_module,
+            luminance=scaled_luminance,
+        )
+        if scaled_finite.size == 0:
+            raise ValueError("Auto-brightness produced no finite scaled luminance samples")
+        lwhite = float(np_module.percentile(scaled_finite, percentile_value))
+        if not math.isfinite(lwhite):
+            raise ValueError("Auto-brightness computed a non-finite white point")
+        lwhite = max(lwhite, eps_value)
+        ld = (scaled_luminance * (1.0 + (scaled_luminance / (lwhite * lwhite)))) / (
+            1.0 + scaled_luminance
+        )
     ld = _sanitize_finite_float_array(
         np_module=np_module,
         image_data=ld,
@@ -9595,6 +9667,11 @@ def _reinhard_global_tonemap_luminance(
         "Lwhite": lwhite,
         "Ld_min": float(np_module.min(ld)),
         "Ld_max": float(np_module.max(ld)),
+        "low_variance_fallback": 1.0 if use_low_variance_fallback else 0.0,
+        "luminance_spread_p01_p99": float(low_variance_metrics["spread_p01_p99"]),
+        "fallback_spread_threshold": float(low_variance_metrics["spread_threshold"]),
+        "finite_luminance_samples": float(low_variance_metrics["sample_count"]),
+        "fallback_min_sample_count": float(low_variance_metrics["min_sample_count"]),
     }
     if not all(math.isfinite(float(debug[key])) for key in debug):
         raise ValueError("Auto-brightness produced non-finite tonemap statistics")
@@ -12335,15 +12412,16 @@ def _apply_auto_brightness_rgb_float(
     @details Executes `/tmp/auto-brightness.py` step order directly on linear
     gamma `1.0` RGB float input: derive BT.709 luminance, classify key using
     normalized distribution thresholds, choose or override key value `a`,
-    apply Reinhard global tonemap with robust percentile white-point, preserve
-    chromaticity by luminance scaling, optionally desaturate only overflowing
-    RGB pixels, and preserve linear gamma `1.0` output without any CLAHE
-    substep or stage-local `[0,1]` output clipping.
+    apply safeguarded Reinhard tonemap (modified Reinhard on non-degenerate
+    luminance, simple Reinhard fallback on low-variance/low-sample luminance),
+    preserve chromaticity by luminance scaling, optionally desaturate only
+    overflowing RGB pixels, and preserve linear gamma `1.0` output without any
+    CLAHE substep or stage-local `[0,1]` output clipping.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} RGB float tensor.
     @param auto_brightness_options {AutoBrightnessOptions} Parsed auto-brightness parameters.
     @return {object} RGB float tensor after BT.709 auto-brightness without stage-local clipping.
-    @satisfies REQ-050, REQ-103, REQ-104, REQ-105, REQ-121, REQ-122
+    @satisfies REQ-050, REQ-103, REQ-104, REQ-105, REQ-121, REQ-122, REQ-226
     """
 
     image_linear = _ensure_three_channel_float_array_no_range_adjust(

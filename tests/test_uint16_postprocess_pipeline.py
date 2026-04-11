@@ -1587,6 +1587,133 @@ def test_apply_auto_brightness_rgb_float_executes_original_stage_order(
     ]
 
 
+def test_should_use_low_variance_auto_brightness_fallback_uses_sample_count_and_spread() -> None:
+    """Low-variance safeguard must route sparse or flat luminance to fallback path."""
+
+    use_sparse_fallback, sparse_metrics = (
+        dng2jpg_module._should_use_low_variance_auto_brightness_fallback(  # pylint: disable=protected-access
+            np_module=np,
+            finite_luminance_samples=np.array([0.4], dtype=np.float64),
+        )
+    )
+    assert use_sparse_fallback is True
+    assert sparse_metrics["sample_count"] == 1
+
+    use_uniform_fallback, _ = (
+        dng2jpg_module._should_use_low_variance_auto_brightness_fallback(  # pylint: disable=protected-access
+            np_module=np,
+            finite_luminance_samples=np.full((64,), 0.4, dtype=np.float64),
+        )
+    )
+    assert use_uniform_fallback is True
+
+    use_near_uniform_fallback, _ = (
+        dng2jpg_module._should_use_low_variance_auto_brightness_fallback(  # pylint: disable=protected-access
+            np_module=np,
+            finite_luminance_samples=np.linspace(0.497, 0.503, 64, dtype=np.float64),
+        )
+    )
+    assert use_near_uniform_fallback is True
+
+    use_dynamic_fallback, dynamic_metrics = (
+        dng2jpg_module._should_use_low_variance_auto_brightness_fallback(  # pylint: disable=protected-access
+            np_module=np,
+            finite_luminance_samples=np.linspace(0.05, 0.95, 64, dtype=np.float64),
+        )
+    )
+    assert use_dynamic_fallback is False
+    assert (
+        dynamic_metrics["spread_p01_p99"]
+        > dng2jpg_module.DEFAULT_AB_LOW_VARIANCE_SPREAD_THRESHOLD
+    )
+
+
+def test_apply_auto_brightness_low_variance_fallback_uniform_and_near_uniform_inputs() -> None:
+    """Auto-brightness fallback must avoid whitening while preserving float-domain behavior."""
+
+    auto_brightness_options = dng2jpg_module.AutoBrightnessOptions(
+        enable_luminance_preserving_desat=True,
+    )
+    uniform_1x1 = np.full((1, 1, 3), 0.20, dtype=np.float32)
+    uniform_8x8 = np.full((8, 8, 3), 0.35, dtype=np.float32)
+    near_uniform_noise = np.repeat(
+        np.clip(
+            0.50 + np.linspace(-0.003, 0.003, 64, dtype=np.float64).reshape(8, 8, 1),
+            0.0,
+            1.0,
+        ),
+        3,
+        axis=2,
+    ).astype(np.float32)
+    dynamic_non_uniform = np.array(
+        [
+            [[0.05, 0.10, 0.15], [0.35, 0.40, 0.45]],
+            [[0.65, 0.70, 0.75], [0.90, 0.95, 0.85]],
+        ],
+        dtype=np.float32,
+    )
+
+    output_1x1 = dng2jpg_module._apply_auto_brightness_rgb_float(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_float=uniform_1x1,
+        auto_brightness_options=auto_brightness_options,
+    )
+    output_8x8 = dng2jpg_module._apply_auto_brightness_rgb_float(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_float=uniform_8x8,
+        auto_brightness_options=auto_brightness_options,
+    )
+    output_near_uniform = dng2jpg_module._apply_auto_brightness_rgb_float(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_float=near_uniform_noise,
+        auto_brightness_options=auto_brightness_options,
+    )
+    output_dynamic = dng2jpg_module._apply_auto_brightness_rgb_float(  # pylint: disable=protected-access
+        np_module=np,
+        image_rgb_float=dynamic_non_uniform,
+        auto_brightness_options=auto_brightness_options,
+    )
+
+    for output in (output_1x1, output_8x8, output_near_uniform, output_dynamic):
+        assert output.dtype == np.float32
+        assert float(np.min(output)) >= 0.0
+        assert float(np.max(output)) <= 1.0
+
+    assert float(np.max(output_1x1)) < 0.95
+    assert float(np.max(output_8x8)) < 0.95
+
+    monotonic_means = []
+    for level in (0.10, 0.50, 0.90):
+        output_level = dng2jpg_module._apply_auto_brightness_rgb_float(  # pylint: disable=protected-access
+            np_module=np,
+            image_rgb_float=np.full((1, 1, 3), level, dtype=np.float32),
+            auto_brightness_options=auto_brightness_options,
+        )
+        monotonic_means.append(float(np.mean(output_level)))
+    assert monotonic_means[0] < monotonic_means[1] < monotonic_means[2]
+
+    near_uniform_quantized_8bit = np.round(output_near_uniform * 255.0) / 255.0
+    assert bool(np.any(np.abs(output_near_uniform - near_uniform_quantized_8bit) > 1e-6))
+    assert np.unique(np.round(output_near_uniform[..., 0], decimals=6)).size > 8
+
+    dynamic_luminance = dng2jpg_module._compute_bt709_luminance(  # pylint: disable=protected-access
+        np_module=np,
+        linear_rgb=dynamic_non_uniform.astype(np.float64),
+    )
+    dynamic_finite_samples = dng2jpg_module._extract_finite_luminance_samples(  # pylint: disable=protected-access
+        np_module=np,
+        luminance=dynamic_luminance,
+    )
+    use_dynamic_fallback, _ = (
+        dng2jpg_module._should_use_low_variance_auto_brightness_fallback(  # pylint: disable=protected-access
+            np_module=np,
+            finite_luminance_samples=dynamic_finite_samples,
+        )
+    )
+    assert use_dynamic_fallback is False
+    assert float(np.std(output_dynamic[..., 0])) > 0.05
+
+
 def test_apply_validated_auto_adjust_pipeline_executes_clahe_stage_order(
     monkeypatch,
 ) -> None:
