@@ -1371,6 +1371,10 @@ def test_parse_run_options_accepts_white_balance_modes_and_selector_defaults() -
         parsed_default[4].white_balance_xphoto_domain
         == dng2jpg_module.DEFAULT_WHITE_BALANCE_XPHOTO_DOMAIN
     )
+    assert (
+        parsed_default[4].white_balance_xphoto_domain
+        == dng2jpg_module.WHITE_BALANCE_XPHOTO_DOMAIN_LINEAR
+    )
 
     for raw_white_balance_mode in ("GREEN", "MAX", "MIN", "MEAN"):
         parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
@@ -3734,6 +3738,109 @@ def test_extract_white_balance_channel_gains_from_xphoto_supports_uint16_payload
     )
 
 
+def test_estimate_xphoto_white_balance_gains_grayworld_uses_uint16_when_probe_succeeds(
+    monkeypatch,
+) -> None:
+    """Grayworld mode must prefer uint16 payload when runtime probe confirms support."""
+
+    fake_cv2 = _FakeOpenCvModule()
+
+    class _GrayworldUint16Algorithm(_FakeXphotoWhiteBalanceAlgorithm):
+        def balanceWhite(self, image_bgr_u8: np.ndarray) -> np.ndarray:
+            return np.array(image_bgr_u8, copy=True)
+
+    fake_cv2.xphoto.grayworld_wb = _GrayworldUint16Algorithm("grayworld")
+    captured_prefer_uint16: list[bool] = []
+
+    def _capture_extract(**kwargs):
+        captured_prefer_uint16.append(bool(kwargs["prefer_uint16_payload"]))
+        return np.array([1.0, 1.0, 1.0], dtype=np.float64)
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_extract_white_balance_channel_gains_from_xphoto",
+        _capture_extract,
+    )
+
+    gains = dng2jpg_module._estimate_xphoto_white_balance_gains_rgb(  # pylint: disable=protected-access
+        cv2_module=fake_cv2,
+        np_module=np,
+        white_balance_mode="GrayworldWB",
+        analysis_image_rgb_float=np.full((4, 4, 3), 0.25, dtype=np.float32),
+        bits_per_color=14,
+        white_balance_xphoto_domain=dng2jpg_module.WHITE_BALANCE_XPHOTO_DOMAIN_LINEAR,
+        source_gamma_info=None,
+    )
+
+    assert captured_prefer_uint16 == [True]
+    np.testing.assert_allclose(
+        gains,
+        np.array([1.0, 1.0, 1.0], dtype=np.float64),
+        rtol=0.0,
+        atol=0.0,
+    )
+
+
+def test_estimate_xphoto_white_balance_gains_simple_falls_back_to_uint8_without_probe_support(
+    monkeypatch,
+) -> None:
+    """Simple mode must remain on uint8 when uint16 probe does not confirm support."""
+
+    fake_cv2 = _FakeOpenCvModule()
+    captured_prefer_uint16: list[bool] = []
+
+    def _capture_extract(**kwargs):
+        captured_prefer_uint16.append(bool(kwargs["prefer_uint16_payload"]))
+        return np.array([1.0, 1.0, 1.0], dtype=np.float64)
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_extract_white_balance_channel_gains_from_xphoto",
+        _capture_extract,
+    )
+
+    gains = dng2jpg_module._estimate_xphoto_white_balance_gains_rgb(  # pylint: disable=protected-access
+        cv2_module=fake_cv2,
+        np_module=np,
+        white_balance_mode="Simple",
+        analysis_image_rgb_float=np.full((4, 4, 3), 0.25, dtype=np.float32),
+        bits_per_color=14,
+        white_balance_xphoto_domain=dng2jpg_module.WHITE_BALANCE_XPHOTO_DOMAIN_LINEAR,
+        source_gamma_info=None,
+    )
+
+    assert captured_prefer_uint16 == [False]
+    np.testing.assert_allclose(
+        gains,
+        np.array([1.0, 1.0, 1.0], dtype=np.float64),
+        rtol=0.0,
+        atol=0.0,
+    )
+
+
+def test_compress_xphoto_estimation_payload_highlights_soft_knee_reduces_hard_clip() -> None:
+    """Soft-knee compression must reduce hard-clip saturation on xphoto payload."""
+
+    payload = np.array(
+        [[[0.10, 0.20, 0.40], [0.95, 1.00, 1.10], [1.40, 2.00, 4.00]]],
+        dtype=np.float32,
+    )
+    hard_clipped = np.clip(payload, 0.0, 1.0)
+    soft_knee = dng2jpg_module._compress_xphoto_estimation_payload_highlights_soft_knee(  # pylint: disable=protected-access
+        np_module=np,
+        rescaled_payload_rgb_float=payload,
+    )
+
+    hard_clip_saturation = int(np.sum(hard_clipped >= 1.0))
+    soft_knee_saturation = int(np.sum(soft_knee >= 1.0))
+    assert hard_clip_saturation > 0
+    assert soft_knee_saturation < hard_clip_saturation
+    sorted_input = np.sort(payload.reshape(-1))
+    sorted_output = np.sort(soft_knee.reshape(-1))
+    assert np.all(np.diff(sorted_output) >= -1e-9)
+    assert sorted_output.shape == sorted_input.shape
+
+
 def test_estimate_xphoto_white_balance_gains_source_auto_resolves_srgb_domain(
     monkeypatch,
 ) -> None:
@@ -3881,6 +3988,85 @@ def test_apply_white_balance_to_bracket_triplet_ttl_mode_uses_robust_masked_stat
         atol=1e-6,
     )
     assert float(np.max(output_triplet[2])) > 1.0
+
+
+def test_apply_auto_white_balance_stage_float_ttl_path_avoids_quantized_helpers(
+    monkeypatch,
+) -> None:
+    """TTL stage must keep estimation fully in float domain without uint quantization helpers."""
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_to_uint8_image_array",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("TTL path called _to_uint8_image_array unexpectedly")
+        ),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_to_uint16_image_array",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("TTL path called _to_uint16_image_array unexpectedly")
+        ),
+    )
+    stage_input = np.array(
+        [[[0.2, 0.4, 0.6], [0.3, 0.5, 0.7]], [[0.4, 0.2, 0.1], [0.8, 0.6, 0.4]]],
+        dtype=np.float32,
+    )
+    output_image = dng2jpg_module._apply_auto_white_balance_stage_float(  # pylint: disable=protected-access
+        image_rgb_float=stage_input,
+        white_balance_mode="TTL",
+        auto_brightness_options=dng2jpg_module.AutoBrightnessOptions(),
+        auto_adjust_dependencies=(None, np),
+        estimation_input_is_auto_brightness_preprocessed=True,
+    )
+    assert output_image.dtype == np.float32
+    assert output_image.shape == stage_input.shape
+
+
+def test_apply_auto_white_balance_stage_float_color_constancy_path_avoids_quantized_helpers(
+    monkeypatch,
+) -> None:
+    """ColorConstancy stage must keep estimation fully in float domain without uint quantization helpers."""
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_to_uint8_image_array",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("ColorConstancy path called _to_uint8_image_array unexpectedly")
+        ),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_to_uint16_image_array",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("ColorConstancy path called _to_uint16_image_array unexpectedly")
+        ),
+    )
+
+    class _FakeSkimageColorModule:
+        @staticmethod
+        def rgb2gray(image_rgb: np.ndarray) -> np.ndarray:
+            return np.mean(image_rgb, axis=2)
+
+    class _FakeSkimagePackage:
+        color = _FakeSkimageColorModule()
+
+    monkeypatch.setitem(sys.modules, "skimage", _FakeSkimagePackage())
+    stage_input = np.array(
+        [[[0.2, 0.4, 0.6], [0.3, 0.5, 0.7]], [[0.4, 0.2, 0.1], [0.8, 0.6, 0.4]]],
+        dtype=np.float32,
+    )
+    output_image = dng2jpg_module._apply_auto_white_balance_stage_float(  # pylint: disable=protected-access
+        image_rgb_float=stage_input,
+        white_balance_mode="ColorConstancy",
+        auto_brightness_options=dng2jpg_module.AutoBrightnessOptions(),
+        auto_adjust_dependencies=(None, np),
+        estimation_input_is_auto_brightness_preprocessed=True,
+    )
+    assert output_image.dtype == np.float32
+    assert output_image.shape == stage_input.shape
+    sys.modules.pop("skimage", None)
 
 
 def test_apply_white_balance_to_bracket_triplet_linear_base_analysis_avoids_ev_zero_clipping_bias() -> None:

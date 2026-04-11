@@ -131,9 +131,12 @@ RAW_WHITE_BALANCE_MODE_MAX = "MAX"
 RAW_WHITE_BALANCE_MODE_MIN = "MIN"
 RAW_WHITE_BALANCE_MODE_MEAN = "MEAN"
 DEFAULT_RAW_WHITE_BALANCE_MODE = RAW_WHITE_BALANCE_MODE_MEAN
-DEFAULT_WHITE_BALANCE_XPHOTO_DOMAIN = WHITE_BALANCE_XPHOTO_DOMAIN_SOURCE_AUTO
+DEFAULT_WHITE_BALANCE_XPHOTO_DOMAIN = WHITE_BALANCE_XPHOTO_DOMAIN_LINEAR
 WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO = "ev-zero"
 WHITE_BALANCE_ANALYSIS_SOURCE_LINEAR_BASE = "linear-base"
+XPHOTO_ESTIMATION_PAYLOAD_SCALE_PERCENTILE = 99.5
+XPHOTO_ESTIMATION_PAYLOAD_SOFT_KNEE_START = 0.95
+XPHOTO_ESTIMATION_PAYLOAD_SOFT_KNEE_STRENGTH = 0.2
 OPENCV_TONEMAP_MAP_DRAGO = "drago"
 OPENCV_TONEMAP_MAP_REINHARD = "reinhard"
 OPENCV_TONEMAP_MAP_MANTIUK = "mantiuk"
@@ -6233,6 +6236,151 @@ def _build_white_balance_robust_analysis_mask(np_module, analysis_rgb_float):
     return robust_mask
 
 
+def _resolve_xphoto_estimation_payload_scale(
+    np_module,
+    analysis_payload_rgb_float,
+):
+    """@brief Resolve robust xphoto estimation rescale factor from payload percentiles.
+
+    @details Uses finite non-negative payload samples to compute one robust
+    percentile scale for xphoto estimation adaptation. Falls back to `1.0`
+    when percentile resolution is non-finite or degenerate.
+    @param np_module {ModuleType} Imported numpy module.
+    @param analysis_payload_rgb_float {object} Non-negative xphoto estimation payload.
+    @return {float} Positive robust rescale factor.
+    @satisfies REQ-201
+    """
+
+    payload_rgb = np_module.asarray(
+        analysis_payload_rgb_float,
+        dtype=np_module.float64,
+    )
+    finite_values = payload_rgb[np_module.isfinite(payload_rgb)]
+    if finite_values.size == 0:
+        return 1.0
+    robust_scale = float(
+        np_module.percentile(
+            finite_values,
+            XPHOTO_ESTIMATION_PAYLOAD_SCALE_PERCENTILE,
+        )
+    )
+    if not math.isfinite(robust_scale) or robust_scale <= 1e-12:
+        return 1.0
+    return robust_scale
+
+
+def _rescale_xphoto_estimation_payload_rgb_float(
+    np_module,
+    analysis_payload_rgb_float,
+):
+    """@brief Apply robust percentile rescaling to xphoto estimation payload.
+
+    @details Sanitizes payload samples to finite non-negative float values and
+    divides by one robust percentile-derived scale to normalize dynamic range
+    without mutating stage-working tensors.
+    @param np_module {ModuleType} Imported numpy module.
+    @param analysis_payload_rgb_float {object} xphoto estimation payload.
+    @return {object} Robust-rescaled RGB float32 payload.
+    @satisfies REQ-201
+    """
+
+    payload_rgb = np_module.asarray(
+        analysis_payload_rgb_float,
+        dtype=np_module.float64,
+    )
+    finite_mask = np_module.isfinite(payload_rgb)
+    payload_rgb = np_module.where(finite_mask, payload_rgb, 0.0)
+    payload_rgb = np_module.maximum(payload_rgb, 0.0)
+    payload_scale = _resolve_xphoto_estimation_payload_scale(
+        np_module=np_module,
+        analysis_payload_rgb_float=payload_rgb,
+    )
+    return (payload_rgb / payload_scale).astype(np_module.float32, copy=False)
+
+
+def _compress_xphoto_estimation_payload_highlights_soft_knee(
+    np_module,
+    rescaled_payload_rgb_float,
+):
+    """@brief Compress xphoto estimation payload highlights using monotonic soft-knee.
+
+    @details Applies one monotonic piecewise mapping on robust-rescaled payload
+    values: linear passthrough up to knee start, then exponential shoulder
+    compression toward `1.0` for highlight headroom preservation. The mapping is
+    estimation-local and does not alter stage-working tensors.
+    @param np_module {ModuleType} Imported numpy module.
+    @param rescaled_payload_rgb_float {object} Robust-rescaled xphoto payload.
+    @return {object} Soft-knee-compressed RGB float32 payload bounded below by `0.0`.
+    @satisfies REQ-201
+    """
+
+    payload_rgb = np_module.asarray(
+        rescaled_payload_rgb_float,
+        dtype=np_module.float64,
+    )
+    finite_mask = np_module.isfinite(payload_rgb)
+    payload_rgb = np_module.where(finite_mask, payload_rgb, 0.0)
+    payload_rgb = np_module.maximum(payload_rgb, 0.0)
+    knee_start = min(
+        max(float(XPHOTO_ESTIMATION_PAYLOAD_SOFT_KNEE_START), 0.0),
+        0.999999,
+    )
+    knee_strength = max(float(XPHOTO_ESTIMATION_PAYLOAD_SOFT_KNEE_STRENGTH), 1e-6)
+    above_knee = payload_rgb > knee_start
+    overshoot = (payload_rgb - knee_start) / knee_strength
+    shoulder = 1.0 - np_module.exp(-overshoot)
+    compressed_highlights = knee_start + ((1.0 - knee_start) * shoulder)
+    compressed_payload = np_module.where(
+        above_knee,
+        compressed_highlights,
+        payload_rgb,
+    )
+    return np_module.maximum(compressed_payload, 0.0).astype(
+        np_module.float32,
+        copy=False,
+    )
+
+
+def _quantize_xphoto_estimation_payload_rgb(
+    np_module,
+    compressed_payload_rgb_float,
+    bits_per_color,
+    prefer_uint16_payload,
+):
+    """@brief Quantize xphoto estimation payload using selected integer precision.
+
+    @details Converts soft-knee-compressed xphoto estimation payload into one
+    backend-local integer image: `uint16` with bit-depth-coherent `range_max`
+    when requested, else `uint8` fallback. Quantization stays strictly within
+    xphoto estimation boundaries.
+    @param np_module {ModuleType} Imported numpy module.
+    @param compressed_payload_rgb_float {object} Soft-knee-compressed xphoto payload.
+    @param bits_per_color {int} Source bit depth used for coherent uint16 `range_max`.
+    @param prefer_uint16_payload {bool} `True` requests `uint16` quantization path.
+    @return {object} Quantized RGB payload as `uint8` or `uint16`.
+    @satisfies REQ-201, REQ-211
+    """
+
+    effective_bits_per_color = max(8, min(16, int(bits_per_color)))
+    if prefer_uint16_payload:
+        range_max = float((1 << effective_bits_per_color) - 1)
+        return np_module.clip(
+            np_module.round(
+                np_module.array(
+                    compressed_payload_rgb_float,
+                    dtype=np_module.float64,
+                )
+                * range_max
+            ),
+            0.0,
+            range_max,
+        ).astype(np_module.uint16, copy=False)
+    return _to_uint8_image_array(
+        np_module=np_module,
+        image_data=compressed_payload_rgb_float,
+    )
+
+
 def _extract_white_balance_channel_gains_from_xphoto(
     cv2_module,
     np_module,
@@ -6244,10 +6392,10 @@ def _extract_white_balance_channel_gains_from_xphoto(
     """@brief Derive per-channel white-balance gains from one OpenCV xphoto algorithm.
 
     @details Builds one real-image analysis payload with deterministic pyramid
-    downsampling, performs one backend-local normalization to `[0,1]` for xphoto
-    quantization only, executes xphoto `balanceWhite(...)`, and derives one gain
-    vector from channel means `balanced/original`. Gains are finite positive
-    float64 values.
+    downsampling, applies robust percentile rescaling, applies monotonic
+    highlight soft-knee compression, executes one backend-local quantization for
+    xphoto `balanceWhite(...)`, and derives one gain vector from channel means
+    `balanced/original`. Gains are finite positive float64 values.
     @param cv2_module {ModuleType} Imported OpenCV module.
     @param np_module {ModuleType} Imported numpy module.
     @param wb_algorithm {object} OpenCV xphoto white-balance instance.
@@ -6264,29 +6412,20 @@ def _extract_white_balance_channel_gains_from_xphoto(
         analysis_image_rgb_float=analysis_image_rgb_float,
         cv2_module=cv2_module,
     )
-    payload_scale = float(np_module.percentile(analysis_payload_rgb, 99.5))
-    if not math.isfinite(payload_scale) or payload_scale <= 1e-12:
-        payload_scale = 1.0
-    scaled_payload_rgb = np_module.clip(
-        analysis_payload_rgb.astype(np_module.float64, copy=False) / payload_scale,
-        0.0,
-        1.0,
-    ).astype(np_module.float32, copy=False)
-    effective_bits_per_color = max(8, min(16, int(bits_per_color)))
-    if prefer_uint16_payload:
-        range_max = float((1 << effective_bits_per_color) - 1)
-        analysis_payload_rgb_quantized = np_module.clip(
-            np_module.round(
-                scaled_payload_rgb.astype(np_module.float64, copy=False) * range_max
-            ),
-            0.0,
-            range_max,
-        ).astype(np_module.uint16, copy=False)
-    else:
-        analysis_payload_rgb_quantized = _to_uint8_image_array(
-            np_module=np_module,
-            image_data=scaled_payload_rgb,
-        )
+    rescaled_payload_rgb = _rescale_xphoto_estimation_payload_rgb_float(
+        np_module=np_module,
+        analysis_payload_rgb_float=analysis_payload_rgb,
+    )
+    compressed_payload_rgb = _compress_xphoto_estimation_payload_highlights_soft_knee(
+        np_module=np_module,
+        rescaled_payload_rgb_float=rescaled_payload_rgb,
+    )
+    analysis_payload_rgb_quantized = _quantize_xphoto_estimation_payload_rgb(
+        np_module=np_module,
+        compressed_payload_rgb_float=compressed_payload_rgb,
+        bits_per_color=bits_per_color,
+        prefer_uint16_payload=prefer_uint16_payload,
+    )
     analysis_payload_bgr_quantized = cv2_module.cvtColor(
         analysis_payload_rgb_quantized,
         cv2_module.COLOR_RGB2BGR,
@@ -6317,6 +6456,29 @@ def _extract_white_balance_channel_gains_from_xphoto(
     if gains.shape != (3,):
         raise RuntimeError("White-balance gain extraction returned invalid channel vector")
     return gains.astype(np_module.float64, copy=False)
+
+
+def _probe_xphoto_uint16_payload_support(np_module, wb_algorithm):
+    """@brief Probe one xphoto algorithm for uint16 payload compatibility.
+
+    @details Executes one minimal `balanceWhite(...)` probe with `uint16` BGR
+    payload and accepts support only when the returned tensor preserves shape
+    and `uint16` dtype. Probe failures or exceptions are treated as unsupported.
+    @param np_module {ModuleType} Imported numpy module.
+    @param wb_algorithm {object} OpenCV xphoto white-balance instance.
+    @return {bool} `True` when uint16 payload support is confirmed.
+    @satisfies REQ-211
+    """
+
+    probe_payload_bgr_uint16 = np_module.full((2, 2, 3), 32768, dtype=np_module.uint16)
+    try:
+        probe_output = wb_algorithm.balanceWhite(probe_payload_bgr_uint16)
+    except Exception:  # pragma: no cover - backend-specific runtime probe guard.
+        return False
+    probe_array = np_module.asarray(probe_output)
+    if probe_array.shape != probe_payload_bgr_uint16.shape:
+        return False
+    return str(probe_array.dtype) == "uint16"
 
 
 def _resolve_white_balance_xphoto_estimation_domain(
@@ -6430,8 +6592,8 @@ def _estimate_xphoto_white_balance_gains_rgb(
     """@brief Estimate EV0-derived white-balance gains using OpenCV xphoto modes.
 
     @details Creates one OpenCV xphoto white-balance instance for `Simple`,
-    `GrayworldWB`, or `IA`, applies optional mode-specific setup, and derives
-    one channel-gain vector from EV0 analysis only.
+    `GrayworldWB`, or `IA`, applies mode-specific setup and uint16 capability
+    probing, then derives one channel-gain vector from EV0 analysis only.
     @param cv2_module {ModuleType} Imported OpenCV module.
     @param np_module {ModuleType} Imported numpy module.
     @param white_balance_mode {str} Canonical white-balance mode selector.
@@ -6456,11 +6618,19 @@ def _estimate_xphoto_white_balance_gains_rgb(
         if factory is None:
             raise RuntimeError("OpenCV xphoto SimpleWB is unavailable")
         wb_algorithm = factory()
+        use_uint16_payload = _probe_xphoto_uint16_payload_support(
+            np_module=np_module,
+            wb_algorithm=wb_algorithm,
+        )
     elif white_balance_mode == WHITE_BALANCE_MODE_GRAYWORLD:
         factory = getattr(xphoto_module, "createGrayworldWB", None)
         if factory is None:
             raise RuntimeError("OpenCV xphoto GrayworldWB is unavailable")
         wb_algorithm = factory()
+        use_uint16_payload = _probe_xphoto_uint16_payload_support(
+            np_module=np_module,
+            wb_algorithm=wb_algorithm,
+        )
     elif white_balance_mode == WHITE_BALANCE_MODE_IA:
         factory = getattr(xphoto_module, "createLearningBasedWB", None)
         if factory is None:
@@ -6478,6 +6648,11 @@ def _estimate_xphoto_white_balance_gains_rgb(
                 _resolve_learning_based_wb_hist_bin_num(
                     bits_per_color=effective_bits_per_color
                 )
+            )
+        if use_uint16_payload:
+            use_uint16_payload = _probe_xphoto_uint16_payload_support(
+                np_module=np_module,
+                wb_algorithm=wb_algorithm,
             )
     else:
         raise ValueError(f"Unsupported xphoto white-balance mode: {white_balance_mode}")
