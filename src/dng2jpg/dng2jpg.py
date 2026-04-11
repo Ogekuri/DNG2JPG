@@ -4815,8 +4815,8 @@ def _parse_run_options(args):
     defaulting to `auto` when omitted, rejects unknown options, and rejects
     invalid arity.
     @param args {list[str]} Raw command argument vector.
-    @return {tuple[Path, Path, float|None, bool, PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, bool, AutoEvOptions]|None} Parsed `(input, output, ev, auto_ev_delta_enabled, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, auto_ev_zero_enabled, auto_ev_options)` tuple; `None` on parse failure.
-    @satisfies CTN-002, CTN-003, CTN-007, REQ-007, REQ-008, REQ-009, REQ-018, REQ-020, REQ-022, REQ-023, REQ-024, REQ-025, REQ-030, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146, REQ-176, REQ-179, REQ-180, REQ-181, REQ-183, REQ-189, REQ-190, REQ-191, REQ-194, REQ-195, REQ-196, REQ-199, REQ-203, REQ-210
+    @return {tuple[Path, Path, float|None, bool, PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, bool, AutoEvOptions]|None} Parsed `(input, output, ev, auto_ev_delta_enabled, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, auto_ev_zero_enabled, auto_ev_options)` tuple; `None` on parse failure. `auto_ev_zero_enabled=True` when `--exposure` is absent or `=auto`; also `True` when `--exposure=<value>` is given with a numeric `--bracketing` value, with `ev_zero` set to the parsed center. `--exposure=<value>` without a numeric `--bracketing` value is rejected.
+    @satisfies CTN-002, CTN-003, CTN-007, REQ-006, REQ-007, REQ-008, REQ-009, REQ-018, REQ-020, REQ-022, REQ-023, REQ-024, REQ-025, REQ-030, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146, REQ-176, REQ-179, REQ-180, REQ-181, REQ-183, REQ-189, REQ-190, REQ-191, REQ-194, REQ-195, REQ-196, REQ-199, REQ-203, REQ-210
     """
 
     positional = []
@@ -4824,6 +4824,7 @@ def _parse_run_options(args):
     auto_ev_delta_enabled = True
     ev_zero = 0.0
     auto_ev_zero_enabled = True
+    _numeric_exposure_was_set = False
     auto_ev_options = AutoEvOptions()
     post_gamma = DEFAULT_POST_GAMMA
     post_gamma_mode = DEFAULT_POST_GAMMA_MODE
@@ -5182,7 +5183,7 @@ def _parse_run_options(args):
             if parsed_ev_center is None:
                 return None
             ev_zero = parsed_ev_center
-            auto_ev_zero_enabled = False
+            _numeric_exposure_was_set = True
             idx += 1
             continue
 
@@ -5257,6 +5258,25 @@ def _parse_run_options(args):
             idx += 1
             continue
 
+        if token.startswith("--auto-ev=") or (
+            token.startswith("--auto-ev-")
+            and "=" in token
+            and not token.startswith("--auto-ev-shadow-clipping=")
+            and not token.startswith("--auto-ev-highlight-clipping=")
+            and not token.startswith("--auto-ev-step=")
+        ):
+            option_name = token.split("=", 1)[0]
+            print_error(f"Removed option: {option_name}")
+            return None
+
+        if token.startswith("--auto-zero-pct="):
+            print_error("Removed option: --auto-zero-pct")
+            return None
+
+        if token.startswith("--auto-zero="):
+            print_error("Removed option: --auto-zero")
+            return None
+
         if token.startswith("-"):
             print_error(f"Unknown option: {token}")
             return None
@@ -5269,6 +5289,10 @@ def _parse_run_options(args):
             "Usage: dng2jpg <input.dng> <output.jpg> "
             "[--bracketing=<auto|value>] [--exposure=<auto|value>]"
         )
+        return None
+
+    if _numeric_exposure_was_set and auto_ev_delta_enabled:
+        print_error("--exposure requires numeric --bracketing value")
         return None
 
     if hdr_merge_mode not in _HDR_MERGE_MODES:
@@ -13269,8 +13293,8 @@ def _print_validated_run_parameters(
     @param output_jpg {Path} Resolved output JPEG file path.
     @param ev_value {float|None} Static EV half-span when `auto_ev_delta_enabled=False`; `None` otherwise.
     @param auto_ev_delta_enabled {bool} `True` when bracketing is resolved via automatic iterative algorithm.
-    @param ev_zero {float} Static EV center when `auto_ev_zero_enabled=False`; unused sentinel otherwise.
-    @param auto_ev_zero_enabled {bool} `True` when EV center is resolved via automatic algorithm.
+    @param ev_zero {float} EV center value; `0.0` when not explicitly set; set to parsed value when `--exposure=<value>` is given with a numeric bracket.
+    @param auto_ev_zero_enabled {bool} `True` when EV metrics are evaluated; always `True` in the current implementation; controls `exposure:` summary line (`auto` when `True`).
     @param auto_ev_options {AutoEvOptions} Resolved iterative bracket search controls.
     @param postprocess_options {PostprocessOptions} Resolved postprocess option payload.
     @param enable_luminance {bool} `True` when Luminance-HDR backend is selected.
@@ -13662,7 +13686,7 @@ def run(args):
                         )
                 elif auto_ev_zero_enabled:
                     if auto_adjust_dependencies is None:
-                        raise RuntimeError("Missing auto-adjust dependencies for --exposure=auto")
+                        raise RuntimeError("Missing auto-adjust dependencies for EV evaluation")
                     cv2_module_for_ev, np_module_for_ev = auto_adjust_dependencies
                     evaluations = _calculate_auto_zero_evaluations(
                         cv2_module=cv2_module_for_ev,
@@ -13672,15 +13696,9 @@ def run(args):
                     print_info(f"Exposure Misure EV ev_best: {evaluations.ev_best:+.1f} EV")
                     print_info(f"Exposure Misure EV ev_ettr: {evaluations.ev_ettr:+.1f} EV")
                     print_info(f"Exposure Misure EV ev_detail: {evaluations.ev_detail:+.1f} EV")
-                    resolved_ev_zero, _selected_source = _select_ev_zero_candidate(
-                        evaluations=evaluations,
-                    )
-                    print_info(
-                        "Exposure planning selected ev_zero: "
-                        f"{resolved_ev_zero:+.6f} EV (source={_selected_source})"
-                    )
+                    resolved_ev_zero = ev_zero
                     if ev_value is None:
-                        raise ValueError("Missing static EV value for --exposure=auto without --bracketing=auto")
+                        raise ValueError("Missing static EV value for static exposure mode")
                     effective_ev_value = ev_value
                 else:
                     resolved_ev_zero = ev_zero
@@ -13688,8 +13706,8 @@ def run(args):
                         raise ValueError("Missing static EV value")
                     effective_ev_value = ev_value
                 print_info(f"Detected DNG bits per color: {bits_per_color}")
-                if auto_ev_zero_enabled:
-                    print_info("Using exposure mode: auto ev_zero" + ("+delta" if auto_ev_delta_enabled else ""))
+                if auto_ev_zero_enabled and auto_ev_delta_enabled:
+                    print_info("Using exposure mode: auto ev_zero+delta")
                 elif auto_ev_delta_enabled:
                     print_info("Using exposure mode: auto ev_delta")
                 else:
