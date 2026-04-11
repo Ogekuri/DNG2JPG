@@ -2184,8 +2184,8 @@ def test_parse_run_options_auto_ev_defaults_and_explicit_ev_auto() -> None:
         ["input.dng", "output.jpg", "--bracketing=auto"]
     )
     assert parsed_explicit_auto is not None
-    assert parsed_explicit_auto[2] is None
-    assert parsed_explicit_auto[3] is True
+    assert parsed_explicit_auto[2] == 0.1
+    assert parsed_explicit_auto[3] is False
 
 
 def test_parse_run_options_rejects_removed_auto_ev_option(capsys) -> None:
@@ -2206,7 +2206,7 @@ def test_parse_run_options_static_ev_defaults_ev_zero_to_zero_with_unspecified_f
         ["input.dng", "output.jpg", "--bracketing=1.25"]
     )
     assert parsed_static is not None
-    assert parsed_static[2] == 1.25
+    assert parsed_static[2] == 1.2
     assert parsed_static[3] is False
     assert parsed_static[11] == 0.0
     assert parsed_static[12] is True
@@ -2219,10 +2219,10 @@ def test_parse_run_options_static_ev_preserves_manual_ev_zero() -> None:
         ["input.dng", "output.jpg", "--bracketing=1.25", "--exposure=0.5"]
     )
     assert parsed_static is not None
-    assert parsed_static[2] == 1.25
+    assert parsed_static[2] == 1.2
     assert parsed_static[3] is False
     assert parsed_static[11] == 0.5
-    assert parsed_static[12] is True
+    assert parsed_static[12] is False
 
 
 def test_parse_run_options_rejects_ev_zero_without_ev(capsys) -> None:
@@ -5539,12 +5539,13 @@ def test_run_auto_ev_prints_joint_candidate_diagnostics(monkeypatch, tmp_path, c
 
     assert exit_code == 0
     output = capsys.readouterr().out
-    assert "Using exposure mode: auto" in output
+    assert "Using exposure mode: static" in output
+    assert "Using EV bracket delta: 0.1 (static)" in output
     assert "Exposure Misure EV ev_best:" in output
     assert "Exposure Misure EV ev_ettr:" in output
     assert "Exposure Misure EV ev_detail:" in output
     assert "Exposure planning selected ev_zero:" in output
-    assert "Bracket step:" in output
+    assert "Bracket step: skipped" in output
     assert "Exposure planning selected bracket half-span:" in output
     assert "Export EV triplet:" in output
 
@@ -5657,9 +5658,9 @@ def test_run_static_ev_uses_manual_center_and_reports_static_mode(
     assert "Using exposure mode: static" in output
     assert "Using selected EV center (ev_zero): 0.5" in output
     assert "Using EV bracket delta: 1 (static)" in output
-    assert "Exposure Misure EV ev_best:" in output
-    assert "Exposure Misure EV ev_ettr:" in output
-    assert "Exposure Misure EV ev_detail:" in output
+    assert "Exposure Misure EV ev_best:" not in output
+    assert "Exposure Misure EV ev_ettr:" not in output
+    assert "Exposure Misure EV ev_detail:" not in output
 
 
 def test_run_skips_white_balance_when_mode_not_specified(monkeypatch, tmp_path) -> None:

@@ -1202,9 +1202,9 @@ def print_help(version):
     _print_help_section("Step 2 - Exposure planning and RAW bracket extraction")
     _print_help_option(
         "--bracketing=<value>",
-        "EV bracket half-span selector: use `auto` for iterative automatic delta, or one finite numeric value `>= 0` for static symmetric bracket EV delta.",
+        "EV bracket half-span selector: use `auto` for forced static delta `0.1 EV`, or one finite numeric value `>= 0` for static symmetric bracket EV delta.",
         (
-            "Default: `auto` when omitted.",
+            "Default when omitted: iterative automatic delta solver.",
             "Use `--bracketing=<value>` to force static symmetric bracket EV delta.",
         ),
     )
@@ -1660,9 +1660,10 @@ def _parse_ev_option(ev_raw):
     """@brief Parse and validate one `--bracketing` static value.
 
     @details Converts token to `float`, enforces finiteness and non-negativity,
-    and preserves the parsed static bracket half-span without applying any
-    bit-depth-derived upper-bound contract. Does not handle the `auto` sentinel;
-    callers MUST check for `auto` before invoking this function.
+    rounds the parsed static bracket half-span to one decimal place, and
+    preserves no bit-depth-derived upper-bound contract. Does not handle the
+    `auto` sentinel; callers MUST check for `auto` before invoking this
+    function.
     @param ev_raw {str} EV token extracted from command arguments.
     @return {float|None} Parsed EV value when valid; `None` otherwise.
     @satisfies REQ-030, CTN-003
@@ -1680,16 +1681,16 @@ def _parse_ev_option(ev_raw):
         print_error("Allowed values: finite numeric >= 0")
         return None
 
-    return float(ev_value)
+    return float(round(ev_value, 1))
 
 
 def _parse_ev_center_option(ev_center_raw):
     """@brief Parse and validate one `--exposure` center option value.
 
-    @details Converts token to `float`, enforces finiteness, and preserves
-    static center EV value without applying bit-depth-derived upper bounds.
-    Does not handle the `auto` sentinel; callers MUST check for `auto` before
-    invoking this function.
+    @details Converts token to `float`, enforces finiteness, rounds the static
+    center EV value to one decimal place, and preserves no bit-depth-derived
+    upper-bound contract. Does not handle the `auto` sentinel; callers MUST
+    check for `auto` before invoking this function.
     @param ev_center_raw {str} EV-center token extracted from command arguments.
     @return {float|None} Parsed EV-center value when valid; `None` otherwise.
     @satisfies REQ-030, CTN-007
@@ -1707,7 +1708,47 @@ def _parse_ev_center_option(ev_center_raw):
         print_error("Allowed values: finite numeric or auto")
         return None
 
-    return float(ev_center_value)
+    return float(round(ev_center_value, 1))
+
+
+
+def _is_forced_static_auto_bracketing_selected(args):
+    """@brief Detect explicit forced-static bracketing selector usage.
+
+    @details Scans the raw CLI token vector and returns `True` only when the
+    last `--bracketing=` selector token equals `auto`. This selector is
+    semantically distinct from omitted `--bracketing`, which retains iterative
+    automatic bracketing, and from later static numeric overrides. Complexity:
+    O(N). Side effects: none.
+    @param args {list[str]} Raw command argument vector.
+    @return {bool} `True` when explicit `--bracketing=auto` is present.
+    @satisfies CTN-003, REQ-216, REQ-217
+    """
+
+    forced_static_auto_selected = False
+    for token in args:
+        normalized_token = str(token).strip().lower()
+        if not normalized_token.startswith("--bracketing="):
+            continue
+        forced_static_auto_selected = normalized_token == "--bracketing=auto"
+    return forced_static_auto_selected
+
+
+def _print_forced_static_auto_bracketing_diagnostics(ev_delta):
+    """@brief Emit deterministic diagnostics for forced-static bracketing mode.
+
+    @details Prints one fixed `Bracket step: skipped` line followed by one
+    selected half-span line for explicit `--bracketing=auto` mode. Complexity:
+    O(1). Side effects: stdout writes only.
+    @param ev_delta {float} Resolved static half-span EV value.
+    @return {None} No return value; side effect is stdout emission.
+    @satisfies REQ-217
+    """
+
+    print_info("Bracket step: skipped")
+    print_info(
+        f"Exposure planning selected bracket half-span: {float(ev_delta):.6f} EV"
+    )
 
 
 def _parse_percentage_option(option_name, option_raw):
@@ -4793,8 +4834,9 @@ def _parse_run_options(args):
     """@brief Parse CLI args into input, output, and EV parameters.
 
     @details Supports positional file arguments, bracket delta selector
-    (`--bracketing=<auto|value>`, default `auto`), bracket center selector
-    (`--exposure=<auto|value>`, default `auto`), optional
+    (`--bracketing=<auto|value>` where omitted enables iterative automatic
+    solving and explicit `auto` forces static half-span `0.1`), bracket center
+    selector (`--exposure=<auto|value>`, default `auto`), optional
     automatic exposure clipping and step controls, optional RAW white-balance
     normalization selector
     (`--white-balance=<GREEN|MAX|MIN|MEAN>`),
@@ -4815,7 +4857,7 @@ def _parse_run_options(args):
     defaulting to `auto` when omitted, rejects unknown options, and rejects
     invalid arity.
     @param args {list[str]} Raw command argument vector.
-    @return {tuple[Path, Path, float|None, bool, PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, bool, AutoEvOptions]|None} Parsed `(input, output, ev, auto_ev_delta_enabled, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, auto_ev_zero_enabled, auto_ev_options)` tuple; `None` on parse failure. `auto_ev_zero_enabled=True` when `--exposure` is absent or `=auto`; also `True` when `--exposure=<value>` is given with a numeric `--bracketing` value, with `ev_zero` set to the parsed center. `--exposure=<value>` without a numeric `--bracketing` value is rejected.
+    @return {tuple[Path, Path, float|None, bool, PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, bool, AutoEvOptions]|None} Parsed `(input, output, ev, auto_ev_delta_enabled, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, auto_ev_zero_enabled, auto_ev_options)` tuple; `None` on parse failure. `auto_ev_zero_enabled=True` when `--exposure` is absent or `=auto`; `auto_ev_zero_enabled=False` when `--exposure=<value>` is parsed. `--exposure=<value>` without static `--bracketing=<value>` or explicit `--bracketing=auto` is rejected.
     @satisfies CTN-002, CTN-003, CTN-007, REQ-006, REQ-007, REQ-008, REQ-009, REQ-018, REQ-020, REQ-022, REQ-023, REQ-024, REQ-025, REQ-030, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146, REQ-176, REQ-179, REQ-180, REQ-181, REQ-183, REQ-189, REQ-190, REQ-191, REQ-194, REQ-195, REQ-196, REQ-199, REQ-203, REQ-210
     """
 
@@ -5119,8 +5161,8 @@ def _parse_run_options(args):
         if token.startswith("--bracketing="):
             ev_raw = token.split("=", 1)[1].strip()
             if ev_raw.lower() == "auto":
-                ev_value = None
-                auto_ev_delta_enabled = True
+                ev_value = float(round(DEFAULT_AUTO_EV_STEP, 1))
+                auto_ev_delta_enabled = False
                 idx += 1
                 continue
             parsed_ev = _parse_ev_option(ev_raw)
@@ -5183,6 +5225,7 @@ def _parse_run_options(args):
             if parsed_ev_center is None:
                 return None
             ev_zero = parsed_ev_center
+            auto_ev_zero_enabled = False
             _numeric_exposure_was_set = True
             idx += 1
             continue
@@ -5291,7 +5334,11 @@ def _parse_run_options(args):
         )
         return None
 
-    if _numeric_exposure_was_set and auto_ev_delta_enabled:
+    if (
+        _numeric_exposure_was_set
+        and auto_ev_delta_enabled
+        and not _is_forced_static_auto_bracketing_selected(args)
+    ):
         print_error("--exposure requires numeric --bracketing value")
         return None
 
@@ -13460,9 +13507,9 @@ def run(args):
     `_print_validated_run_parameters` after file-path preconditions pass, validates
     dependencies, detects source DNG bits-per-color from RAW metadata, resolves
     `ev_zero` (static `0.0` default, static `--exposure=<value>`, or auto via
-    `--exposure=auto`) and `ev_delta` (static `1.0` default, static
-    `--bracketing=<value>`, or auto via `--bracketing=auto` with
-    OpenCV-Tonemap-specific fixed-span bypass), extracts one linear HDR base image
+    `--exposure=auto`) and `ev_delta` (iterative automatic when
+    `--bracketing` is omitted, static `--bracketing=<value>`, or forced static
+    `--bracketing=auto`), extracts one linear HDR base image
     using selected RAW WB normalization mode, derives bracket payloads in canonical
     order, executes the selected HDR backend with float input/output interfaces,
     executes the float-interface post-merge pipeline, optionally emits persistent
@@ -13496,6 +13543,9 @@ def run(args):
         auto_ev_zero_enabled,
         auto_ev_options,
     ) = parsed
+    forced_static_auto_bracketing_enabled = _is_forced_static_auto_bracketing_selected(
+        args
+    )
     enable_opencv_tonemap = _derive_opencv_tonemap_enabled(postprocess_options)
 
     if input_dng.suffix.lower() != ".dng":
@@ -13696,7 +13746,13 @@ def run(args):
                     print_info(f"Exposure Misure EV ev_best: {evaluations.ev_best:+.1f} EV")
                     print_info(f"Exposure Misure EV ev_ettr: {evaluations.ev_ettr:+.1f} EV")
                     print_info(f"Exposure Misure EV ev_detail: {evaluations.ev_detail:+.1f} EV")
-                    resolved_ev_zero = ev_zero
+                    resolved_ev_zero, selected_source = _select_ev_zero_candidate(
+                        evaluations=evaluations,
+                    )
+                    print_info(
+                        "Exposure planning selected ev_zero: "
+                        f"{resolved_ev_zero:+.6f} EV (source={selected_source})"
+                    )
                     if ev_value is None:
                         raise ValueError("Missing static EV value for static exposure mode")
                     effective_ev_value = ev_value
@@ -13715,6 +13771,11 @@ def run(args):
                 print_info(f"Using selected EV center (ev_zero): {resolved_ev_zero:g}")
                 if effective_ev_value is None:
                     raise ValueError("Missing resolved EV delta")
+                effective_ev_value = float(round(effective_ev_value, 1))
+                if forced_static_auto_bracketing_enabled:
+                    _print_forced_static_auto_bracketing_diagnostics(
+                        ev_delta=effective_ev_value,
+                    )
                 print_info(
                     f"Using EV bracket delta: {effective_ev_value:g}"
                     + (" (auto)" if auto_ev_delta_enabled else " (static)")
