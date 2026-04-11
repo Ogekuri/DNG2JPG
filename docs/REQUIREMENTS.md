@@ -184,7 +184,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-051**: MUST support exactly one auto-adjust pipeline with one validated knob model containing shared controls and CLAHE-luma controls.
 - **REQ-052**: MUST print deterministic runtime diagnostics for EV triplet and OpenCV radiance exposure calculations/results; MUST print `Exposure Misure EV` values and selected `ev_zero` only when `--exposure=auto` is active.
 - **REQ-220**: After `_parse_run_options` returns non-`None` and CTN-004 file-path preconditions pass, MUST invoke `_print_validated_run_parameters` before any dependency resolution or image processing step.
-- **REQ-221**: `_print_validated_run_parameters` MUST emit resolved parameter values one per line under unlabeled group headers printed without indentation; parameter lines MUST be indented with two spaces; groups MUST appear in fixed order: `Input/Output`, `Exposure`, `White Balance`, `HDR Backend`, `Merge Gamma`, `Postprocess`, `Auto-Brightness` (only when enabled), `Auto-Levels` (only when enabled), `Auto-Adjust` (only when enabled), `Debug`.
+- **REQ-221**: `_print_validated_run_parameters` MUST emit one resolved parameter per line with two-space indentation under unlabeled group headers in fixed order: `Input/Output`, `Exposure`, `White Balance`, `HDR Backend`, `Merge Gamma`, `Postprocess`, `Auto-Brightness (AB)`, `Auto-White-Balance (AWB)`, `Auto-Levels`, `Auto-Adjust`, `Debug`, and MUST print `auto-brightness`, `auto-white-balance`, `auto-levels`, and `auto-adjust` status lines in their groups.
 - **REQ-103**: MUST classify normalized BT.709 luminance as `low-key` when `median<0.35 && p95<0.85`, `high-key` when `median>0.65 && p05>0.15`, else `normal-key`.
 - **REQ-104**: MUST map luminance with `L=(a/Lw_bar)*Y`, percentile-derived robust `Lwhite`, and burn-out compression `Ld=(L*(1+L/Lwhite^2))/(1+L)` before linear-domain chromaticity-preserving RGB scaling.
 - **REQ-105**: MUST desaturate only overflowing linear RGB pixels by blending toward `(Ld,Ld,Ld)` with the minimal factor that restores `max(R,G,B)<=1` while preserving luminance.
@@ -357,7 +357,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-078**: MUST verify `_postprocess` forwards merge-backend float outputs without entry clipping and normalizes only external non-float payloads before stage execution.
 - **TST-079**: MUST verify `--bracketing=auto` with `--hdr-merge=OpenCV-Tonemap` sets `ev_delta=0.1`, prints `Bracket step: skipped`, and prints `Exposure planning selected bracket half-span: 0.100000 EV`.
 - **TST-080**: MUST verify `_print_validated_run_parameters` emits all group headers in the defined order with two-space-indented parameter lines for a standard resolved option set.
-- **TST-081**: MUST verify `_print_validated_run_parameters` omits `Auto-Brightness`, `Auto-Levels`, and `Auto-Adjust` group headers when the corresponding stages are disabled, and emits them when enabled.
+- **TST-081**: MUST verify `_print_validated_run_parameters` always emits `Auto-Brightness (AB)`, `Auto-White-Balance (AWB)`, `Auto-Levels`, and `Auto-Adjust` headers in fixed order and always prints their `auto-*` stage status as `enable` or `disabled`.
 
 ## 5. Evidence Matrix
 

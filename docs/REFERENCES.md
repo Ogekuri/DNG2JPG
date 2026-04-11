@@ -137,7 +137,7 @@ import subprocess
 
 ---
 
-# dng2jpg.py | Python | 13167L | 423 symbols | 32 imports | 273 comments
+# dng2jpg.py | Python | 13180L | 423 symbols | 32 imports | 273 comments
 > Path: `src/dng2jpg/dng2jpg.py`
 
 ## Imports
@@ -2968,7 +2968,7 @@ RGB float output without any file round-trip.
 
 ### fn `def _print_validated_run_parameters(` `priv` (L12560-12575)
 
-### fn `def run(args)` (L12740-12939)
+### fn `def run(args)` (L12753-12952)
 - @brief Emit structured validated CLI parameter summary to stdout.
 - @brief Execute `dng2jpg` command pipeline.
 - @details Prints all resolved CLI parameter values after successful parse and
@@ -2976,10 +2976,10 @@ file-path validation, one value per line, grouped under functional category
 headers. Group headers are printed without indentation; parameter lines are
 indented with two spaces. Groups are always emitted in fixed order:
 `Input/Output`, `Exposure`, `White Balance`, `HDR Backend`, `Merge Gamma`,
-`Postprocess`; conditional groups `Auto-Brightness`, `Auto-Levels`,
-`Auto-Adjust` are emitted only when the corresponding stage is enabled;
-`Debug` is always emitted last. Side effects: writes to stdout via
-`print_info`.
+`Postprocess`, `Auto-Brightness (AB)`, `Auto-White-Balance (AWB)`,
+`Auto-Levels`, `Auto-Adjust`, `Debug`. Each auto-stage group always prints
+one `auto-*` status line using `enable` or `disabled`. Side effects: writes
+to stdout via `print_info`.
 - @details Parses command options, emits structured validated parameter summary via `_print_validated_run_parameters` after file-path preconditions pass, validates dependencies, detects source DNG bits-per-color from RAW metadata, resolves `ev_zero` (static `0.0` default, static `--exposure=<value>`, or auto via `--exposure=auto`) and `ev_delta` (static `1.0` default, static `--bracketing=<value>`, or auto via `--bracketing=auto` with OpenCV-Tonemap-specific fixed-span bypass), extracts one linear HDR base image using selected RAW WB normalization mode, derives bracket payloads in canonical order, executes the selected HDR backend with float input/output interfaces, executes the float-interface post-merge pipeline, optionally emits persistent debug TIFF checkpoints for executed stages, writes the final JPG, and guarantees temporary artifact cleanup through isolated temporary directory lifecycle.
 - @param input_dng {Path} Resolved input DNG file path.
 - @param output_jpg {Path} Resolved output JPEG file path.
@@ -3427,7 +3427,7 @@ indented with two spaces. Groups are always emitted in fixed order:
 |`_collect_processing_errors`|fn|priv|12511-12539|def _collect_processing_errors(rawpy_module)|
 |`_is_supported_runtime_os`|fn|priv|12540-12559|def _is_supported_runtime_os()|
 |`_print_validated_run_parameters`|fn|priv|12560-12575|def _print_validated_run_parameters(|
-|`run`|fn|pub|12740-12939|def run(args)|
+|`run`|fn|pub|12753-12952|def run(args)|
 
 
 ---

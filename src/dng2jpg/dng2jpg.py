@@ -12581,10 +12581,10 @@ def _print_validated_run_parameters(
     headers. Group headers are printed without indentation; parameter lines are
     indented with two spaces. Groups are always emitted in fixed order:
     `Input/Output`, `Exposure`, `White Balance`, `HDR Backend`, `Merge Gamma`,
-    `Postprocess`; conditional groups `Auto-Brightness`, `Auto-Levels`,
-    `Auto-Adjust` are emitted only when the corresponding stage is enabled;
-    `Debug` is always emitted last. Side effects: writes to stdout via
-    `print_info`.
+    `Postprocess`, `Auto-Brightness (AB)`, `Auto-White-Balance (AWB)`,
+    `Auto-Levels`, `Auto-Adjust`, `Debug`. Each auto-stage group always prints
+    one `auto-*` status line using `enable` or `disabled`. Side effects: writes
+    to stdout via `print_info`.
 
     @param input_dng {Path} Resolved input DNG file path.
     @param output_jpg {Path} Resolved output JPEG file path.
@@ -12621,12 +12621,15 @@ def _print_validated_run_parameters(
 
     print_info("White Balance:")
     print_info(f"{ind}raw-wb-normalization: {postprocess_options.raw_white_balance_mode}")
-    awb_mode = postprocess_options.auto_white_balance_mode
-    if awb_mode is None:
-        print_info(f"{ind}auto-white-balance: disabled")
-    else:
-        print_info(f"{ind}auto-white-balance: {awb_mode}")
-        print_info(f"{ind}xphoto-domain: {postprocess_options.auto_white_balance_xphoto_domain}")
+
+    auto_brightness_status = (
+        "enable" if postprocess_options.auto_brightness_enabled else "disabled"
+    )
+    auto_white_balance_status = (
+        "enable" if postprocess_options.auto_white_balance_mode is not None else "disabled"
+    )
+    auto_levels_status = "enable" if postprocess_options.auto_levels_enabled else "disabled"
+    auto_adjust_status = "enable" if postprocess_options.auto_adjust_enabled else "disabled"
 
     print_info("HDR Backend:")
     if enable_luminance:
@@ -12693,8 +12696,9 @@ def _print_validated_run_parameters(
     print_info(f"{ind}saturation: {postprocess_options.saturation:g}")
     print_info(f"{ind}jpg-compression: {postprocess_options.jpg_compression}")
 
+    print_info("Auto-Brightness (AB):")
+    print_info(f"{ind}auto-brightness: {auto_brightness_status}")
     if postprocess_options.auto_brightness_enabled:
-        print_info("Auto-Brightness:")
         resolved_ab_key = postprocess_options.auto_brightness_options.key_value
         key_text = "auto" if resolved_ab_key is None else f"{resolved_ab_key:g}"
         print_info(f"{ind}key-value: {key_text}")
@@ -12706,8 +12710,16 @@ def _print_validated_run_parameters(
         print_info(f"{ind}luminance-preserving-desat: {desat_text}")
         print_info(f"{ind}eps: {postprocess_options.auto_brightness_options.eps:g}")
 
+    print_info("Auto-White-Balance (AWB):")
+    awb_mode = postprocess_options.auto_white_balance_mode
+    print_info(f"{ind}auto-white-balance: {auto_white_balance_status}")
+    if awb_mode is not None:
+        print_info(f"{ind}mode: {awb_mode}")
+        print_info(f"{ind}xphoto-domain: {postprocess_options.auto_white_balance_xphoto_domain}")
+
+    print_info("Auto-Levels:")
+    print_info(f"{ind}auto-levels: {auto_levels_status}")
     if postprocess_options.auto_levels_enabled:
-        print_info("Auto-Levels:")
         print_info(f"{ind}clip-pct: {postprocess_options.auto_levels_options.clip_percent:g}")
         cog_text = "enabled" if postprocess_options.auto_levels_options.clip_out_of_gamut else "disabled"
         print_info(f"{ind}clip-out-of-gamut: {cog_text}")
@@ -12716,8 +12728,9 @@ def _print_validated_run_parameters(
         print_info(f"{ind}highlight-reconstruction-method: {postprocess_options.auto_levels_options.highlight_reconstruction_method}")
         print_info(f"{ind}gain-threshold: {postprocess_options.auto_levels_options.gain_threshold:g}")
 
+    print_info("Auto-Adjust:")
+    print_info(f"{ind}auto-adjust: {auto_adjust_status}")
     if postprocess_options.auto_adjust_enabled:
-        print_info("Auto-Adjust:")
         print_info(f"{ind}blur-sigma: {postprocess_options.auto_adjust_options.blur_sigma:g}")
         print_info(f"{ind}blur-threshold-pct: {postprocess_options.auto_adjust_options.blur_threshold_pct:g}")
         print_info(f"{ind}level-low-pct: {postprocess_options.auto_adjust_options.level_low_pct:g}")

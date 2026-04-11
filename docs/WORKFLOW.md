@@ -141,7 +141,7 @@
         - _parse_jpg_compression_option(...): JPG compression parsing [src/dng2jpg/dng2jpg.py]
         - _resolve_default_postprocess(...): backend default postprocess profile resolution keyed by backend variant (`Luminace-HDR`, `OpenCV-Merge`, `OpenCV-Tonemap`, `HDR-Plus`) [src/dng2jpg/dng2jpg.py]
       - _derive_opencv_tonemap_enabled(postprocess_options): backend gate derivation [src/dng2jpg/dng2jpg.py]
-      - _print_validated_run_parameters(...): emit structured validated parameter summary grouped by `Input/Output`, `Exposure`, `White Balance`, `HDR Backend`, `Merge Gamma`, `Postprocess`, conditional `Auto-Brightness`/`Auto-Levels`/`Auto-Adjust`, `Debug` after file-path preconditions pass [src/dng2jpg/dng2jpg.py]
+      - _print_validated_run_parameters(...): emit structured validated parameter summary grouped by `Input/Output`, `Exposure`, `White Balance`, `HDR Backend`, `Merge Gamma`, `Postprocess`, `Auto-Brightness (AB)`, `Auto-White-Balance (AWB)`, `Auto-Levels`, `Auto-Adjust`, and `Debug`, always printing auto-stage status lines [src/dng2jpg/dng2jpg.py]
       - _build_debug_artifact_context(output_jpg, input_dng, postprocess_options): debug path setup [src/dng2jpg/dng2jpg.py]
       - _collect_missing_external_executables(enable_luminance): external binary checks [src/dng2jpg/dng2jpg.py]
       - _resolve_numpy_dependency(): import NumPy dependency [src/dng2jpg/dng2jpg.py]
