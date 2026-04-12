@@ -993,6 +993,74 @@ def test_postprocess_normalizes_non_float_entry_payload(monkeypatch) -> None:
     )
 
 
+def test_postprocess_invokes_auto_adjust_stage_entry_after_auto_levels(
+    monkeypatch,
+) -> None:
+    """@brief Validate mandatory auto-adjust stage entry after auto-levels handoff.
+
+    @details Exercises `_postprocess(...)` with `auto_levels_enabled=False` and
+    `auto_adjust_enabled=False`, verifies auto-levels bypass path, verifies
+    auto-adjust stage-entry invocation, and verifies pass-through payload
+    fidelity from static stage output.
+    @return {None} Assertions only.
+    @satisfies TST-095
+    """
+
+    merged_rgb_float = np.full((2, 2, 3), 0.5, dtype=np.float32)
+    imageio_module = _FakeImageIoModule(
+        merged_rgb_u16=np.zeros((2, 2, 3), dtype=np.uint16)
+    )
+    static_stage_output = np.full((2, 2, 3), 0.31, dtype=np.float32)
+    auto_adjust_stage_inputs: list[np.ndarray] = []
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_apply_static_postprocess_float",
+        lambda **_kwargs: np.array(static_stage_output, copy=True),
+    )
+
+    def _fail_auto_levels(**_kwargs):
+        raise AssertionError("Auto-levels stage should be bypassed when disabled")
+
+    monkeypatch.setattr(dng2jpg_module, "_apply_auto_levels_float", _fail_auto_levels)
+
+    def _track_auto_adjust_stage(**kwargs):
+        auto_adjust_stage_inputs.append(np.array(kwargs["image_rgb_float"], copy=True))
+        return np.array(kwargs["image_rgb_float"], copy=True)
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_apply_auto_adjust_stage_float",
+        _track_auto_adjust_stage,
+    )
+
+    output = dng2jpg_module._postprocess(  # pylint: disable=protected-access
+        imageio_module=imageio_module,
+        merged_image_float=merged_rgb_float,
+        postprocess_options=dng2jpg_module.PostprocessOptions(
+            post_gamma=1.0,
+            brightness=1.0,
+            contrast=1.0,
+            saturation=1.0,
+            jpg_compression=25,
+            auto_brightness_enabled=False,
+            auto_levels_enabled=False,
+            auto_adjust_enabled=False,
+            debug_enabled=False,
+        ),
+        numpy_module=np,
+    )
+
+    assert len(auto_adjust_stage_inputs) == 1
+    np.testing.assert_allclose(
+        auto_adjust_stage_inputs[0],
+        static_stage_output,
+        rtol=0.0,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(output, static_stage_output, rtol=0.0, atol=0.0)
+
+
 def test_encode_jpg_refreshes_exif_thumbnail_from_final_quantized_rgb_uint8(
     monkeypatch, tmp_path
 ) -> None:
@@ -5736,8 +5804,18 @@ def test_run_static_ev_uses_manual_center_and_reports_static_mode(
     assert "Exposure Misure EV ev_detail:" not in output
 
 
-def test_run_skips_white_balance_when_mode_not_specified(monkeypatch, tmp_path) -> None:
-    """Runtime must skip white-balance stage when `--auto-white-balance` is omitted."""
+def test_run_invokes_white_balance_stage_entry_when_mode_not_specified(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    """@brief Validate mandatory disabled auto-white-balance stage entry in `run`.
+
+    @details Exercises `run(...)` with omitted `--auto-white-balance`, verifies
+    stage entry invocation with `white_balance_mode=None`, verifies stage-input
+    propagation to bracket extraction, and verifies deterministic disabled-stage
+    diagnostics.
+    @return {None} Assertions only.
+    @satisfies TST-062
+    """
 
     input_dng = tmp_path / "scene.dng"
     input_dng.write_bytes(b"fake-dng")
@@ -5769,8 +5847,10 @@ def test_run_skips_white_balance_when_mode_not_specified(monkeypatch, tmp_path) 
         merged_rgb_u16=np.full((2, 2, 3), 32768, dtype=np.uint16)
     )
     fake_pil_module = _FakePilModule()
-    white_balance_calls: list[str] = []
     captured_brackets: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+    captured_bracket_base_inputs: list[np.ndarray] = []
+    stage_entry_modes: list[str | None] = []
+    stage_entry_inputs: list[np.ndarray] = []
 
     monkeypatch.setattr(
         dng2jpg_module,
@@ -5800,19 +5880,32 @@ def test_run_skips_white_balance_when_mode_not_specified(monkeypatch, tmp_path) 
         "_extract_base_rgb_linear_float",
         lambda **_kwargs: np.full((2, 2, 3), 0.25, dtype=np.float32),
     )
+
+    original_white_balance_stage = dng2jpg_module._apply_auto_white_balance_stage_float
+
+    def _track_white_balance_stage(**kwargs):
+        stage_entry_modes.append(kwargs["white_balance_mode"])
+        stage_entry_inputs.append(np.array(kwargs["image_rgb_float"], copy=True))
+        return original_white_balance_stage(**kwargs)
+
     monkeypatch.setattr(
         dng2jpg_module,
-        "_extract_bracket_images_float",
-        lambda **_kwargs: (
+        "_apply_auto_white_balance_stage_float",
+        _track_white_balance_stage,
+    )
+
+    def _capture_brackets(**kwargs):
+        captured_bracket_base_inputs.append(np.array(kwargs["base_rgb_float"], copy=True))
+        return (
             np.full((2, 2, 3), 0.125, dtype=np.float32),
             np.full((2, 2, 3), 0.25, dtype=np.float32),
             np.full((2, 2, 3), 0.5, dtype=np.float32),
-        ),
-    )
+        )
+
     monkeypatch.setattr(
         dng2jpg_module,
-        "_apply_white_balance_to_bracket_triplet",
-        lambda **_kwargs: white_balance_calls.append("called"),
+        "_extract_bracket_images_float",
+        _capture_brackets,
     )
 
     def _fake_run_opencv_merge_backend(**kwargs):
@@ -5853,11 +5946,22 @@ def test_run_skips_white_balance_when_mode_not_specified(monkeypatch, tmp_path) 
     )
 
     assert exit_code == 0
-    assert white_balance_calls == []
+    assert stage_entry_modes == [None]
+    assert len(stage_entry_inputs) == 1
+    np.testing.assert_allclose(stage_entry_inputs[0], 0.25, rtol=0.0, atol=0.0)
+    assert len(captured_bracket_base_inputs) == 1
+    np.testing.assert_allclose(
+        captured_bracket_base_inputs[0],
+        stage_entry_inputs[0],
+        rtol=0.0,
+        atol=0.0,
+    )
     assert len(captured_brackets) == 1
     np.testing.assert_allclose(captured_brackets[0][0], 0.125, rtol=0.0, atol=0.0)
     np.testing.assert_allclose(captured_brackets[0][1], 0.25, rtol=0.0, atol=0.0)
     np.testing.assert_allclose(captured_brackets[0][2], 0.5, rtol=0.0, atol=0.0)
+    output = capsys.readouterr().out
+    assert "Auto-white-balance stage: disabled" in output
 
 
 def test_run_routes_auto_white_balance_to_post_merge_stage(

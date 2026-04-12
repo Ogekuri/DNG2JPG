@@ -6987,7 +6987,9 @@ def _apply_auto_white_balance_stage_float(
 ):
     """@brief Apply one auto-white-balance stage on one RGB float image.
 
-    @details Keeps the stage disabled when `white_balance_mode` is `None`.
+    @details Always executes stage entry on the supplied stage input. Begins by
+    validating whether `white_balance_mode` is enabled; when disabled, emits
+    deterministic disabled diagnostics and returns pass-through stage output.
     Otherwise computes one transient estimation image from the stage input:
     reuses the stage input directly when it is already auto-brightness-preprocessed,
     else applies the shared auto-brightness preprocessing algorithm. Then derives
@@ -6999,12 +7001,12 @@ def _apply_auto_white_balance_stage_float(
     @param white_balance_xphoto_domain {str} Xphoto estimation-domain selector in `{"linear","srgb","source-auto"}`.
     @param source_gamma_info {SourceGammaInfo|None} Source-gamma diagnostics used only when xphoto domain is `source-auto`.
     @param bits_per_color {int} Source DNG bit depth used for IA quantization settings.
-    @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
+    @param auto_adjust_dependencies {tuple[ModuleType|None, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
     @param estimation_input_is_auto_brightness_preprocessed {bool} `True` when stage input already includes auto-brightness and must be used directly as white-balance estimation payload.
     @return {object} RGB float image after optional auto-white-balance stage.
     @exception RuntimeError Raised when required dependencies are missing.
     @exception ValueError Raised when mode is unsupported.
-    @satisfies REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188, REQ-199, REQ-200, REQ-201, REQ-211, REQ-212, REQ-213
+    @satisfies REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188, REQ-199, REQ-200, REQ-201, REQ-211, REQ-212, REQ-213, REQ-236
     """
 
     if auto_adjust_dependencies is not None:
@@ -7020,6 +7022,7 @@ def _apply_auto_white_balance_stage_float(
         image_data=image_rgb_float,
     ).astype(np_module.float32, copy=False)
     if white_balance_mode is None:
+        print_info("Auto-white-balance stage: disabled")
         return stage_input_rgb
     if estimation_input_is_auto_brightness_preprocessed:
         estimation_image_rgb = stage_input_rgb
@@ -13032,7 +13035,7 @@ def _apply_validated_auto_adjust_pipeline(
     @param imageio_module {ModuleType|None} Optional imageio module used for debug TIFF checkpoint emission.
     @param debug_context {DebugArtifactContext|None} Optional persistent debug output metadata.
     @return {object} RGB float tensor after auto-adjust.
-    @satisfies REQ-051, REQ-075, REQ-106, REQ-123, REQ-136, REQ-137, REQ-148
+    @satisfies REQ-051, REQ-075, REQ-106, REQ-123, REQ-136, REQ-137, REQ-148, REQ-235
     """
 
     def _sanitize_auto_adjust_stage(stage_rgb):
@@ -13151,6 +13154,58 @@ def _apply_validated_auto_adjust_pipeline(
     return rgb_float
 
 
+def _apply_auto_adjust_stage_float(
+    image_rgb_float,
+    postprocess_options,
+    auto_adjust_dependencies,
+    np_module,
+    imageio_module=None,
+    debug_context=None,
+):
+    """@brief Execute auto-adjust stage entry with deterministic enable gating.
+
+    @details Always executes auto-adjust stage entry after auto-levels stage
+    handoff. Validates enable-state first; returns pass-through RGB float output
+    when disabled; raises deterministic dependency diagnostics when enabled but
+    dependencies are unavailable; delegates enabled processing to
+    `_apply_validated_auto_adjust_pipeline(...)` while preserving RGB float
+    interfaces.
+    @param image_rgb_float {object} RGB float stage input tensor.
+    @param postprocess_options {PostprocessOptions} Shared postprocess options containing auto-adjust state and knobs.
+    @param auto_adjust_dependencies {tuple[ModuleType|None, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
+    @param np_module {ModuleType} Imported numpy module used for pass-through normalization.
+    @param imageio_module {ModuleType|None} Optional imageio module used for debug TIFF checkpoint emission.
+    @param debug_context {DebugArtifactContext|None} Optional persistent debug output metadata.
+    @return {object} RGB float tensor after enabled auto-adjust processing or disabled pass-through.
+    @exception RuntimeError Raised when auto-adjust resolves to enabled but OpenCV/numpy dependencies are unavailable.
+    @satisfies REQ-106, REQ-123, REQ-234, REQ-235
+    """
+
+    stage_input_rgb = _ensure_three_channel_float_array_no_range_adjust(
+        np_module=np_module,
+        image_data=image_rgb_float,
+    ).astype(np_module.float32, copy=False)
+    if not postprocess_options.auto_adjust_enabled:
+        return stage_input_rgb
+    if auto_adjust_dependencies is None:
+        raise RuntimeError("Missing required dependencies: opencv-python and numpy")
+    cv2_module, auto_adjust_np_module = auto_adjust_dependencies
+    return _apply_validated_auto_adjust_pipeline(
+        image_rgb_float=stage_input_rgb,
+        cv2_module=cv2_module,
+        np_module=auto_adjust_np_module,
+        auto_adjust_options=postprocess_options.auto_adjust_options,
+        **(
+            {
+                "imageio_module": imageio_module,
+                "debug_context": debug_context,
+            }
+            if debug_context is not None
+            else {}
+        ),
+    )
+
+
 def _load_piexif_dependency():
     """@brief Resolve piexif runtime dependency for EXIF thumbnail refresh.
 
@@ -13187,8 +13242,9 @@ def _postprocess(
     caller, executes optional auto-white-balance stage unless pre-applied by the
     caller, executes static postprocess stage (numeric
     gamma/brightness/contrast/saturation or auto-gamma replacement), optional
-    auto-levels stage, and optional auto-adjust stage while preserving float
-    interfaces. When debug context is present, emits persistent TIFF16
+    auto-levels stage, and mandatory auto-adjust stage entry with internal
+    enable-state validation while preserving float interfaces. When debug
+    context is present, emits persistent TIFF16
     checkpoints after each executed stage and returns normalized RGB float
     output for final JPEG encoding.
     @param imageio_module {ModuleType} Imported imageio module used for debug TIFF checkpoint emission.
@@ -13201,7 +13257,7 @@ def _postprocess(
     @param debug_context {DebugArtifactContext|None} Optional persistent debug output metadata.
     @return {object} Postprocessed RGB float tensor in range `[0,1]`.
     @exception RuntimeError Raised when numpy or auto-adjust dependencies are missing.
-    @satisfies REQ-012, REQ-013, REQ-050, REQ-075, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-106, REQ-123, REQ-132, REQ-134, REQ-148, REQ-176, REQ-182, REQ-183, REQ-199, REQ-200, REQ-213, REQ-214
+    @satisfies REQ-012, REQ-013, REQ-050, REQ-075, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-106, REQ-123, REQ-132, REQ-134, REQ-148, REQ-176, REQ-182, REQ-183, REQ-199, REQ-200, REQ-213, REQ-214, REQ-234, REQ-235
     """
 
     if numpy_module is not None:
@@ -13285,24 +13341,14 @@ def _postprocess(
                 image_rgb_float=image_rgb_float,
             )
 
-    if postprocess_options.auto_adjust_enabled:
-        if auto_adjust_dependencies is None:
-            raise RuntimeError("Missing required dependencies: opencv-python and numpy")
-        cv2_module, np_module = auto_adjust_dependencies
-        image_rgb_float = _apply_validated_auto_adjust_pipeline(
-            image_rgb_float=image_rgb_float,
-            cv2_module=cv2_module,
-            np_module=np_module,
-            auto_adjust_options=postprocess_options.auto_adjust_options,
-            **(
-                {
-                    "imageio_module": imageio_module,
-                    "debug_context": debug_context,
-                }
-                if debug_context is not None
-                else {}
-            ),
-        )
+    image_rgb_float = _apply_auto_adjust_stage_float(
+        image_rgb_float=image_rgb_float,
+        postprocess_options=postprocess_options,
+        auto_adjust_dependencies=auto_adjust_dependencies,
+        np_module=np_module,
+        imageio_module=imageio_module,
+        debug_context=debug_context,
+    )
 
     return np_module.clip(image_rgb_float, 0.0, 1.0).astype(np_module.float32, copy=False)
 
@@ -13633,14 +13679,16 @@ def run(args):
     `--exposure=auto`) and `ev_delta` (iterative automatic when
     `--bracketing` is omitted, static `--bracketing=<value>`, or forced static
     `--bracketing=auto`), extracts one linear HDR base image
-    using selected RAW WB normalization mode, derives bracket payloads in canonical
-    order, executes the selected HDR backend with float input/output interfaces,
+    using selected RAW WB normalization mode, executes mandatory auto-white-balance
+    stage entry after auto-brightness with internal enable-state validation,
+    derives bracket payloads in canonical order, executes the selected HDR
+    backend with float input/output interfaces,
     executes the float-interface post-merge pipeline, optionally emits persistent
     debug TIFF checkpoints for executed stages, writes the final JPG, and guarantees
     temporary artifact cleanup through isolated temporary directory lifecycle.
     @param args {list[str]} Command argument vector excluding command token.
     @return {int} `0` on success; `1` on parse/validation/dependency/processing failure.
-    @satisfies PRJ-001, CTN-001, CTN-004, CTN-005, CTN-007, REQ-008, REQ-009, REQ-010, REQ-011, REQ-012, REQ-013, REQ-014, REQ-015, REQ-032, REQ-037, REQ-050, REQ-052, REQ-100, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-127, REQ-128, REQ-129, REQ-131, REQ-132, REQ-133, REQ-134, REQ-138, REQ-139, REQ-140, REQ-146, REQ-147, REQ-148, REQ-149, REQ-157, REQ-158, REQ-159, REQ-160, REQ-181, REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188, REQ-189, REQ-190, REQ-191, REQ-192, REQ-193, REQ-194, REQ-195, REQ-196, REQ-197, REQ-198, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207, REQ-215, REQ-216, REQ-217, REQ-218, REQ-219, REQ-220
+    @satisfies PRJ-001, CTN-001, CTN-004, CTN-005, CTN-007, REQ-008, REQ-009, REQ-010, REQ-011, REQ-012, REQ-013, REQ-014, REQ-015, REQ-032, REQ-037, REQ-050, REQ-052, REQ-100, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-127, REQ-128, REQ-129, REQ-131, REQ-132, REQ-133, REQ-134, REQ-138, REQ-139, REQ-140, REQ-146, REQ-147, REQ-148, REQ-149, REQ-157, REQ-158, REQ-159, REQ-160, REQ-181, REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188, REQ-189, REQ-190, REQ-191, REQ-192, REQ-193, REQ-194, REQ-195, REQ-196, REQ-197, REQ-198, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207, REQ-215, REQ-216, REQ-217, REQ-218, REQ-219, REQ-220, REQ-236
     """
 
     if not _is_supported_runtime_os():
@@ -13803,17 +13851,19 @@ def run(args):
                         image_rgb_float=base_rgb_float,
                         auto_brightness_options=postprocess_options.auto_brightness_options,
                     )
-                if postprocess_options.auto_white_balance_mode is not None:
-                    base_rgb_float = _apply_auto_white_balance_stage_float(
-                        image_rgb_float=base_rgb_float,
-                        white_balance_mode=postprocess_options.auto_white_balance_mode,
-                        auto_brightness_options=postprocess_options.auto_brightness_options,
-                        white_balance_xphoto_domain=postprocess_options.auto_white_balance_xphoto_domain,
-                        source_gamma_info=source_gamma_info,
-                        bits_per_color=bits_per_color,
-                        auto_adjust_dependencies=auto_adjust_dependencies,
-                        estimation_input_is_auto_brightness_preprocessed=postprocess_options.auto_brightness_enabled,
-                    )
+                white_balance_stage_dependencies = auto_adjust_dependencies
+                if white_balance_stage_dependencies is None:
+                    white_balance_stage_dependencies = (None, numpy_module)
+                base_rgb_float = _apply_auto_white_balance_stage_float(
+                    image_rgb_float=base_rgb_float,
+                    white_balance_mode=postprocess_options.auto_white_balance_mode,
+                    auto_brightness_options=postprocess_options.auto_brightness_options,
+                    white_balance_xphoto_domain=postprocess_options.auto_white_balance_xphoto_domain,
+                    source_gamma_info=source_gamma_info,
+                    bits_per_color=bits_per_color,
+                    auto_adjust_dependencies=white_balance_stage_dependencies,
+                    estimation_input_is_auto_brightness_preprocessed=postprocess_options.auto_brightness_enabled,
+                )
                 if auto_ev_zero_enabled and auto_ev_delta_enabled:
                     if enable_opencv_tonemap:
                         if auto_adjust_dependencies is None:
@@ -14025,9 +14075,7 @@ def run(args):
             encode_postprocess_options = replace(
                 postprocess_options,
                 auto_brightness_pre_applied=postprocess_options.auto_brightness_enabled,
-                auto_white_balance_pre_applied=(
-                    postprocess_options.auto_white_balance_mode is not None
-                ),
+                auto_white_balance_pre_applied=True,
             )
             postprocessed_image_float = _postprocess(
                 imageio_module=imageio_module,
