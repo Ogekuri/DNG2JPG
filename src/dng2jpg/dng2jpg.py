@@ -2115,12 +2115,14 @@ def _extract_normalized_preview_luminance_stats(raw_handle):
 
     @details Generates one deterministic linear preview (`bright=1.0`,
     `output_bps=16`, camera white balance, no auto-bright, linear gamma,
-    `user_flip=0`), computes luminance for each pixel, then returns normalized
-    low/median/high percentiles by dividing with preview maximum luminance.
+    `user_flip=0`), rejects non-finite luminance samples, computes finite
+    low/median/high percentiles, normalizes by finite positive maximum
+    luminance, and raises deterministic diagnostics when normalized statistics
+    are non-finite. Complexity: O(N log N). Side effects: none.
     @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
     @return {tuple[float, float, float]} Normalized `(p_low, p_median, p_high)` in `(0,1)`.
-    @exception ValueError Raised when preview extraction cannot produce valid luminance values.
-    @satisfies REQ-009
+    @exception ValueError Raised when finite luminance samples or normalized finite statistics are unavailable.
+    @satisfies REQ-009, REQ-222, REQ-229
     """
 
     linear_preview = raw_handle.postprocess(
@@ -2138,8 +2140,8 @@ def _extract_normalized_preview_luminance_stats(raw_handle):
             green = _coerce_positive_luminance(pixel[1], 0.0)
             blue = _coerce_positive_luminance(pixel[2], 0.0)
             luminance = (0.2126 * red) + (0.7152 * green) + (0.0722 * blue)
-            if luminance > 0.0:
-                flat_luminance.append(luminance)
+            if math.isfinite(luminance) and luminance > 0.0:
+                flat_luminance.append(float(luminance))
     if not flat_luminance:
         raise ValueError("Adaptive preview produced no valid luminance values")
     flat_luminance.sort()
@@ -2160,13 +2162,23 @@ def _extract_normalized_preview_luminance_stats(raw_handle):
     p_high_raw = _percentile(99.9)
 
     max_luminance = max(flat_luminance)
-    if max_luminance <= 0.0:
-        raise ValueError("Adaptive preview maximum luminance is not positive")
+    if not math.isfinite(max_luminance) or max_luminance <= 0.0:
+        raise ValueError("Adaptive preview maximum luminance is non-finite or non-positive")
 
     epsilon = 1e-9
-    p_low = max(epsilon, min(1.0 - epsilon, p_low_raw / max_luminance))
-    p_high = max(epsilon, min(1.0 - epsilon, p_high_raw / max_luminance))
-    p_median = max(epsilon, min(1.0 - epsilon, p_median_raw / max_luminance))
+
+    def _normalize_percentile(stat_name, stat_value):
+        normalized_value = float(stat_value) / max_luminance
+        if not math.isfinite(normalized_value):
+            raise ValueError(
+                "Adaptive preview normalized statistic is non-finite "
+                f"[{stat_name}]={normalized_value!r}"
+            )
+        return max(epsilon, min(1.0 - epsilon, normalized_value))
+
+    p_low = _normalize_percentile("p_low", p_low_raw)
+    p_high = _normalize_percentile("p_high", p_high_raw)
+    p_median = _normalize_percentile("p_median", p_median_raw)
     return (p_low, p_median, p_high)
 
 
@@ -2709,21 +2721,22 @@ def _describe_source_gamma_info(source_gamma_info):
 
 
 def _coerce_positive_luminance(value, fallback):
-    """@brief Coerce luminance scalar to positive range for logarithmic math.
+    """@brief Coerce luminance scalar to finite positive range for logarithmic math.
 
-    @details Converts input to float and enforces a strictly positive minimum.
-    Returns fallback when conversion fails or result is non-positive.
+    @details Converts input to float, rejects non-finite or non-positive values,
+    and returns fallback when conversion fails or finite-positive constraints are
+    not satisfied. Complexity: O(1). Side effects: none.
     @param value {object} Candidate luminance scalar.
-    @param fallback {float} Fallback positive luminance scalar.
-    @return {float} Positive luminance value suitable for `log2`.
-    @satisfies REQ-031
+    @param fallback {float} Fallback luminance scalar returned on invalid input.
+    @return {float} Finite positive luminance value suitable for `log2`, or fallback.
+    @satisfies REQ-031, REQ-222
     """
 
     try:
         numeric_value = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return fallback
-    if numeric_value <= 0.0:
+    if not math.isfinite(numeric_value) or numeric_value <= 0.0:
         return fallback
     return numeric_value
 
@@ -2819,57 +2832,87 @@ def _calculate_entropy_optimized_ev(_cv2_module, np_module, luminance_float):
 def _calculate_ettr_ev(np_module, luminance_float):
     """@brief Compute the ETTR EV candidate on linear luminance.
 
-    @details Evaluates the `99`th percentile of normalized linear luminance,
-    targets that percentile to `0.90`, computes `log2(target/L99)`, and returns
-    the result rounded to one decimal place. Fully black inputs return `0.0`.
-    Complexity: O(H*W log(H*W)) due to percentile extraction. Side effects:
+    @details Extracts finite luminance samples locally, computes the finite `99`th
+    percentile, evaluates `log2(0.90/L99)`, and returns a one-decimal EV value.
+    Returns deterministic fallback `0.0` when finite samples are unavailable or
+    intermediate values are non-finite. Complexity: O(N log N). Side effects:
     none.
     @param np_module {ModuleType} Imported numpy module.
     @param luminance_float {object} Linear luminance tensor normalized to `[0,1]`.
     @return {float} ETTR EV candidate rounded to one decimal place.
-    @satisfies REQ-032
+    @satisfies REQ-032, REQ-228
     """
 
-    luminance_p99 = float(np_module.percentile(luminance_float, 99.0))
-    if luminance_p99 <= 0.0:
+    luminance_array = np_module.asarray(luminance_float, dtype=np_module.float64)
+    finite_samples = luminance_array[np_module.isfinite(luminance_array)]
+    if finite_samples.size == 0:
         return 0.0
-    return round(math.log2(0.90 / luminance_p99), 1)
+    luminance_p99 = float(np_module.percentile(finite_samples, 99.0))
+    if not math.isfinite(luminance_p99) or luminance_p99 <= 0.0:
+        return 0.0
+    ev_value = math.log2(0.90 / luminance_p99)
+    if not math.isfinite(ev_value):
+        return 0.0
+    return round(ev_value, 1)
 
 
 def _calculate_detail_preservation_ev(_cv2_module, np_module, luminance_float):
     """@brief Compute the detail-preservation EV candidate on linear luminance.
 
-    @details Builds local-detail weights from Sobel gradients on
-    `log(luminance+eps)`, suppresses flat regions below the `40`th percentile,
-    estimates a heuristic noise floor from the `1`st percentile, sweeps EV in
-    `[-3.0,+3.0]` with step `0.1`, and maximizes preserved weighted detail while
-    penalizing highlight clipping and shadow crushing. Returns the best EV
-    rounded to one decimal place. Complexity: O(K*H*W)` where `K=61`. Side
-    effects: none.
+    @details Sanitizes non-finite luminance samples locally, derives gradient-
+    weighted detail maps from finite `log(luminance+eps)` values, evaluates EV
+    sweep `[-3.0,+3.0]` with step `0.1`, and returns the best one-decimal EV.
+    Returns deterministic fallback `0.0` when finite samples are unavailable or
+    scoring becomes non-finite. Complexity: O(K*N) where `K=61`. Side effects:
+    none.
     @param cv2_module {ModuleType} Imported OpenCV module.
     @param np_module {ModuleType} Imported numpy module.
     @param luminance_float {object} Linear luminance tensor normalized to `[0,1]`.
     @return {float} Detail-preservation EV candidate rounded to one decimal place.
-    @satisfies REQ-032
+    @satisfies REQ-032, REQ-228
     """
 
-    luminance_float32 = np_module.array(luminance_float, dtype=np_module.float32, copy=False)
+    luminance_float32 = np_module.asarray(luminance_float, dtype=np_module.float32)
+    if luminance_float32.size == 0:
+        return 0.0
+    finite_mask = np_module.isfinite(luminance_float32)
+    if not bool(np_module.any(finite_mask)):
+        return 0.0
+    luminance_float32 = np_module.where(finite_mask, luminance_float32, 0.0)
+    luminance_float32 = np_module.maximum(luminance_float32, 0.0).astype(
+        np_module.float32,
+        copy=False,
+    )
     epsilon = 1e-6
     log_luminance = np_module.log(luminance_float32 + epsilon)
-    if min(log_luminance.shape) < 2:
+    log_luminance = np_module.where(np_module.isfinite(log_luminance), log_luminance, 0.0)
+    if log_luminance.ndim < 2 or min(log_luminance.shape) < 2:
         detail_map = np_module.zeros_like(log_luminance, dtype=np_module.float32)
     else:
         gradient_y, gradient_x = np_module.gradient(log_luminance)
         detail_map = np_module.sqrt((gradient_x * gradient_x) + (gradient_y * gradient_y))
-    texture_threshold = float(np_module.percentile(detail_map, 40.0))
+    detail_map = np_module.where(np_module.isfinite(detail_map), detail_map, 0.0).astype(
+        np_module.float32
+    )
+    finite_detail_samples = detail_map[np_module.isfinite(detail_map)]
+    texture_threshold = 0.0
+    if finite_detail_samples.size > 0:
+        texture_threshold = float(np_module.percentile(finite_detail_samples, 40.0))
+    if not math.isfinite(texture_threshold):
+        texture_threshold = 0.0
     detail_map = np_module.where(detail_map >= texture_threshold, detail_map, 0.0).astype(
         np_module.float32
     )
-    detail_sum = float(detail_map.sum())
-    if detail_sum <= 0.0:
+    detail_sum = float(np_module.sum(detail_map, dtype=np_module.float64))
+    if not math.isfinite(detail_sum) or detail_sum <= 0.0:
         return 0.0
     weights = detail_map / (detail_sum + epsilon)
-    p1 = float(np_module.percentile(luminance_float32, 1.0))
+    finite_luminance_samples = luminance_float32[np_module.isfinite(luminance_float32)]
+    if finite_luminance_samples.size == 0:
+        return 0.0
+    p1 = float(np_module.percentile(finite_luminance_samples, 1.0))
+    if not math.isfinite(p1):
+        p1 = 0.0
     noise_floor = float(np_module.clip(max(0.005, p1 * 0.5), 0.005, 0.02))
     shadow_target = max(noise_floor + 0.03, 0.05)
     highlight_knee = 0.98
@@ -2880,6 +2923,7 @@ def _calculate_detail_preservation_ev(_cv2_module, np_module, luminance_float):
     candidate_values = np_module.arange(-3.0, 3.1, 0.1, dtype=np_module.float32)
     for ev_value in candidate_values:
         simulated = luminance_float32 * (2.0 ** float(ev_value))
+        simulated = np_module.where(np_module.isfinite(simulated), simulated, 0.0)
         shadow_weight = _smoothstep(
             np_module=np_module,
             values=simulated,
@@ -2892,15 +2936,23 @@ def _calculate_detail_preservation_ev(_cv2_module, np_module, luminance_float):
             edge0=highlight_knee,
             edge1=1.0,
         )
-        preserved_detail = float(np_module.sum(weights * shadow_weight * highlight_weight))
-        clipped_fraction = float(np_module.sum(weights[simulated >= 1.0]))
-        crushed_fraction = float(np_module.sum(weights[simulated <= noise_floor]))
+        preserved_detail = float(
+            np_module.sum(weights * shadow_weight * highlight_weight, dtype=np_module.float64)
+        )
+        clipped_fraction = float(np_module.sum(weights[simulated >= 1.0], dtype=np_module.float64))
+        crushed_fraction = float(
+            np_module.sum(weights[simulated <= noise_floor], dtype=np_module.float64)
+        )
         score = preserved_detail - (lambda_high * clipped_fraction) - (
             lambda_shadow * crushed_fraction
         )
+        if not math.isfinite(score):
+            continue
         if score > best_score:
             best_score = score
             best_ev = float(ev_value)
+    if not math.isfinite(best_score):
+        return 0.0
     return round(best_ev, 1)
 
 
@@ -6082,22 +6134,70 @@ def _sync_output_file_timestamps_from_exif(output_jpg, exif_timestamp):
     _set_output_file_timestamps(output_jpg=output_jpg, exif_timestamp=exif_timestamp)
 
 
+def _safe_pow2_ev(exponent, context):
+    """@brief Compute `2**EV` with deterministic finite and overflow validation.
+
+    @details Converts `exponent` to float, rejects non-finite values, executes
+    `2**exponent` with overflow handling, validates that the multiplier is
+    finite and strictly positive, and emits context-specific deterministic
+    `ValueError` diagnostics for grep-friendly processing traces. Complexity:
+    O(1). Side effects: none.
+    @param exponent {object} EV exponent candidate consumed by `2**EV`.
+    @param context {str} Deterministic call-site token for diagnostics.
+    @return {float} Positive finite multiplier resolved from `2**EV`.
+    @exception ValueError Raised when exponent parsing fails, exponent is non-finite, overflow occurs, or multiplier is non-finite/non-positive.
+    @satisfies REQ-227
+    """
+
+    try:
+        numeric_exponent = float(exponent)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError(f"EV scaling failed [{context}]: invalid exponent={exponent!r}") from error
+    if not math.isfinite(numeric_exponent):
+        raise ValueError(
+            f"EV scaling failed [{context}]: non-finite exponent={numeric_exponent!r}"
+        )
+    try:
+        multiplier = float(2.0**numeric_exponent)
+    except OverflowError as error:
+        raise ValueError(
+            f"EV scaling failed [{context}]: overflow exponent={numeric_exponent!r}"
+        ) from error
+    if not math.isfinite(multiplier) or multiplier <= 0.0:
+        raise ValueError(
+            "EV scaling failed "
+            f"[{context}]: non-finite-or-non-positive multiplier={multiplier!r} "
+            f"exponent={numeric_exponent!r}"
+        )
+    return multiplier
+
+
 def _build_exposure_multipliers(ev_value, ev_zero=0.0):
     """@brief Compute bracketing brightness multipliers from EV delta and center.
 
     @details Produces exactly three multipliers mapped to exposure stops
-    `[ev_zero-ev, ev_zero, ev_zero+ev]` as powers of two for float-domain HDR
-    base-image scaling.
+    `[ev_zero-ev, ev_zero, ev_zero+ev]` using `_safe_pow2_ev(...)` so
+    overflow/non-finite EV scaling fails fast with deterministic diagnostics.
     @param ev_value {float} Exposure bracket EV delta.
     @param ev_zero {float} Central bracket EV value.
     @return {tuple[float, float, float]} Multipliers in order `(under, base, over)`.
-    @satisfies REQ-009, REQ-159, REQ-160
+    @exception ValueError Raised when any EV scaling exponent is invalid or non-representable.
+    @satisfies REQ-009, REQ-159, REQ-160, REQ-227
     """
 
     return (
-        2 ** (ev_zero - ev_value),
-        2**ev_zero,
-        2 ** (ev_zero + ev_value),
+        _safe_pow2_ev(
+            ev_zero - ev_value,
+            context="exposure_multipliers_ev_minus",
+        ),
+        _safe_pow2_ev(
+            ev_zero,
+            context="exposure_multipliers_ev_zero",
+        ),
+        _safe_pow2_ev(
+            ev_zero + ev_value,
+            context="exposure_multipliers_ev_plus",
+        ),
     )
 
 
@@ -6139,20 +6239,24 @@ def _build_white_balance_analysis_image_from_linear_base_float(
     """@brief Build unclipped white-balance analysis image from linear base and EV center.
 
     @details Converts the shared linear base tensor to RGB float without range
-    clipping and multiplies it by `2^ev_zero` to produce one unclipped analysis
-    payload independent from bracket clipping side effects.
+    clipping and scales it by `_safe_pow2_ev(ev_zero, ...)` so analysis-image EV
+    scaling rejects non-finite and overflow cases deterministically.
     @param np_module {ModuleType} Imported numpy module.
     @param base_rgb_float {object} Shared linear base RGB tensor.
     @param ev_zero {float} Resolved center EV.
     @return {object} RGB float32 analysis image without stage-local clipping.
-    @satisfies REQ-183, REQ-200
+    @exception ValueError Raised when center EV scaling exponent is invalid or non-representable.
+    @satisfies REQ-183, REQ-200, REQ-227
     """
 
     normalized_base = _ensure_three_channel_float_array_no_range_adjust(
         np_module=np_module,
         image_data=base_rgb_float,
     ).astype(np_module.float64, copy=False)
-    center_multiplier = float(2 ** float(ev_zero))
+    center_multiplier = _safe_pow2_ev(
+        ev_zero,
+        context="white_balance_analysis_ev_zero",
+    )
     return (normalized_base * center_multiplier).astype(np_module.float32, copy=False)
 
 
@@ -7278,13 +7382,15 @@ def _build_opencv_radiance_exposure_times(
     extracted RAW EXIF `ExposureTime` associated with the linear base image and
     maps them to bracket order `(ev_minus, ev_zero, ev_plus)` as
     `t_raw*2^(ev_zero-ev_delta)`, `t_raw*2^ev_zero`, and `t_raw*2^(ev_zero+ev_delta)`.
+    Uses `_safe_pow2_ev(...)` so non-finite or overflowing EV scaling fails fast
+    with deterministic diagnostics.
     @param source_exposure_time_seconds {float} Positive source EXIF exposure time in seconds.
     @param ev_zero {float} Central EV used during bracket extraction.
     @param ev_delta {float} EV bracket delta used during bracket extraction.
     @return {object} `numpy.float32` vector with length `3`.
     @exception RuntimeError Raised when numpy dependency is unavailable.
-    @exception ValueError Raised when source exposure time is missing or invalid.
-    @satisfies REQ-109, REQ-142, REQ-161
+    @exception ValueError Raised when source exposure time is missing/invalid or EV scaling is non-representable.
+    @satisfies REQ-109, REQ-142, REQ-161, REQ-227
     """
 
     try:
@@ -7294,11 +7400,23 @@ def _build_opencv_radiance_exposure_times(
     if source_exposure_time_seconds is None or float(source_exposure_time_seconds) <= 0.0:
         raise ValueError("Missing valid EXIF ExposureTime for OpenCV radiance merge")
     exposure_seconds = float(source_exposure_time_seconds)
+    ev_minus_multiplier = _safe_pow2_ev(
+        ev_zero - ev_delta,
+        context="opencv_radiance_times_ev_minus",
+    )
+    ev_zero_multiplier = _safe_pow2_ev(
+        ev_zero,
+        context="opencv_radiance_times_ev_zero",
+    )
+    ev_plus_multiplier = _safe_pow2_ev(
+        ev_zero + ev_delta,
+        context="opencv_radiance_times_ev_plus",
+    )
     return np_module.array(
         [
-            exposure_seconds * (2 ** (ev_zero - ev_delta)),
-            exposure_seconds * (2**ev_zero),
-            exposure_seconds * (2 ** (ev_zero + ev_delta)),
+            exposure_seconds * ev_minus_multiplier,
+            exposure_seconds * ev_zero_multiplier,
+            exposure_seconds * ev_plus_multiplier,
         ],
         dtype=np_module.float32,
     )
@@ -13267,7 +13385,13 @@ def _collect_processing_errors(rawpy_module):
     @satisfies REQ-059
     """
 
-    classes = [OSError, ValueError, RuntimeError, subprocess.CalledProcessError]
+    classes = [
+        OSError,
+        OverflowError,
+        ValueError,
+        RuntimeError,
+        subprocess.CalledProcessError,
+    ]
     for class_name in (
         "LibRawError",
         "LibRawFileUnsupportedError",
