@@ -42,7 +42,7 @@
 - id: PROC:pipeline-test-runner
   - type: process
   - parent_process: null
-  - role: Shell matrix runner invoking `scripts/d2j.sh` across pipeline profiles.
+  - role: Shell matrix runner invoking `scripts/d2j.sh` across pipeline profiles and fixed default-stage variants.
   - entrypoint_symbols:
     - main(...)
   - defining_files:
@@ -50,7 +50,7 @@
 - id: THR:PROC:pipeline-test-runner#main-thread
   - type: thread
   - parent_process: PROC:pipeline-test-runner
-  - role: Single shell execution thread for matrix option parsing and case dispatch.
+  - role: Single shell execution thread for input validation, help handling, and case dispatch.
   - entrypoint_symbols:
     - main(...)
     - run_pipeline_case(...)
@@ -134,16 +134,14 @@
 
 ### PROC:pipeline-test-runner
 - Entrypoint(s):
-  - main(...): parse matrix toggles, validate DNG input, and dispatch all required pipeline cases [scripts/test_all_pipeline.sh]
+  - main(...): parse help-only options, validate DNG input, and dispatch backend plus fixed default-stage cases [scripts/test_all_pipeline.sh]
 - Lifecycle/trigger:
   - Triggered when `scripts/test_all_pipeline.sh` is executed.
   - Executes one deterministic pipeline matrix for one input DNG.
   - No explicit threads detected beyond main thread.
 - Internal Call-Trace Tree:
-  - main(...): parse CLI toggles, validate paths, and dispatch matrix [scripts/test_all_pipeline.sh]
+  - main(...): parse help-only CLI options, validate paths, and dispatch matrix [scripts/test_all_pipeline.sh]
     - run_pipeline_case(...): execute one profile invocation with deterministic output suffix [scripts/test_all_pipeline.sh]
-      - append_common_stage_options(...): append enabled stage flags and suffix tokens [scripts/test_all_pipeline.sh]
-        - sanitize_suffix_token(...): normalize suffix token text [scripts/test_all_pipeline.sh]
 - External Boundaries:
   - readlink/dirname/basename/tr shell utilities.
   - `scripts/d2j.sh` process invocation.
@@ -409,7 +407,7 @@
   - source: PROC:pipeline-test-runner
   - destination: PROC:launcher
   - mechanism: repeated shell process invocation of `scripts/d2j.sh` per pipeline profile.
-  - endpoint_channel: launcher argv handoff (`input.dng`, `output.jpg`, profile options, optional stage toggles).
+  - endpoint_channel: launcher argv handoff (`input.dng`, `output.jpg`, and per-case profile options).
   - payload_data_shape: deterministic per-case CLI vector containing one output-suffix profile identifier.
   - declaration_files:
     - scripts/test_all_pipeline.sh
