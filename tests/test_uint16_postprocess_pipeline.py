@@ -2385,6 +2385,19 @@ def test_collect_missing_external_executables_reports_luminance_dependency(
     assert missing == ("luminance-hdr-cli",)
 
 
+def test_collect_processing_errors_includes_overflowerror() -> None:
+    """Recoverable processing errors must include `OverflowError` safety guard."""
+
+    class _RawpyWithoutCustomErrors:
+        """Minimal rawpy stub exposing no optional LibRaw exception subclasses."""
+
+    processing_errors = dng2jpg_module._collect_processing_errors(  # pylint: disable=protected-access
+        rawpy_module=_RawpyWithoutCustomErrors(),
+    )
+
+    assert OverflowError in processing_errors
+
+
 def test_build_ev_times_from_ev_zero_and_delta_matches_bracket_sequence() -> None:
     """EV times helper must generate three deterministic stop-space samples."""
 
@@ -2400,6 +2413,35 @@ def test_build_ev_times_from_ev_zero_and_delta_matches_bracket_sequence() -> Non
         rtol=1e-6,
         atol=1e-6,
     )
+
+
+def test_build_exposure_multipliers_rejects_overflowing_ev_scaling() -> None:
+    """Static EV multipliers must fail fast on non-representable `2**EV` values."""
+
+    try:
+        dng2jpg_module._build_exposure_multipliers(  # pylint: disable=protected-access
+            ev_value=1024.0,
+            ev_zero=0.0,
+        )
+    except ValueError as error:
+        assert "EV scaling failed [exposure_multipliers_ev_plus]" in str(error)
+    else:
+        raise AssertionError("Expected ValueError for overflowing exposure multipliers")
+
+
+def test_build_opencv_radiance_exposure_times_rejects_overflowing_ev_scaling() -> None:
+    """OpenCV radiance exposure times must fail fast on overflowed EV scaling."""
+
+    try:
+        dng2jpg_module._build_opencv_radiance_exposure_times(  # pylint: disable=protected-access
+            source_exposure_time_seconds=1.0,
+            ev_zero=1024.0,
+            ev_delta=0.0,
+        )
+    except ValueError as error:
+        assert "EV scaling failed [opencv_radiance_times_ev_minus]" in str(error)
+    else:
+        raise AssertionError("Expected ValueError for overflowing OpenCV radiance times")
 
 
 def test_run_luminance_hdr_cli_prints_full_command_syntax(
@@ -6289,6 +6331,141 @@ def test_ensure_three_channel_float_array_no_range_adjust_sanitizes_non_finite_p
         rtol=0.0,
         atol=1e-8,
     )
+
+
+def test_coerce_positive_luminance_rejects_non_finite_values() -> None:
+    """Preview luminance coercion must route NaN/Inf values to deterministic fallback."""
+
+    fallback = 0.125
+    assert (
+        dng2jpg_module._coerce_positive_luminance(float("nan"), fallback)  # pylint: disable=protected-access
+        == fallback
+    )
+    assert (
+        dng2jpg_module._coerce_positive_luminance(float("inf"), fallback)  # pylint: disable=protected-access
+        == fallback
+    )
+    assert (
+        dng2jpg_module._coerce_positive_luminance(float("-inf"), fallback)  # pylint: disable=protected-access
+        == fallback
+    )
+    assert (
+        dng2jpg_module._coerce_positive_luminance(0.5, fallback)  # pylint: disable=protected-access
+        == 0.5
+    )
+
+
+def test_extract_normalized_preview_luminance_stats_filters_non_finite_samples() -> None:
+    """Preview luminance statistics must return finite normalized output for mixed input."""
+
+    class _FakeRawHandle:
+        """Minimal rawpy-like handle returning deterministic preview tensors."""
+
+        def __init__(self, preview_rgb: np.ndarray) -> None:
+            self._preview_rgb = np.array(preview_rgb, copy=True)
+
+        def postprocess(self, **_kwargs) -> np.ndarray:
+            return np.array(self._preview_rgb, copy=True)
+
+    preview_rgb = np.array(
+        [[[np.inf, 1.0, 0.9], [0.4, 0.5, 0.6], [np.nan, -np.inf, 0.2]]],
+        dtype=np.float32,
+    )
+
+    p_low, p_median, p_high = dng2jpg_module._extract_normalized_preview_luminance_stats(  # pylint: disable=protected-access
+        raw_handle=_FakeRawHandle(preview_rgb=preview_rgb),
+    )
+
+    assert bool(np.isfinite(p_low))
+    assert bool(np.isfinite(p_median))
+    assert bool(np.isfinite(p_high))
+    assert 0.0 < p_low < 1.0
+    assert 0.0 < p_median < 1.0
+    assert 0.0 < p_high < 1.0
+
+
+def test_extract_normalized_preview_luminance_stats_rejects_all_non_finite_samples() -> None:
+    """Preview luminance statistics must fail fast when finite samples are unavailable."""
+
+    class _FakeRawHandle:
+        """Minimal rawpy-like handle returning deterministic preview tensors."""
+
+        def __init__(self, preview_rgb: np.ndarray) -> None:
+            self._preview_rgb = np.array(preview_rgb, copy=True)
+
+        def postprocess(self, **_kwargs) -> np.ndarray:
+            return np.array(self._preview_rgb, copy=True)
+
+    preview_rgb = np.array(
+        [[[np.nan, np.inf, -np.inf], [np.nan, np.inf, -np.inf]]],
+        dtype=np.float32,
+    )
+
+    try:
+        dng2jpg_module._extract_normalized_preview_luminance_stats(  # pylint: disable=protected-access
+            raw_handle=_FakeRawHandle(preview_rgb=preview_rgb),
+        )
+    except ValueError as error:
+        assert "Adaptive preview produced no valid luminance values" in str(error)
+    else:
+        raise AssertionError("Expected ValueError for preview payload without finite samples")
+
+
+def test_calculate_ettr_ev_returns_zero_for_all_non_finite_samples() -> None:
+    """ETTR evaluator must provide deterministic finite fallback for non-finite input."""
+
+    luminance = np.array(
+        [[np.nan, np.inf], [-np.inf, np.nan]],
+        dtype=np.float32,
+    )
+
+    ev_value = dng2jpg_module._calculate_ettr_ev(  # pylint: disable=protected-access
+        np_module=np,
+        luminance_float=luminance,
+    )
+
+    assert ev_value == 0.0
+    assert bool(np.isfinite(ev_value))
+
+
+def test_calculate_detail_preservation_ev_returns_zero_for_all_non_finite_samples() -> None:
+    """Detail evaluator must provide deterministic finite fallback for non-finite input."""
+
+    luminance = np.array(
+        [[np.nan, np.inf], [-np.inf, np.nan]],
+        dtype=np.float32,
+    )
+
+    ev_value = dng2jpg_module._calculate_detail_preservation_ev(  # pylint: disable=protected-access
+        _cv2_module=None,
+        np_module=np,
+        luminance_float=luminance,
+    )
+
+    assert ev_value == 0.0
+    assert bool(np.isfinite(ev_value))
+
+
+def test_ev_evaluators_keep_finite_outputs_with_mixed_non_finite_samples() -> None:
+    """EV evaluators must produce finite values when mixed finite/non-finite samples exist."""
+
+    luminance = np.array(
+        [[0.1, np.nan], [np.inf, 0.8]],
+        dtype=np.float32,
+    )
+
+    ev_ettr = dng2jpg_module._calculate_ettr_ev(  # pylint: disable=protected-access
+        np_module=np,
+        luminance_float=luminance,
+    )
+    ev_detail = dng2jpg_module._calculate_detail_preservation_ev(  # pylint: disable=protected-access
+        _cv2_module=None,
+        np_module=np,
+        luminance_float=luminance,
+    )
+
+    assert bool(np.isfinite(ev_ettr))
+    assert bool(np.isfinite(ev_detail))
 
 
 def test_resolve_auto_ev_delta_rejects_all_non_finite_base_rgb() -> None:

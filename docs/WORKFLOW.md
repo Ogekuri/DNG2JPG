@@ -1,5 +1,21 @@
 ## Execution Units Index
 
+## Behavioral Notes (2026-04-12)
+
+- EV-dependent multiplier generation is now centralized through
+  `_safe_pow2_ev(...)` so all `2**EV` scaling paths reject non-finite
+  exponents, overflowed powers, and non-positive/non-finite multipliers with
+  deterministic `ValueError` diagnostics.
+- Preview luminance normalization now filters non-finite samples before
+  percentile extraction and raises deterministic errors when normalized
+  statistics become non-finite or no valid samples remain.
+- Automatic EV evaluators (`_calculate_ettr_ev(...)`,
+  `_calculate_detail_preservation_ev(...)`) now sanitize non-finite inputs
+  locally and fall back deterministically to `0.0` when finite scoring is not
+  possible.
+- Recoverable processing-error aggregation now includes `OverflowError` for
+  EV-scaling failure propagation in runtime error handling.
+
 ## Behavioral Notes (2026-04-11)
 
 - Float-stage ingress sanitization is now centralized through
@@ -212,13 +228,16 @@
             - _compress_xphoto_estimation_payload_highlights_soft_knee(...): monotonic highlight shoulder compression [src/dng2jpg/dng2jpg.py]
             - _quantize_xphoto_estimation_payload_rgb(...): backend-local quantization (`uint8|uint16`) [src/dng2jpg/dng2jpg.py]
       - _resolve_joint_auto_ev_solution(...): joint auto EV center+delta resolution when both `--exposure=auto` and `--bracketing=auto` for non-OpenCV-Tonemap backends [src/dng2jpg/dng2jpg.py]
-        - _calculate_auto_zero_evaluations(...): EV quality measurements [src/dng2jpg/dng2jpg.py]
+        - _calculate_auto_zero_evaluations(...): EV quality measurements with finite-safe heuristics [src/dng2jpg/dng2jpg.py]
+          - _calculate_ettr_ev(...): ETTR heuristic with finite-sample filtering and deterministic `0.0` fallback [src/dng2jpg/dng2jpg.py]
+          - _calculate_detail_preservation_ev(...): detail heuristic with non-finite sanitization and deterministic `0.0` fallback [src/dng2jpg/dng2jpg.py]
         - _select_ev_zero_candidate(evaluations): EV center selection as signed numeric minimum across `ev_best`, `ev_ettr`, `ev_detail` [src/dng2jpg/dng2jpg.py]
         - _resolve_auto_ev_delta(...): iterative bracket half-span expansion algorithm [src/dng2jpg/dng2jpg.py]
       - _resolve_auto_ev_delta(...): standalone auto EV delta resolution when only `--bracketing=auto` (without `--exposure=auto`) and backend is not OpenCV-Tonemap [src/dng2jpg/dng2jpg.py]
       - _resolve_opencv_tonemap_auto_ev_delta(): OpenCV-Tonemap auto-bracketing fixed half-span resolver with skip diagnostics [src/dng2jpg/dng2jpg.py]
       - _print_forced_static_auto_bracketing_diagnostics(...): explicit `--bracketing=auto` static-half-span diagnostics [src/dng2jpg/dng2jpg.py]
-      - _build_exposure_multipliers(ev_value, ev_zero): EV triplet multipliers [src/dng2jpg/dng2jpg.py]
+      - _build_exposure_multipliers(ev_value, ev_zero): EV triplet multipliers with finite-safe exponentiation guard [src/dng2jpg/dng2jpg.py]
+        - _safe_pow2_ev(exponent, context): deterministic `2**EV` finite/overflow validator [src/dng2jpg/dng2jpg.py]
       - _extract_bracket_images_float(...): bracket extraction with optional side-bracket bypass for OpenCV-Tonemap [src/dng2jpg/dng2jpg.py]
         - _build_bracket_images_from_linear_base_float(...): synthetic bracket synthesis [src/dng2jpg/dng2jpg.py]
       - _run_luminance_hdr_cli(...): luminance-hdr-cli merge backend [src/dng2jpg/dng2jpg.py]
@@ -227,6 +246,7 @@
         - _format_external_command_for_log(command): command log formatting [src/dng2jpg/dng2jpg.py]
       - _run_opencv_merge_backend(...): OpenCV merge backend [src/dng2jpg/dng2jpg.py]
         - _run_opencv_merge_radiance(...): Debevec/Robertson merge path [src/dng2jpg/dng2jpg.py]
+          - _build_opencv_radiance_exposure_times(...): finite-safe exposure-time vector builder from EXIF and EV offsets [src/dng2jpg/dng2jpg.py]
         - _run_opencv_merge_mertens(...): Mertens merge path [src/dng2jpg/dng2jpg.py]
         - _apply_merge_gamma_float(...): transfer conversion to linearized merge domain [src/dng2jpg/dng2jpg.py]
       - _run_opencv_tonemap_backend(...): OpenCV tonemap backend [src/dng2jpg/dng2jpg.py]
