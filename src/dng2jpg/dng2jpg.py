@@ -4866,7 +4866,6 @@ def _parse_run_options(args):
     auto_ev_delta_enabled = True
     ev_zero = 0.0
     auto_ev_zero_enabled = True
-    _numeric_exposure_was_set = False
     auto_ev_options = AutoEvOptions()
     post_gamma = DEFAULT_POST_GAMMA
     post_gamma_mode = DEFAULT_POST_GAMMA_MODE
@@ -5219,6 +5218,7 @@ def _parse_run_options(args):
             ev_center_raw = token.split("=", 1)[1].strip()
             if ev_center_raw.lower() == "auto":
                 auto_ev_zero_enabled = True
+                ev_zero = 0.0
                 idx += 1
                 continue
             parsed_ev_center = _parse_ev_center_option(ev_center_raw)
@@ -5226,7 +5226,6 @@ def _parse_run_options(args):
                 return None
             ev_zero = parsed_ev_center
             auto_ev_zero_enabled = False
-            _numeric_exposure_was_set = True
             idx += 1
             continue
 
@@ -5335,7 +5334,7 @@ def _parse_run_options(args):
         return None
 
     if (
-        _numeric_exposure_was_set
+        not auto_ev_zero_enabled
         and auto_ev_delta_enabled
         and not _is_forced_static_auto_bracketing_selected(args)
     ):

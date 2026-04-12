@@ -2236,6 +2236,37 @@ def test_parse_run_options_rejects_ev_zero_without_ev(capsys) -> None:
     assert "--exposure requires numeric --bracketing value" in captured.err
 
 
+def test_parse_run_options_last_exposure_auto_overrides_previous_manual_value() -> None:
+    """The last `--exposure=auto` must restore auto ev-zero mode and clear stale manual center."""
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--exposure=0.5", "--exposure=auto"]
+    )
+    assert parsed is not None
+    assert parsed[3] is True
+    assert parsed[11] == 0.0
+    assert parsed[12] is True
+
+
+def test_parse_run_options_last_exposure_auto_keeps_static_bracketing() -> None:
+    """`--exposure=auto` must keep static bracketing when `--bracketing=<value>` is set."""
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        [
+            "input.dng",
+            "output.jpg",
+            "--bracketing=1.2",
+            "--exposure=0.5",
+            "--exposure=auto",
+        ]
+    )
+    assert parsed is not None
+    assert parsed[2] == 1.2
+    assert parsed[3] is False
+    assert parsed[11] == 0.0
+    assert parsed[12] is True
+
+
 def test_parse_run_options_rejects_removed_auto_zero_options(capsys) -> None:
     """Removed auto-zero CLI options must fail explicitly."""
 
