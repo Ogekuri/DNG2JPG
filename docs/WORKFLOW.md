@@ -42,7 +42,7 @@
 - id: PROC:pipeline-test-runner
   - type: process
   - parent_process: null
-  - role: Shell matrix runner invoking `scripts/d2j.sh` across pipeline profiles and fixed default-stage variants.
+  - role: Shell matrix runner invoking `scripts/d2j.sh` across pipeline profiles and deterministic default-stage variants including all auto-white-balance modes.
   - entrypoint_symbols:
     - main(...)
   - defining_files:
@@ -134,7 +134,7 @@
 
 ### PROC:pipeline-test-runner
 - Entrypoint(s):
-  - main(...): parse help-only options, validate DNG input, and dispatch backend plus fixed default-stage cases [scripts/test_all_pipeline.sh]
+  - main(...): parse help-only options, validate DNG input, and dispatch backend plus deterministic default-stage cases including all auto-white-balance modes [scripts/test_all_pipeline.sh]
 - Lifecycle/trigger:
   - Triggered when `scripts/test_all_pipeline.sh` is executed.
   - Executes one deterministic pipeline matrix for one input DNG.
@@ -408,7 +408,7 @@
   - destination: PROC:launcher
   - mechanism: repeated shell process invocation of `scripts/d2j.sh` per pipeline profile.
   - endpoint_channel: launcher argv handoff (`input.dng`, `output.jpg`, and per-case profile options).
-  - payload_data_shape: deterministic per-case CLI vector containing one output-suffix profile identifier.
+  - payload_data_shape: deterministic per-case CLI vector containing one output-suffix profile identifier and optional stage selector token (including `--auto-white-balance=<mode>` for each supported mode).
   - declaration_files:
     - scripts/test_all_pipeline.sh
     - scripts/d2j.sh

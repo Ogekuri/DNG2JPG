@@ -1,7 +1,7 @@
 ---
 title: "DNG2JPG Requirements"
 description: Software requirements specification derived from implemented behavior
-version: "0.5.1"
+version: "0.5.2"
 date: "2026-04-12"
 author: "GitHub Copilot CLI (req-recreate)"
 scope:
@@ -185,7 +185,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-230**: MUST provide `scripts/test_all_pipeline.sh` that accepts exactly one existing `.dng` input path and exits with deterministic usage diagnostics when the argument is missing, invalid, or non-`.dng`.
 - **REQ-231**: MUST execute `scripts/d2j.sh` for profiles `{Luminace-HDR/reinhard02,mantiuk08; OpenCV-Merge/Debevec,Robertson,Mertens; OpenCV-Tonemap/drago,reinhard,mantiuk; HDR-Plus}` and one default invocation without explicit backend selectors.
 - **REQ-232**: MUST parse only `<input.dng>` plus `-h|--help`; tokens `--auto-brightness`, `--auto-white-balance`, `--auto-white-balance=<mode>`, `--auto-levels`, and `--auto-adjust` MUST be rejected as unknown options.
-- **REQ-233**: MUST add four default-pipeline invocations that each append exactly one enabling option and write `<input_stem>__auto-brightness.jpg`, `<input_stem>__auto-white-balance-Simple.jpg`, `<input_stem>__auto-levels.jpg`, and `<input_stem>__auto-adjust.jpg` in the input DNG directory.
+- **REQ-233**: MUST add eight default-pipeline invocations with one enabling option each and write `auto-brightness`, `auto-levels`, `auto-adjust`, and `auto-white-balance-<mode>` JPG outputs for modes `Simple|GrayworldWB|IA|ColorConstancy|TTL` in the input DNG directory.
 - **REQ-050**: MUST implement `/tmp/auto-brightness.py` auto-brightness on normalized RGB float `[0,1]` in linear gamma `1.0`: compute BT.709 luminance, tonemap luminance, rescale RGB, optionally desaturate overflow, and return linear gamma `1.0` output without sRGB encode/decode using finite-safe luminance statistics.
 - **REQ-051**: MUST support exactly one auto-adjust pipeline with one validated knob model containing shared controls and CLAHE-luma controls.
 - **REQ-052**: MUST print deterministic runtime diagnostics for EV triplet and OpenCV radiance exposure calculations/results; MUST print `Exposure Misure EV` values and selected `ev_zero` only when `--exposure=auto` is active.
@@ -382,7 +382,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-079**: MUST verify `--bracketing=auto` sets static `ev_delta=0.1`, prints `Bracket step: skipped`, and prints `Exposure planning selected bracket half-span: 0.100000 EV`.
 - **TST-080**: MUST verify `_print_validated_run_parameters` emits all group headers in the defined order with two-space-indented parameter lines for a standard resolved option set.
 - **TST-081**: MUST verify `_print_validated_run_parameters` always emits `Auto-Brightness (AB)`, `Auto-White-Balance (AWB)`, `Auto-Levels`, and `Auto-Adjust` headers in fixed order and always prints their `auto-*` stage status as `enable` or `disabled`.
-- **TST-094**: MUST verify `scripts/test_all_pipeline.sh` dispatches the required pipeline matrix, applies optional stage toggles to every invocation, and generates unique JPG output paths in the source DNG directory using deterministic suffix rules.
+- **TST-094**: MUST verify `scripts/test_all_pipeline.sh` dispatches the required backend matrix, emits one JPG per `--auto-white-balance` mode `Simple|GrayworldWB|IA|ColorConstancy|TTL`, and preserves deterministic output suffixes in the source DNG directory.
 
 ## 5. Evidence Matrix
 
@@ -639,5 +639,5 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | REQ-230 | `scripts/test_all_pipeline.sh`; excerpt: validates exactly one input argument, enforces `.dng` extension, and enforces input-file existence before executing the matrix. |
 | REQ-231 | `scripts/test_all_pipeline.sh`; excerpt: executes one deterministic `scripts/d2j.sh` invocation for each required pipeline profile plus one default invocation. |
 | REQ-232 | `scripts/test_all_pipeline.sh`; excerpt: accepts only `<input.dng>` plus help flags and rejects stage-toggle tokens as unknown options. |
-| REQ-233 | `scripts/test_all_pipeline.sh`; excerpt: emits four default-pipeline invocations with one enabled option each and fixed output suffixes `auto-brightness`, `auto-white-balance-Simple`, `auto-levels`, and `auto-adjust`. |
+| REQ-233 | `scripts/test_all_pipeline.sh`; excerpt: emits eight default-pipeline invocations, including one per auto-white-balance mode (`Simple`, `GrayworldWB`, `IA`, `ColorConstancy`, `TTL`), with deterministic output suffixes. |
 | TST-094 | N/A (No existing unit test file covers shell pipeline-matrix orchestration under `scripts/` at this revision). |

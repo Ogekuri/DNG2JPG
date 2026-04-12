@@ -39,36 +39,36 @@
 
 ---
 
-# test_all_pipeline.sh | Shell | 178L | 11 symbols | 0 imports | 33 comments
+# test_all_pipeline.sh | Shell | 195L | 11 symbols | 0 imports | 34 comments
 > Path: `scripts/test_all_pipeline.sh`
 
 ## Definitions
 
 - fn `print_usage() {` (L16)
 - fn `run_pipeline_case() {` (L37)
-- fn `main() {` (L61)
-- var `INPUT_DNG_PATH=$(readlink -f -- "${input_dng_argument}")` (L94)
-- var `INPUT_DNG_DIR=$(dirname "${INPUT_DNG_PATH}")` (L107)
-- var `INPUT_DNG_FILENAME=$(basename "${INPUT_DNG_PATH}")` (L108)
-- var `INPUT_DNG_STEM="${INPUT_DNG_FILENAME%.*}"` (L109)
-- var `SCRIPT_FULL_PATH=$(readlink -f -- "$0")` (L111)
-- var `SCRIPT_DIR_PATH=$(dirname "${SCRIPT_FULL_PATH}")` (L112)
-- var `REPOSITORY_ROOT_PATH=$(dirname "${SCRIPT_DIR_PATH}")` (L113)
-- var `D2J_SCRIPT_PATH="${REPOSITORY_ROOT_PATH}/scripts/d2j.sh"` (L114)
+- fn `main() {` (L62)
+- var `INPUT_DNG_PATH=$(readlink -f -- "${input_dng_argument}")` (L95)
+- var `INPUT_DNG_DIR=$(dirname "${INPUT_DNG_PATH}")` (L108)
+- var `INPUT_DNG_FILENAME=$(basename "${INPUT_DNG_PATH}")` (L109)
+- var `INPUT_DNG_STEM="${INPUT_DNG_FILENAME%.*}"` (L110)
+- var `SCRIPT_FULL_PATH=$(readlink -f -- "$0")` (L112)
+- var `SCRIPT_DIR_PATH=$(dirname "${SCRIPT_FULL_PATH}")` (L113)
+- var `REPOSITORY_ROOT_PATH=$(dirname "${SCRIPT_DIR_PATH}")` (L114)
+- var `D2J_SCRIPT_PATH="${REPOSITORY_ROOT_PATH}/scripts/d2j.sh"` (L115)
 ## Symbol Index
 |Symbol|Kind|Vis|Lines|Sig|
 |---|---|---|---|---|
 |`print_usage`|fn||16|print_usage()|
 |`run_pipeline_case`|fn||37|run_pipeline_case()|
-|`main`|fn||61|main()|
-|`INPUT_DNG_PATH`|var||94||
-|`INPUT_DNG_DIR`|var||107||
-|`INPUT_DNG_FILENAME`|var||108||
-|`INPUT_DNG_STEM`|var||109||
-|`SCRIPT_FULL_PATH`|var||111||
-|`SCRIPT_DIR_PATH`|var||112||
-|`REPOSITORY_ROOT_PATH`|var||113||
-|`D2J_SCRIPT_PATH`|var||114||
+|`main`|fn||62|main()|
+|`INPUT_DNG_PATH`|var||95||
+|`INPUT_DNG_DIR`|var||108||
+|`INPUT_DNG_FILENAME`|var||109||
+|`INPUT_DNG_STEM`|var||110||
+|`SCRIPT_FULL_PATH`|var||112||
+|`SCRIPT_DIR_PATH`|var||113||
+|`REPOSITORY_ROOT_PATH`|var||114||
+|`D2J_SCRIPT_PATH`|var||115||
 
 
 ---

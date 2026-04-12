@@ -1,6 +1,6 @@
 #!/bin/bash
 # -*- coding: utf-8 -*-
-# VERSION: 0.1.0
+# VERSION: 0.2.0
 # AUTHORS: Ogekuri
 
 set -euo pipefail
@@ -53,7 +53,8 @@ run_pipeline_case() {
 ## @details Validates one existing `.dng` input path, parses only help options,
 ##          resolves canonical runtime paths, and dispatches all required
 ##          profile invocations plus deterministic default-pipeline option
-##          variants.
+##          variants, including one invocation per supported auto-white-balance
+##          mode.
 ## @return {int} Returns `0` on full matrix success; returns `1` on validation
 ##               or parsing failures.
 ## @satisfies REQ-230, REQ-231, REQ-232, REQ-233
@@ -167,6 +168,22 @@ main() {
     run_pipeline_case \
         "auto-white-balance-Simple" \
         "--auto-white-balance=Simple"
+
+    run_pipeline_case \
+        "auto-white-balance-GrayworldWB" \
+        "--auto-white-balance=GrayworldWB"
+
+    run_pipeline_case \
+        "auto-white-balance-IA" \
+        "--auto-white-balance=IA"
+
+    run_pipeline_case \
+        "auto-white-balance-ColorConstancy" \
+        "--auto-white-balance=ColorConstancy"
+
+    run_pipeline_case \
+        "auto-white-balance-TTL" \
+        "--auto-white-balance=TTL"
 
     run_pipeline_case "auto-levels" "--auto-levels=enable"
 
