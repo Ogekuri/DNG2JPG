@@ -2,7 +2,8 @@
 ```
 .
 ├── scripts
-│   └── d2j.sh
+│   ├── d2j.sh
+│   └── test_all_pipeline.sh
 └── src
     ├── dng2jpg
     │   ├── __init__.py
@@ -34,6 +35,68 @@
 |`BASE_DIR`|var||39||
 |`PROJECT_ROOT`|var||48||
 |`UV_TOOL`|var||74||
+
+
+---
+
+# test_all_pipeline.sh | Shell | 264L | 25 symbols | 0 imports | 51 comments
+> Path: `scripts/test_all_pipeline.sh`
+
+## Definitions
+
+- fn `print_usage() {` (L16)
+- fn `sanitize_suffix_token() {` (L40)
+- fn `append_common_stage_options() {` (L57)
+- fn `run_pipeline_case() {` (L95)
+- fn `main() {` (L130)
+- var `AUTO_BRIGHTNESS_ENABLED="false"` (L148)
+- var `AUTO_WHITE_BALANCE_ENABLED="false"` (L149)
+- var `AUTO_WHITE_BALANCE_MODE="Simple"` (L150)
+- var `AUTO_LEVELS_ENABLED="false"` (L151)
+- var `AUTO_ADJUST_ENABLED="false"` (L152)
+- var `AUTO_BRIGHTNESS_ENABLED="true"` (L157)
+- var `AUTO_WHITE_BALANCE_ENABLED="true"` (L160)
+- var `AUTO_WHITE_BALANCE_MODE="Simple"` (L161)
+- var `AUTO_WHITE_BALANCE_ENABLED="true"` (L164)
+- var `AUTO_WHITE_BALANCE_MODE="${1#*=}"` (L165)
+- var `AUTO_LEVELS_ENABLED="true"` (L172)
+- var `AUTO_ADJUST_ENABLED="true"` (L175)
+- var `INPUT_DNG_PATH=$(readlink -f -- "${input_dng_argument}")` (L190)
+- var `INPUT_DNG_DIR=$(dirname "${INPUT_DNG_PATH}")` (L203)
+- var `INPUT_DNG_FILENAME=$(basename "${INPUT_DNG_PATH}")` (L204)
+- var `INPUT_DNG_STEM="${INPUT_DNG_FILENAME%.*}"` (L205)
+- var `SCRIPT_FULL_PATH=$(readlink -f -- "$0")` (L207)
+- var `SCRIPT_DIR_PATH=$(dirname "${SCRIPT_FULL_PATH}")` (L208)
+- var `REPOSITORY_ROOT_PATH=$(dirname "${SCRIPT_DIR_PATH}")` (L209)
+- var `D2J_SCRIPT_PATH="${REPOSITORY_ROOT_PATH}/scripts/d2j.sh"` (L210)
+## Symbol Index
+|Symbol|Kind|Vis|Lines|Sig|
+|---|---|---|---|---|
+|`print_usage`|fn||16|print_usage()|
+|`sanitize_suffix_token`|fn||40|sanitize_suffix_token()|
+|`append_common_stage_options`|fn||57|append_common_stage_options()|
+|`run_pipeline_case`|fn||95|run_pipeline_case()|
+|`main`|fn||130|main()|
+|`AUTO_BRIGHTNESS_ENABLED`|var||148||
+|`AUTO_WHITE_BALANCE_ENABLED`|var||149||
+|`AUTO_WHITE_BALANCE_MODE`|var||150||
+|`AUTO_LEVELS_ENABLED`|var||151||
+|`AUTO_ADJUST_ENABLED`|var||152||
+|`AUTO_BRIGHTNESS_ENABLED`|var||157||
+|`AUTO_WHITE_BALANCE_ENABLED`|var||160||
+|`AUTO_WHITE_BALANCE_MODE`|var||161||
+|`AUTO_WHITE_BALANCE_ENABLED`|var||164||
+|`AUTO_WHITE_BALANCE_MODE`|var||165||
+|`AUTO_LEVELS_ENABLED`|var||172||
+|`AUTO_ADJUST_ENABLED`|var||175||
+|`INPUT_DNG_PATH`|var||190||
+|`INPUT_DNG_DIR`|var||203||
+|`INPUT_DNG_FILENAME`|var||204||
+|`INPUT_DNG_STEM`|var||205||
+|`SCRIPT_FULL_PATH`|var||207||
+|`SCRIPT_DIR_PATH`|var||208||
+|`REPOSITORY_ROOT_PATH`|var||209||
+|`D2J_SCRIPT_PATH`|var||210||
 
 
 ---

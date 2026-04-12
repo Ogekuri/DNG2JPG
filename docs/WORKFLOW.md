@@ -39,6 +39,23 @@
   luminance/RGB intermediates before histogram indexing, percentiles, HSL,
   sigmoidal mapping, CLAHE, and final stage outputs.
 
+- id: PROC:pipeline-test-runner
+  - type: process
+  - parent_process: null
+  - role: Shell matrix runner invoking `scripts/d2j.sh` across pipeline profiles.
+  - entrypoint_symbols:
+    - main(...)
+  - defining_files:
+    - scripts/test_all_pipeline.sh
+- id: THR:PROC:pipeline-test-runner#main-thread
+  - type: thread
+  - parent_process: PROC:pipeline-test-runner
+  - role: Single shell execution thread for matrix option parsing and case dispatch.
+  - entrypoint_symbols:
+    - main(...)
+    - run_pipeline_case(...)
+  - defining_files:
+    - scripts/test_all_pipeline.sh
 - id: PROC:launcher
   - type: process
   - parent_process: null
@@ -114,6 +131,36 @@
     - .github/workflows/release-uvx.yml
 
 ## Execution Units
+
+### PROC:pipeline-test-runner
+- Entrypoint(s):
+  - main(...): parse matrix toggles, validate DNG input, and dispatch all required pipeline cases [scripts/test_all_pipeline.sh]
+- Lifecycle/trigger:
+  - Triggered when `scripts/test_all_pipeline.sh` is executed.
+  - Executes one deterministic pipeline matrix for one input DNG.
+  - No explicit threads detected beyond main thread.
+- Internal Call-Trace Tree:
+  - main(...): parse CLI toggles, validate paths, and dispatch matrix [scripts/test_all_pipeline.sh]
+    - run_pipeline_case(...): execute one profile invocation with deterministic output suffix [scripts/test_all_pipeline.sh]
+      - append_common_stage_options(...): append enabled stage flags and suffix tokens [scripts/test_all_pipeline.sh]
+        - sanitize_suffix_token(...): normalize suffix token text [scripts/test_all_pipeline.sh]
+- External Boundaries:
+  - readlink/dirname/basename/tr shell utilities.
+  - `scripts/d2j.sh` process invocation.
+
+### THR:PROC:pipeline-test-runner#main-thread
+- Entrypoint(s):
+  - main(...): shell command sequence for matrix orchestration [scripts/test_all_pipeline.sh]
+- Lifecycle/trigger:
+  - Starts with pipeline-test-runner process start.
+  - Ends after the final matrix invocation exits.
+  - Blocking points are per-profile `scripts/d2j.sh` process executions.
+- Internal Call-Trace Tree:
+  - main(...): validate input and schedule matrix cases [scripts/test_all_pipeline.sh]
+    - run_pipeline_case(...): dispatch one backend profile [scripts/test_all_pipeline.sh]
+- External Boundaries:
+  - filesystem validation and path normalization shell commands.
+  - repeated launcher process invocations.
 
 ### PROC:launcher
 - Entrypoint(s):
@@ -358,6 +405,15 @@
 
 ## Communication Edges
 
+- id: EDGE:pipeline-test-runner-to-launcher
+  - source: PROC:pipeline-test-runner
+  - destination: PROC:launcher
+  - mechanism: repeated shell process invocation of `scripts/d2j.sh` per pipeline profile.
+  - endpoint_channel: launcher argv handoff (`input.dng`, `output.jpg`, profile options, optional stage toggles).
+  - payload_data_shape: deterministic per-case CLI vector containing one output-suffix profile identifier.
+  - declaration_files:
+    - scripts/test_all_pipeline.sh
+    - scripts/d2j.sh
 - id: EDGE:launcher-to-main
   - source: PROC:launcher
   - destination: PROC:main

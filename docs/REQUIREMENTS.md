@@ -1,8 +1,8 @@
 ---
 title: "DNG2JPG Requirements"
 description: Software requirements specification derived from implemented behavior
-version: "0.5.0"
-date: "2026-04-03"
+version: "0.5.1"
+date: "2026-04-12"
 author: "GitHub Copilot CLI (req-recreate)"
 scope:
   paths:
@@ -182,6 +182,10 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-047**: MUST publish release assets from `dist/**/*` using `softprops/action-gh-release@v2` with `fail_on_unmatched_files: true`.
 - **REQ-048**: MUST include project script entrypoints `dng2jpg` and `d2j` mapped to `dng2jpg.core:main`.
 - **REQ-049**: SHOULD provide both `dng2jpg` and `d2j` as equivalent user-invokable CLI aliases.
+- **REQ-230**: MUST provide `scripts/test_all_pipeline.sh` that accepts exactly one existing `.dng` input path and exits with deterministic usage diagnostics when the argument is missing, invalid, or non-`.dng`.
+- **REQ-231**: MUST execute `scripts/d2j.sh` for profiles `{Luminace-HDR/reinhard02,mantiuk08; OpenCV-Merge/Debevec,Robertson,Mertens; OpenCV-Tonemap/drago,reinhard,mantiuk; HDR-Plus}` and one default invocation without explicit backend selectors.
+- **REQ-232**: MUST expose optional toggles `--auto-brightness`, `--auto-white-balance[=<mode>]`, `--auto-levels`, and `--auto-adjust`; each toggle MUST append the corresponding enabling option to every generated `scripts/d2j.sh` invocation.
+- **REQ-233**: MUST write every generated JPG into the input DNG directory with basename `<input_stem>__<pipeline_suffix>.jpg`, where `<pipeline_suffix>` is unique per invocation and includes toggle tokens only when corresponding toggles are explicitly requested.
 - **REQ-050**: MUST implement `/tmp/auto-brightness.py` auto-brightness on normalized RGB float `[0,1]` in linear gamma `1.0`: compute BT.709 luminance, tonemap luminance, rescale RGB, optionally desaturate overflow, and return linear gamma `1.0` output without sRGB encode/decode using finite-safe luminance statistics.
 - **REQ-051**: MUST support exactly one auto-adjust pipeline with one validated knob model containing shared controls and CLAHE-luma controls.
 - **REQ-052**: MUST print deterministic runtime diagnostics for EV triplet and OpenCV radiance exposure calculations/results; MUST print `Exposure Misure EV` values and selected `ev_zero` only when `--exposure=auto` is active.
@@ -378,6 +382,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-079**: MUST verify `--bracketing=auto` sets static `ev_delta=0.1`, prints `Bracket step: skipped`, and prints `Exposure planning selected bracket half-span: 0.100000 EV`.
 - **TST-080**: MUST verify `_print_validated_run_parameters` emits all group headers in the defined order with two-space-indented parameter lines for a standard resolved option set.
 - **TST-081**: MUST verify `_print_validated_run_parameters` always emits `Auto-Brightness (AB)`, `Auto-White-Balance (AWB)`, `Auto-Levels`, and `Auto-Adjust` headers in fixed order and always prints their `auto-*` stage status as `enable` or `disabled`.
+- **TST-094**: MUST verify `scripts/test_all_pipeline.sh` dispatches the required pipeline matrix, applies optional stage toggles to every invocation, and generates unique JPG output paths in the source DNG directory using deterministic suffix rules.
 
 ## 5. Evidence Matrix
 
@@ -631,3 +636,8 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 | TST-073 | `tests/test_uint16_postprocess_pipeline.py::test_run_opencv_tonemap_backend_applies_merge_gamma_last`; verifies merge gamma is applied after tone mapping. |
 | TST-074 | `tests/test_uint16_postprocess_pipeline.py::test_run_opencv_tonemap_backend_preserves_dynamic_range_without_clipping`; verifies no backend-local clipping across OpenCV-Tonemap boundaries. |
 | TST-078 | `tests/test_uint16_postprocess_pipeline.py::test_postprocess_skips_entry_normalization_for_float_merge_output`, `test_postprocess_normalizes_non_float_entry_payload`; verifies postprocess entry handling preserves merge float outputs and normalizes external non-float payloads only. |
+| REQ-230 | `scripts/test_all_pipeline.sh`; excerpt: validates exactly one input argument, enforces `.dng` extension, and enforces input-file existence before executing the matrix. |
+| REQ-231 | `scripts/test_all_pipeline.sh`; excerpt: executes one deterministic `scripts/d2j.sh` invocation for each required pipeline profile plus one default invocation. |
+| REQ-232 | `scripts/test_all_pipeline.sh`; excerpt: parses optional toggles for auto-brightness, auto-white-balance, auto-levels, and auto-adjust and appends only requested enabling flags to each `scripts/d2j.sh` call. |
+| REQ-233 | `scripts/test_all_pipeline.sh`; excerpt: builds per-invocation unique `<input_stem>__<pipeline_suffix>.jpg` filenames in the source DNG directory and adds toggle tokens only when toggles are requested. |
+| TST-094 | N/A (No existing unit test file covers shell pipeline-matrix orchestration under `scripts/` at this revision). |
