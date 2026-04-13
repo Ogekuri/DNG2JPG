@@ -164,54 +164,10 @@ Important stage rules:
 
 ## Detailed pipeline diagram
 
-```mermaid
-flowchart TD
-    A[CLI invocation\ndng2jpg input.dng output.jpg [options]] --> B[Validate platform, arguments, input DNG, output directory]
-    B --> C[Read EXIF and source transfer evidence]
-    C --> D[Extract linear RAW base image\nRAW WB mode: GREEN | MAX | MIN | MEAN]
-    D --> E{--auto-brightness}
-    E -- disable --> F
-    E -- enable --> E1[BT.709 luminance analysis\nscene-key classification\nReinhard auto-brightness\noptional luminance-preserving desaturation] --> F
-    F --> G{--auto-white-balance}
-    G -- omitted / disable --> H
-    G -- Simple / GrayworldWB / IA --> G1[OpenCV xphoto gain estimation\ndomain: linear | srgb | source-auto] --> H
-    G -- ColorConstancy --> G2[scikit-image color-constancy gain estimation] --> H
-    G -- TTL --> G3[channel-average gray balancing] --> H
-    H --> I{Exposure planning mode}
-    I -- bracketing omitted + exposure omitted --> I1[auto ev_zero + auto ev_delta]
-    I -- bracketing numeric + exposure omitted --> I2[auto ev_zero + static ev_delta]
-    I -- bracketing auto + exposure numeric --> I3[static ev_zero + auto ev_delta]
-    I -- bracketing numeric + exposure numeric --> I4[static ev_zero + static ev_delta]
-    I1 --> J
-    I2 --> J
-    I3 --> J
-    I4 --> J
-    J{Backend selected}
-    J -- OpenCV-Tonemap --> J1[Use ev_zero only\nIf ev_delta is auto, force 0.1 EV\nAlgorithm: drago | reinhard | mantiuk]
-    J -- Luminace-HDR --> J2[Build ev_minus / ev_zero / ev_plus\nExternal luminance-hdr-cli merge + TMO]
-    J -- OpenCV-Merge Debevec/Robertson --> J3[Build ev_minus / ev_zero / ev_plus\nOpenCV radiance merge\nrequires valid EXIF ExposureTime]
-    J -- OpenCV-Merge Mertens --> J4[Build ev_minus / ev_zero / ev_plus\nOpenCV exposure fusion]
-    J -- HDR-Plus --> J5[Build ev_minus / ev_zero / ev_plus\nHDR+ alignment + temporal/spatial merge]
-    J1 --> K
-    J2 --> K
-    J3 --> K
-    J4 --> K
-    J5 --> K
-    K[Merge gamma stage\n--gamma=auto or --gamma=a,b\nOpenCV-Merge optional simple tonemap\nOpenCV-Tonemap uses selected tonemap algorithm]
-    K --> L[Static postprocess\npost-gamma auto or numeric\nbrightness\ncontrast\nsaturation]
-    L --> M{--auto-levels}
-    M -- disable --> N
-    M -- enable --> M1[RawTherapee-style auto-levels\noptional highlight reconstruction\noptional out-of-gamut clipping] --> N
-    N --> O{--auto-adjust}
-    O -- disable --> P
-    O -- enable --> O1[Selective blur\nadaptive levels\nCLAHE-luma local contrast\nsigmoidal contrast\nHSL saturation gamma\nhigh-pass overlay] --> P
-    P --> Q[Clamp to display range\nJPEG quantization]
-    Q --> R[Save JPG with compression level]
-    R --> S[Refresh EXIF thumbnail\nSync file timestamps]
-    S --> T{--debug}
-    T -- disable --> U[Done]
-    T -- enable --> T1[Write persistent stage TIFF checkpoints\nnext to output JPG] --> U
-```
+Click to zoom flowchart image.
+
+[![Flowchart](https://raw.githubusercontent.com/Ogekuri/DNG2JPG/refs/heads/master/images/flowchart-bw.svg)](https://raw.githubusercontent.com/Ogekuri/DNG2JPG/refs/he
+ads/master/images/flowchart-bw.svg)
 
 ## Exposure planning modes
 
