@@ -1,5 +1,19 @@
 ## Execution Units Index
 
+## Behavioral Notes (2026-04-13)
+
+- Main-flow color-space contracts are now explicit: pre-merge stages operate on
+  camera-linear RGB, while shared postprocess and final-save preparation
+  operate on display-referred standard RGB after backend-local merge-gamma or
+  equivalent tone-mapped handoff.
+- Main-flow boundary operators are now centralized through dedicated helpers for
+  bracket clipping, OpenCV radiance `uint8` adaptation, Mertens `*255.0`
+  rescale, auto-levels entry clip, repeated auto-adjust clamps, postprocess
+  exit clip, and final JPEG quantization.
+- OpenCV radiance backend documentation is now aligned with implementation:
+  Debevec/Robertson preserve float interfaces externally while confining
+  required `uint8` payloads to backend-local calibrate/merge adaptation.
+
 ## Behavioral Notes (2026-04-12)
 
 - EV-dependent multiplier generation is now centralized through
@@ -285,18 +299,23 @@
         - _safe_pow2_ev(exponent, context): deterministic `2**EV` finite/overflow validator [src/dng2jpg/dng2jpg.py]
       - _extract_bracket_images_float(...): bracket extraction with optional side-bracket bypass for OpenCV-Tonemap [src/dng2jpg/dng2jpg.py]
         - _build_bracket_images_from_linear_base_float(...): synthetic bracket synthesis [src/dng2jpg/dng2jpg.py]
+          - _clip_bracket_rgb_unit_interval(...): explicit bracket-contract clipping boundary [src/dng2jpg/dng2jpg.py]
       - _run_luminance_hdr_cli(...): luminance-hdr-cli merge backend [src/dng2jpg/dng2jpg.py]
         - _materialize_bracket_tiffs_from_float(...): temporary TIFF materialization [src/dng2jpg/dng2jpg.py]
         - _order_bracket_paths(bracket_paths): deterministic path ordering [src/dng2jpg/dng2jpg.py]
         - _format_external_command_for_log(command): command log formatting [src/dng2jpg/dng2jpg.py]
       - _run_opencv_merge_backend(...): OpenCV merge backend [src/dng2jpg/dng2jpg.py]
         - _run_opencv_merge_radiance(...): Debevec/Robertson merge path [src/dng2jpg/dng2jpg.py]
-          - _build_opencv_radiance_exposure_times(...): finite-safe exposure-time vector builder from EXIF and EV offsets [src/dng2jpg/dng2jpg.py]
+          - _quantize_opencv_radiance_rgb_uint8(...): backend-local radiance `uint8` adaptation [src/dng2jpg/dng2jpg.py]
+          - _estimate_opencv_camera_response(...): inverse camera response estimation [src/dng2jpg/dng2jpg.py]
+          - _normalize_opencv_hdr_to_unit_range(...): backend normalization to shared float contract [src/dng2jpg/dng2jpg.py]
         - _run_opencv_merge_mertens(...): Mertens merge path [src/dng2jpg/dng2jpg.py]
-        - _apply_merge_gamma_float(...): transfer conversion to linearized merge domain [src/dng2jpg/dng2jpg.py]
+          - _rescale_mertens_fusion_to_display_range(...): explicit `*255.0` exposure-fusion rescale bridge [src/dng2jpg/dng2jpg.py]
+          - _normalize_opencv_hdr_to_unit_range(...): backend normalization to shared float contract [src/dng2jpg/dng2jpg.py]
+        - _apply_merge_gamma_float(...): backend display-boundary transfer conversion [src/dng2jpg/dng2jpg.py]
       - _run_opencv_tonemap_backend(...): OpenCV tonemap backend [src/dng2jpg/dng2jpg.py]
         - _resolve_opencv_tonemap_gamma_inverse(...): OpenCV tonemap gamma inverse resolution from merge transfer [src/dng2jpg/dng2jpg.py]
-        - _apply_merge_gamma_float_no_clip(...): transfer conversion without clipping [src/dng2jpg/dng2jpg.py]
+        - _apply_merge_gamma_float_no_clip(...): backend display-boundary transfer conversion without clipping [src/dng2jpg/dng2jpg.py]
       - _run_hdr_plus_merge(...): HDR+ merge backend [src/dng2jpg/dng2jpg.py]
         - _hdrplus_build_scalar_proxy_float32(...): scalar proxy generation [src/dng2jpg/dng2jpg.py]
         - _hdrplus_align_layers(...): multilevel tile alignment [src/dng2jpg/dng2jpg.py]
@@ -308,10 +327,15 @@
         - _prepare_postprocess_entry_rgb_float(...): postprocess entry payload adaptation [src/dng2jpg/dng2jpg.py]
         - _apply_static_postprocess_float(...): gamma/brightness/contrast/saturation stage [src/dng2jpg/dng2jpg.py]
         - _apply_auto_levels_float(...): optional auto-levels stage [src/dng2jpg/dng2jpg.py]
+          - _clip_auto_levels_entry_rgb(...): explicit auto-levels entry clip [src/dng2jpg/dng2jpg.py]
         - _apply_auto_adjust_stage_float(...): mandatory auto-adjust stage entry with internal enable-state validation and disabled pass-through path [src/dng2jpg/dng2jpg.py]
           - _apply_validated_auto_adjust_pipeline(...): validated auto-adjust stage implementation for enabled mode [src/dng2jpg/dng2jpg.py]
+            - _clip_auto_adjust_stage_rgb(...): repeated auto-adjust clamp boundary [src/dng2jpg/dng2jpg.py]
+        - _clip_postprocess_exit_rgb(...): explicit postprocess exit clip [src/dng2jpg/dng2jpg.py]
       - _encode_jpg(...): JPEG encoding [src/dng2jpg/dng2jpg.py]
-        - _to_uint8_image_array(...): uint8 conversion [src/dng2jpg/dng2jpg.py]
+        - _quantize_final_rgb_uint8(...): final JPEG quantization boundary [src/dng2jpg/dng2jpg.py]
+          - _clip_postprocess_exit_rgb(...): final-save float clip before byte quantization [src/dng2jpg/dng2jpg.py]
+          - _to_uint8_image_array(...): uint8 conversion [src/dng2jpg/dng2jpg.py]
         - _convert_compression_to_quality(jpg_compression): JPEG quality mapping [src/dng2jpg/dng2jpg.py]
         - _refresh_output_jpg_exif_thumbnail_after_save(...): EXIF thumbnail regeneration [src/dng2jpg/dng2jpg.py]
       - _sync_output_file_timestamps_from_exif(output_jpg, exif_timestamp): timestamp propagation [src/dng2jpg/dng2jpg.py]

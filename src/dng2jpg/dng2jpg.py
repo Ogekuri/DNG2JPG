@@ -2423,20 +2423,21 @@ def _extract_base_rgb_linear_float(
     np_module,
     raw_white_balance_mode=DEFAULT_RAW_WHITE_BALANCE_MODE,
 ):
-    """@brief Extract one linear normalized RGB base image from one RAW handle.
+    """@brief Extract one normalized camera-linear RGB base image from one RAW handle.
 
     @details Executes exactly one neutral linear `rawpy.postprocess` call with
     deterministic no-auto/no-camera-WB parameters, converts output to float,
     normalizes by sensor dynamic range `white_level - mean(black_level_per_channel)`,
     extracts camera WB metadata gains, normalizes gains by one selected mode
     (`GREEN`, `MAX`, `MIN`, `MEAN`), and applies those gains in float domain
-    without explicit clipping. Complexity: O(H*W). Side effects: one RAW
+    without explicit clipping. The resulting tensor is camera-linear RGB, not
+    display-referred standard RGB. Complexity: O(H*W). Side effects: one RAW
     postprocess invocation.
     @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
     @param np_module {ModuleType} Imported numpy module.
     @param raw_white_balance_mode {str} RAW WB normalization mode selector.
-    @return {object} White-balanced RGB float tensor derived from neutral extraction.
-    @satisfies REQ-010, REQ-031, REQ-158, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207, REQ-208, REQ-209
+    @return {object} White-balanced camera-linear RGB float tensor derived from neutral extraction.
+    @satisfies REQ-010, REQ-031, REQ-158, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207, REQ-208, REQ-209, REQ-242
     @see _extract_normalized_preview_luminance_stats
     """
 
@@ -2742,15 +2743,18 @@ def _coerce_positive_luminance(value, fallback):
 
 
 def _calculate_bt709_luminance(np_module, image_rgb_float):
-    """@brief Convert one normalized RGB float image to BT.709 luminance.
+    """@brief Convert one camera-linear RGB image to a BT.709-coefficient luminance proxy.
 
     @details Normalizes the input image to the repository RGB float contract and
-    computes luminance in the linear gamma=`1` domain using BT.709 coefficients
-    `(0.2126, 0.7152, 0.0722)`. Complexity: O(H*W). Side effects: none.
+    computes one deterministic luminance proxy in the linear gamma=`1` domain
+    using BT.709 coefficients `(0.2126, 0.7152, 0.0722)`. The result is used
+    only for exposure planning heuristics and is not asserted to be
+    colorimetrically exact standard-RGB luminance. Complexity: O(H*W). Side
+    effects: none.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} Input image payload convertible to normalized RGB float `[0,1]`.
-    @return {object} Linear luminance tensor with shape `(H,W)` and dtype `float32`.
-    @satisfies REQ-008, REQ-032
+    @return {object} Linear luminance-proxy tensor with shape `(H,W)` and dtype `float32`.
+    @satisfies REQ-008, REQ-032, REQ-242
     """
 
     normalized_rgb = _normalize_float_rgb_image(
@@ -2960,16 +2964,17 @@ def _calculate_auto_zero_evaluations(cv2_module, np_module, image_rgb_float):
     """@brief Compute the three automatic EV-zero candidate evaluations.
 
     @details Migrates `calcola_correzioni_ev(immagine_float)` from the external
-    prototype into the current pipeline, adapts it to the repository linear
-    gamma=`1` RGB float contract, computes BT.709 luminance, evaluates
-    `ev_best`, `ev_ettr`, and `ev_detail`, and returns all three rounded
-    candidates without applying selector quantization. Complexity: dominated by
-    the EV sweeps in entropy/detail evaluation. Side effects: none.
+    prototype into the current pipeline, adapts it to the repository
+    camera-linear RGB float contract, computes a BT.709-coefficient luminance
+    proxy, evaluates `ev_best`, `ev_ettr`, and `ev_detail`, and returns all
+    three rounded candidates without applying selector quantization.
+    Complexity: dominated by the EV sweeps in entropy/detail evaluation. Side
+    effects: none.
     @param cv2_module {ModuleType} Imported OpenCV module.
     @param np_module {ModuleType} Imported numpy module.
-    @param image_rgb_float {object} Input image payload convertible to normalized RGB float `[0,1]`.
-    @return {AutoZeroEvaluation} Candidate EV evaluations on the normalized linear image.
-    @satisfies REQ-008, REQ-032, CTN-007
+    @param image_rgb_float {object} Input camera-linear RGB payload convertible to normalized float `[0,1]`.
+    @return {AutoZeroEvaluation} Candidate EV evaluations on the normalized camera-linear image.
+    @satisfies REQ-008, REQ-032, CTN-007, REQ-242
     """
 
     luminance_float = _calculate_bt709_luminance(
@@ -4052,16 +4057,19 @@ def _parse_hdrplus_options(hdrplus_raw_values):
 
 
 def _apply_merge_gamma_float_no_clip(np_module, image_rgb_float, resolved_merge_gamma):
-    """@brief Apply resolved merge-gamma transfer without any input/output clipping.
+    """@brief Apply resolved merge gamma at the OpenCV-Tonemap display boundary.
 
     @details Executes the same transfer families as `_apply_merge_gamma_float`
-    but intentionally avoids lower-bound clipping to preserve unbounded positive
-    and negative float dynamic range for OpenCV-Tonemap backend execution.
+    but intentionally avoids lower-bound clipping to preserve unbounded
+    positive and negative float dynamic range for OpenCV-Tonemap backend
+    execution. This helper is the explicit tone-mapped-to-display-RGB boundary
+    for the OpenCV-Tonemap path. Complexity: O(H*W). Side effects: none.
     @param np_module {ModuleType} Imported numpy module.
-    @param image_rgb_float {object} Backend RGB float tensor.
+    @param image_rgb_float {object} Tone-mapped backend RGB float tensor.
     @param resolved_merge_gamma {ResolvedMergeGamma} Resolved merge-gamma payload.
-    @return {object} RGB float32 tensor after transfer evaluation.
-    @satisfies REQ-197, REQ-198
+    @return {object} Display-referred RGB float32 tensor after transfer evaluation.
+    @note Boundary classification: transfer boundary from tone-mapped HDR output to display-referred RGB.
+    @satisfies REQ-197, REQ-198, REQ-237, REQ-240
     """
 
     image_rgb = _ensure_three_channel_float_array_no_bounds(
@@ -4830,17 +4838,21 @@ def _ensure_three_channel_float_array_no_bounds(np_module, image_data):
 
 
 def _apply_merge_gamma_float(np_module, image_rgb_float, resolved_merge_gamma):
-    """@brief Apply one resolved merge-output transfer without extra clipping.
+    """@brief Apply one resolved merge-output transfer at the display boundary.
 
     @details Executes backend-final transfer encoding on positive float-domain
     RGB values after backend normalization. The helper intentionally avoids
-    upper clipping before and after transfer evaluation so highlight headroom is
-    preserved until the shared downstream pipeline chooses its own bounds.
+    upper clipping before and after transfer evaluation so highlight headroom
+    is preserved until the shared downstream pipeline chooses its own bounds.
+    This helper is the explicit camera-linear-to-display-RGB boundary for
+    OpenCV Debevec/Robertson and HDR+, and the merge-gamma-conditioned input
+    bridge for OpenCV Mertens. Complexity: O(H*W). Side effects: none.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} Backend-normalized RGB float tensor.
     @param resolved_merge_gamma {ResolvedMergeGamma} Resolved merge-gamma payload.
-    @return {object} RGB float32 tensor after merge-gamma transfer.
-    @satisfies REQ-170
+    @return {object} Display-referred RGB float32 tensor after merge-gamma transfer.
+    @note Boundary classification: transfer boundary from backend-normalized HDR output to display-referred RGB.
+    @satisfies REQ-170, REQ-237, REQ-240
     """
 
     if resolved_merge_gamma.transfer == "linear":
@@ -6201,19 +6213,44 @@ def _build_exposure_multipliers(ev_value, ev_zero=0.0):
     )
 
 
-def _build_bracket_images_from_linear_base_float(np_module, base_rgb_float, multipliers):
-    """@brief Build normalized HDR brackets from one linear RGB base tensor.
+def _clip_bracket_rgb_unit_interval(np_module, image_rgb_float):
+    """@brief Apply the explicit bracket-contract clip on camera-linear RGB data.
 
-    @details Broadcast-multiplies one linear RGB base tensor by the ordered EV
-    multiplier triplet `(ev_minus, ev_zero, ev_plus)`, clamps each result into
-    `[0,1]`, and returns float32 bracket tensors in canonical downstream order.
-    The input base tensor range is preserved before EV scaling to avoid
-    stage-local pre-clipping. Complexity: O(3*H*W). Side effects: none.
+    @details Converts one EV-scaled camera-linear RGB tensor to `float64` and
+    clamps every sample into `[0,1]`. This helper is the explicit main-flow
+    clipping boundary that materializes the shared bracket contract before
+    backend dispatch. Complexity: O(H*W). Side effects: none.
     @param np_module {ModuleType} Imported numpy module.
-    @param base_rgb_float {object} Linear RGB float tensor.
+    @param image_rgb_float {object} EV-scaled camera-linear RGB tensor.
+    @return {object} Camera-linear RGB float64 tensor bounded to `[0,1]`.
+    @note Boundary classification: contract clipping.
+    @note Source range: camera-linear RGB after EV scaling; lower/upper bounds unconstrained.
+    @note Target range: camera-linear RGB in `[0,1]`.
+    @note Stage intent: establish the shared bracket payload consumed by HDR backends.
+    @satisfies REQ-159, REQ-215, REQ-238, REQ-239
+    """
+
+    return np_module.clip(
+        np_module.asarray(image_rgb_float, dtype=np_module.float64),
+        0.0,
+        1.0,
+    )
+
+
+def _build_bracket_images_from_linear_base_float(np_module, base_rgb_float, multipliers):
+    """@brief Build normalized HDR brackets from one camera-linear RGB base tensor.
+
+    @details Broadcast-multiplies one camera-linear RGB base tensor by the
+    ordered EV multiplier triplet `(ev_minus, ev_zero, ev_plus)`, routes each
+    result through `_clip_bracket_rgb_unit_interval(...)`, and returns float32
+    bracket tensors in canonical downstream order. The input base tensor range
+    is preserved before EV scaling to avoid pre-clipping. Complexity:
+    `O(3*H*W)`. Side effects: none.
+    @param np_module {ModuleType} Imported numpy module.
+    @param base_rgb_float {object} Camera-linear RGB float tensor.
     @param multipliers {tuple[float, float, float]} Ordered EV multipliers.
-    @return {list[object]} Ordered RGB float32 bracket tensors.
-    @satisfies REQ-159, REQ-160
+    @return {list[object]} Ordered camera-linear RGB float32 bracket tensors.
+    @satisfies REQ-159, REQ-160, REQ-238, REQ-242
     """
 
     linear_base = _ensure_three_channel_float_array_no_range_adjust(
@@ -6222,10 +6259,9 @@ def _build_bracket_images_from_linear_base_float(np_module, base_rgb_float, mult
     ).astype(np_module.float32, copy=False)
     bracket_images_float = []
     for multiplier in multipliers:
-        scaled = np_module.clip(
-            linear_base.astype(np_module.float64) * float(multiplier),
-            0.0,
-            1.0,
+        scaled = _clip_bracket_rgb_unit_interval(
+            np_module=np_module,
+            image_rgb_float=linear_base.astype(np_module.float64) * float(multiplier),
         )
         bracket_images_float.append(scaled.astype(np_module.float32))
     return bracket_images_float
@@ -6985,17 +7021,18 @@ def _apply_auto_white_balance_stage_float(
     auto_adjust_dependencies=None,
     estimation_input_is_auto_brightness_preprocessed=False,
 ):
-    """@brief Apply one auto-white-balance stage on one RGB float image.
+    """@brief Apply one auto-white-balance stage on one camera-linear RGB image.
 
-    @details Always executes stage entry on the supplied stage input. Begins by
-    validating whether `white_balance_mode` is enabled; when disabled, emits
-    deterministic disabled diagnostics and returns pass-through stage output.
-    Otherwise computes one transient estimation image from the stage input:
-    reuses the stage input directly when it is already auto-brightness-preprocessed,
-    else applies the shared auto-brightness preprocessing algorithm. Then derives
-    one gain vector using the configured white-balance mode, applies gains to the
-    original stage input, and emits one corrected RGB float output.
-    @param image_rgb_float {object} RGB float stage input image.
+    @details Always executes stage entry on the supplied camera-linear stage
+    input. Begins by validating whether `white_balance_mode` is enabled; when
+    disabled, emits deterministic disabled diagnostics and returns pass-through
+    stage output. Otherwise computes one transient estimation image from the
+    stage input: reuses the stage input directly when it is already
+    auto-brightness-preprocessed, else applies the shared auto-brightness
+    preprocessing algorithm. Then derives one gain vector using the configured
+    white-balance mode, applies gains to the original stage input, and emits
+    one corrected camera-linear RGB float output.
+    @param image_rgb_float {object} Camera-linear RGB float stage input image.
     @param white_balance_mode {str|None} Optional canonical white-balance mode selector.
     @param auto_brightness_options {AutoBrightnessOptions} Auto-brightness options reused for estimation preprocessing.
     @param white_balance_xphoto_domain {str} Xphoto estimation-domain selector in `{"linear","srgb","source-auto"}`.
@@ -7003,10 +7040,10 @@ def _apply_auto_white_balance_stage_float(
     @param bits_per_color {int} Source DNG bit depth used for IA quantization settings.
     @param auto_adjust_dependencies {tuple[ModuleType|None, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
     @param estimation_input_is_auto_brightness_preprocessed {bool} `True` when stage input already includes auto-brightness and must be used directly as white-balance estimation payload.
-    @return {object} RGB float image after optional auto-white-balance stage.
+    @return {object} Camera-linear RGB float image after optional auto-white-balance stage.
     @exception RuntimeError Raised when required dependencies are missing.
     @exception ValueError Raised when mode is unsupported.
-    @satisfies REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188, REQ-199, REQ-200, REQ-201, REQ-211, REQ-212, REQ-213, REQ-236
+    @satisfies REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188, REQ-199, REQ-200, REQ-201, REQ-211, REQ-212, REQ-213, REQ-236, REQ-242
     """
 
     if auto_adjust_dependencies is not None:
@@ -7453,11 +7490,15 @@ def _normalize_opencv_hdr_to_unit_range(np_module, hdr_rgb_float32):
     `np.maximum(0.0)` floor, and values above unit range are scaled down by
     global maximum; no final `[0,1]` clipping is applied because the
     floor-and-scale sequence guarantees the output is bounded within `[0,1]`
-    deterministically.
+    deterministically. Complexity: O(H*W). Side effects: none.
     @param np_module {ModuleType} Imported numpy module.
     @param hdr_rgb_float32 {object} OpenCV HDR or fusion RGB tensor.
     @return {object} Normalized RGB float tensor bounded within `[0,1]` by floor-and-scale normalization.
-    @satisfies REQ-110, REQ-143, REQ-144
+    @note Boundary classification: normalization/rescale.
+    @note Source range: OpenCV radiance or fusion float tensor with non-finite and out-of-range samples allowed.
+    @note Target range: backend-normalized RGB float in `[0,1]`.
+    @note Stage intent: provide one congruent backend output contract before merge gamma or shared postprocess.
+    @satisfies REQ-110, REQ-143, REQ-144, REQ-238, REQ-239
     """
 
     hdr_rgb_float64 = np_module.array(hdr_rgb_float32, dtype=np_module.float64)
@@ -7471,6 +7512,28 @@ def _normalize_opencv_hdr_to_unit_range(np_module, hdr_rgb_float32):
     return normalized.astype(np_module.float32)
 
 
+def _rescale_mertens_fusion_to_display_range(np_module, fusion_rgb_float):
+    """@brief Apply the documented OpenCV Mertens `*255.0` rescale bridge.
+
+    @details Multiplies raw `cv2.MergeMertens.process(...)` float output by
+    `255.0` to reproduce OpenCV exposure-fusion brightness semantics before the
+    optional simple tonemap and the shared backend normalization step.
+    Complexity: O(H*W). Side effects: none.
+    @param np_module {ModuleType} Imported numpy module.
+    @param fusion_rgb_float {object} Raw OpenCV Mertens fusion float tensor.
+    @return {object} Rescaled float32 tensor prepared for optional tonemap.
+    @note Boundary classification: normalization/rescale.
+    @note Source range: OpenCV Mertens fusion float output in implementation-defined scale.
+    @note Target range: OpenCV display-oriented float scale expected by optional tonemap.
+    @note Stage intent: preserve documented OpenCV exposure-fusion brightness semantics before backend normalization.
+    @satisfies REQ-154, REQ-238, REQ-239
+    """
+
+    return np_module.asarray(fusion_rgb_float, dtype=np_module.float32) * np_module.float32(
+        255.0
+    )
+
+
 def _run_opencv_merge_mertens(
     cv2_module,
     np_module,
@@ -7482,21 +7545,24 @@ def _run_opencv_merge_mertens(
 
     @details Runs `cv2.createMergeMertens().process(...)` on RGB float
     brackets that already share one identical merge-gamma transfer curve,
-    rescales the float result by `255` to match OpenCV exposure-fusion
-    brightness semantics observed on `uint8` inputs, optionally applies OpenCV
-    simple gamma tonemap with user-configured gamma, and then normalizes the
-    result to the repository RGB float contract.
+    applies the explicit `_rescale_mertens_fusion_to_display_range(...)`
+    bridge, optionally applies OpenCV simple gamma tonemap with
+    user-configured gamma, and then normalizes the result to the repository
+    RGB float contract.
     @param cv2_module {ModuleType} Imported OpenCV module.
     @param np_module {ModuleType} Imported numpy module.
     @param exposures_float {list[object]} Ordered RGB float bracket tensors preconditioned with one identical merge-gamma transfer.
     @param tonemap_enabled {bool} `True` enables simple OpenCV tone mapping.
     @param tonemap_gamma {float} Positive gamma passed to `createTonemap`.
-    @return {object} Normalized RGB float tensor.
-    @satisfies REQ-108, REQ-110, REQ-143, REQ-144, REQ-154
+    @return {object} Normalized display-referred RGB float tensor.
+    @satisfies REQ-108, REQ-110, REQ-143, REQ-144, REQ-154, REQ-237, REQ-238
     """
 
     fusion_rgb = cv2_module.createMergeMertens().process(exposures_float)
-    fusion_rgb = np_module.array(fusion_rgb, dtype=np_module.float32) * 255.0
+    fusion_rgb = _rescale_mertens_fusion_to_display_range(
+        np_module=np_module,
+        fusion_rgb_float=fusion_rgb,
+    )
     if tonemap_enabled:
         tonemap = cv2_module.createTonemap(float(tonemap_gamma))
         fusion_rgb = tonemap.process(fusion_rgb)
@@ -7539,6 +7605,29 @@ def _estimate_opencv_camera_response(
     return calibrator.process(exposures_radiance_uint8, times=exposure_times)
 
 
+def _quantize_opencv_radiance_rgb_uint8(np_module, image_rgb_float):
+    """@brief Quantize one radiance-path bracket at the explicit OpenCV `uint8` boundary.
+
+    @details Converts one camera-linear RGB float bracket to `uint8` using the
+    repository byte-quantization helper. Scope is restricted to the OpenCV
+    Debevec/Robertson radiance path where calibrator and merge APIs require
+    `CV_8U` payloads. Complexity: O(H*W). Side effects: none.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_float {object} Camera-linear RGB float bracket tensor.
+    @return {object} Backend-local RGB `uint8` tensor.
+    @note Boundary classification: integer quantization.
+    @note Source range: camera-linear RGB float bracket contract in `[0,1]`.
+    @note Target range: backend-local RGB `uint8` code values in `[0,255]`.
+    @note Stage intent: satisfy OpenCV radiance calibrator and merge input requirements without changing external float interfaces.
+    @satisfies REQ-110, REQ-162, REQ-238, REQ-239
+    """
+
+    return _to_uint8_image_array(
+        np_module=np_module,
+        image_data=image_rgb_float,
+    )
+
+
 def _run_opencv_merge_radiance(
     cv2_module,
     np_module,
@@ -7555,27 +7644,28 @@ def _run_opencv_merge_radiance(
     implementation before `MergeDebevec` or `MergeRobertson`. OpenCV requires
     the radiance path to consume backend-local `uint8` bracket payloads when
     calibrated `response` is supplied, so this helper quantizes the shared
-    linear float brackets only inside the backend step, preserving float
-    repository interfaces at entry and exit. Then it applies simple OpenCV
-    gamma tone mapping when enabled; otherwise normalizes the radiance map
-    directly to the repository RGB float contract. Time complexity: `O(n*p)`.
-    Side effects: none.
+    camera-linear float brackets only through
+    `_quantize_opencv_radiance_rgb_uint8(...)`, preserving float repository
+    interfaces at entry and exit. Then it applies simple OpenCV gamma tone
+    mapping when enabled; otherwise normalizes the radiance map directly to the
+    repository RGB float contract. Time complexity: `O(n*p)`. Side effects:
+    none.
     @param cv2_module {ModuleType} Imported OpenCV module.
     @param np_module {ModuleType} Imported numpy module.
-    @param exposures_linear_float {list[object]} Ordered linear RGB float bracket tensors.
+    @param exposures_linear_float {list[object]} Ordered camera-linear RGB float bracket tensors.
     @param exposure_times {object} OpenCV exposure-time vector.
     @param merge_algorithm {str} Canonical OpenCV merge algorithm token.
     @param tonemap_enabled {bool} `True` enables simple OpenCV tone mapping.
     @param tonemap_gamma {float} Positive gamma passed to `createTonemap`.
-    @return {object} Normalized RGB float tensor.
+    @return {object} Normalized backend RGB float tensor.
     @exception RuntimeError Raised when `merge_algorithm` is unsupported.
-    @satisfies REQ-108, REQ-109, REQ-110, REQ-143, REQ-144, REQ-152, REQ-153, REQ-162
+    @satisfies REQ-108, REQ-109, REQ-110, REQ-143, REQ-144, REQ-152, REQ-153, REQ-162, REQ-237, REQ-238
     """
 
     exposures_radiance_uint8 = [
-        _to_uint8_image_array(
+        _quantize_opencv_radiance_rgb_uint8(
             np_module=np_module,
-            image_data=exposure_linear_float,
+            image_rgb_float=exposure_linear_float,
         )
         for exposure_linear_float in exposures_linear_float
     ]
@@ -7643,7 +7733,8 @@ def _run_opencv_tonemap_backend(
     dispatches exactly one OpenCV tone-map implementation (`Drago`, `Reinhard`,
     or `Mantiuk`) with `gamma_inv` resolved as the inverse merge-gamma curve
     parameter, preserves float-domain dynamic range without backend-local
-    clipping, and applies merge gamma strictly as backend-final step.
+    clipping, and applies merge gamma strictly as the display-boundary step
+    before shared static postprocess.
     @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors `(ev_minus, ev_zero, ev_plus)`.
     @param opencv_tonemap_options {OpenCvTonemapOptions} OpenCV-Tonemap selector and knob payload.
     @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
@@ -7740,17 +7831,17 @@ def _run_opencv_merge_backend(
 ):
     """@brief Merge bracket float images into one RGB float image via OpenCV.
 
-    @details Accepts three RGB float bracket tensors ordered as `(ev_minus,
-    ev_zero, ev_plus)`, forwards them to backend dispatch without entry
-    re-normalization or clipping, derives OpenCV radiance exposure times in
-    seconds from EXIF `ExposureTime` for Debevec/Robertson or dispatches
+    @details Accepts three camera-linear RGB float bracket tensors ordered as
+    `(ev_minus, ev_zero, ev_plus)`, forwards them to backend dispatch without
+    entry re-normalization or clipping, derives OpenCV radiance exposure times
+    in seconds from EXIF `ExposureTime` for Debevec/Robertson or dispatches
     Mertens directly, and returns one congruent normalized RGB float image.
-    Debevec and Robertson consume the shared linear HDR bracket contract
-    directly with calibrated inverse response and apply resolved merge gamma
-    as one backend-final output step, while Mertens first applies one
-    identical resolved merge-gamma transfer to each bracket input, executes
-    exposure fusion, and optionally applies OpenCV simple tonemap on fused
-    output before final normalization.
+    Debevec and Robertson consume the shared camera-linear HDR bracket
+    contract directly with calibrated inverse response and apply resolved merge
+    gamma as one explicit display-boundary step, while Mertens first applies
+    one identical resolved merge-gamma transfer to each bracket input,
+    executes exposure fusion, and optionally applies OpenCV simple tonemap on
+    fused output before final normalization.
     @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors.
     @param ev_value {float} EV bracket delta used to generate exposure files.
     @param ev_zero {float} Central EV used to generate exposure files.
@@ -8859,17 +8950,17 @@ def _normalize_float_rgb_image(np_module, image_data):
 
 
 def _prepare_postprocess_entry_rgb_float(np_module, image_data):
-    """@brief Adapt postprocess entry payload to RGB float32 without unconditional clipping.
+    """@brief Adapt postprocess entry payload to display-referred RGB float32.
 
     @details Preserves merge-backend float payload dynamic range by bypassing
     normalization/clipping for float-typed inputs and normalizes only non-float
     image encodings (`uint8`, `uint16`, or integer-like payloads) into the
-    repository RGB float working domain before postprocess stages execute.
+    display-referred RGB working domain before postprocess stages execute.
     @param np_module {ModuleType} Imported numpy module.
     @param image_data {object} Postprocess entry image payload.
-    @return {object} RGB `float32` tensor with shape `(H,W,3)`.
+    @return {object} Display-referred RGB `float32` tensor with shape `(H,W,3)`.
     @exception ValueError Raised when input shape is unsupported.
-    @satisfies REQ-012, REQ-134, REQ-214
+    @satisfies REQ-012, REQ-134, REQ-214, REQ-237
     """
 
     dtype_kind = str(getattr(getattr(image_data, "dtype", None), "kind", ""))
@@ -9240,12 +9331,17 @@ def _build_auto_post_gamma_lut_float(np_module, gamma_value, lut_size):
     """@brief Build one floating-point LUT for auto-gamma mapping.
 
     @details Generates one evenly sampled domain in `[0,1]` and evaluates
-    `output = input^gamma` over that domain using float precision only.
+    `output = input^gamma` over that domain using float precision only. This
+    helper is the explicit LUT discretization boundary for auto-gamma.
     @param np_module {ModuleType} Imported numpy module.
     @param gamma_value {float} Resolved auto-gamma exponent.
     @param lut_size {int} LUT sample count (`>=2`).
     @return {tuple[object, object]} LUT domain and mapped values as float arrays.
-    @satisfies REQ-178
+    @note Boundary classification: LUT discretization.
+    @note Source range: continuous display-referred RGB channel domain in `[0,1]`.
+    @note Target range: sampled LUT domain in `[0,1]` with `lut_size` entries.
+    @note Stage intent: provide deterministic sampled transfer mapping for auto-gamma.
+    @satisfies REQ-178, REQ-238, REQ-239
     """
 
     lut_domain = np_module.linspace(0.0, 1.0, int(lut_size), dtype=np_module.float64)
@@ -9285,19 +9381,19 @@ def _ensure_three_channel_float_array_no_range_adjust(np_module, image_data):
 
 
 def _apply_auto_post_gamma_float(np_module, image_rgb_float, post_gamma_auto_options):
-    """@brief Apply mean-luminance anchored auto-gamma over RGB float tensor.
+    """@brief Apply mean-luminance anchored auto-gamma over display-referred RGB.
 
-    @details Computes grayscale mean luminance from normalized RGB float input,
-    solves `gamma=log(target_gray)/log(mean_luminance)` when mean luminance is
-    strictly within configured guards, otherwise returns input unchanged with
-    resolved gamma `1.0`, then applies one floating-point LUT-domain mapping
-    `output=input^gamma` without quantized intermediates or stage-local
-    clipping.
+    @details Computes grayscale mean luminance from normalized display-referred
+    RGB float input, solves `gamma=log(target_gray)/log(mean_luminance)` when
+    mean luminance is strictly within configured guards, otherwise returns
+    input unchanged with resolved gamma `1.0`, then applies one floating-point
+    LUT-domain mapping `output=input^gamma` without quantized intermediates or
+    stage-local clipping.
     @param np_module {ModuleType} Imported numpy module.
-    @param image_rgb_float {object} RGB float image tensor.
+    @param image_rgb_float {object} Display-referred RGB float image tensor.
     @param post_gamma_auto_options {PostGammaAutoOptions} Auto-gamma replacement stage knobs.
-    @return {tuple[object, float]} RGB float tensor and resolved gamma value.
-    @satisfies REQ-177, REQ-178
+    @return {tuple[object, float]} Display-referred RGB float tensor and resolved gamma value.
+    @satisfies REQ-177, REQ-178, REQ-238, REQ-240
     """
 
     validated_input = _ensure_three_channel_float_array_no_range_adjust(
@@ -9583,14 +9679,17 @@ def _from_linear_srgb(np_module, image_linear):
 
 
 def _compute_bt709_luminance(np_module, linear_rgb):
-    """@brief Compute BT.709 linear luminance from linear RGB tensor.
+    """@brief Compute one BT.709-coefficient luminance proxy from camera-linear RGB.
 
-    @details Computes per-pixel luminance using BT.709 coefficients with RGB
-    channel order: `0.2126*R + 0.7152*G + 0.0722*B`.
+    @details Computes per-pixel luminance proxy using BT.709 coefficients with
+    RGB channel order `0.2126*R + 0.7152*G + 0.0722*B`. The input tensor is the
+    camera-linear pre-merge working image used by auto-brightness, so the
+    coefficients serve as a deterministic planning proxy rather than a strict
+    standard-RGB colorimetric claim.
     @param np_module {ModuleType} Imported numpy module.
-    @param linear_rgb {object} Linear-sRGB float tensor with shape `H,W,3`.
-    @return {object} Float luminance tensor with shape `H,W`.
-    @satisfies REQ-090, REQ-099
+    @param linear_rgb {object} Camera-linear RGB float tensor with shape `H,W,3`.
+    @return {object} Float luminance-proxy tensor with shape `H,W`.
+    @satisfies REQ-050, REQ-242
     """
 
     return (
@@ -10270,19 +10369,19 @@ def _apply_clahe_luminance_float(np_module, luminance_float, clip_limit, tile_gr
 
 
 def _reconstruct_rgb_from_ycrcb_luma_float(cv2_module, np_module, luminance_float, cr_channel, cb_channel):
-    """@brief Reconstruct RGB float output from YCrCb float channels.
+    """@brief Reconstruct display-referred RGB output from YCrCb float channels.
 
-    @details Creates one float32 YCrCb tensor from one equalized luminance plane
-    plus preserved Cr/Cb channels, converts it back to RGB with OpenCV color
-    transforms only, and returns one clamped float64 RGB tensor for downstream
-    blending in the auto-adjust pipeline.
+    @details Creates one float32 YCrCb tensor from one equalized luminance
+    plane plus preserved Cr/Cb channels, converts it back to RGB with OpenCV
+    color transforms only, and returns one clamped float64 display-referred RGB
+    tensor for downstream blending in the auto-adjust pipeline.
     @param cv2_module {ModuleType} Imported cv2 module.
     @param np_module {ModuleType} Imported numpy module.
     @param luminance_float {object} Equalized luminance tensor in `[0,1]`.
     @param cr_channel {object} Preserved YCrCb Cr channel.
     @param cb_channel {object} Preserved YCrCb Cb channel.
-    @return {object} Reconstructed RGB float tensor in `[0,1]`.
-    @satisfies REQ-136, REQ-137
+    @return {object} Reconstructed display-referred RGB float tensor in `[0,1]`.
+    @satisfies REQ-136, REQ-137, REQ-241
     """
 
     ycrcb_float = np_module.empty(luminance_float.shape + (3,), dtype=np_module.float32)
@@ -10294,22 +10393,22 @@ def _reconstruct_rgb_from_ycrcb_luma_float(cv2_module, np_module, luminance_floa
 
 
 def _apply_clahe_luma_rgb_float(cv2_module, np_module, image_rgb_float, auto_adjust_options):
-    """@brief Apply CLAHE-luma local contrast directly on RGB float buffers.
+    """@brief Apply CLAHE-luma local contrast directly on display-referred RGB buffers.
 
-    @details Converts normalized RGB float input to float YCrCb, runs one native
-    NumPy CLAHE implementation on the luminance plane with OpenCV-compatible
-    tiling, clip-limit normalization, clipping, redistribution, and bilinear
-    tile interpolation, then reconstructs one RGB float CLAHE candidate from
-    preserved chroma plus mapped luminance and blends that candidate with the
-    original float RGB image using configured strength. OpenCV is used only for
-    RGB<->YCrCb color conversion; the active CLAHE path performs no uint16
-    image-plane round-trip.
+    @details Converts normalized display-referred RGB float input to float
+    YCrCb, runs one native NumPy CLAHE implementation on the luminance plane
+    with OpenCV-compatible tiling, clip-limit normalization, clipping,
+    redistribution, and bilinear tile interpolation, then reconstructs one RGB
+    float CLAHE candidate from preserved chroma plus mapped luminance and
+    blends that candidate with the original float RGB image using configured
+    strength. OpenCV is used only for RGB<->YCrCb color conversion; the active
+    CLAHE path performs no uint16 image-plane round-trip.
     @param cv2_module {ModuleType} Imported cv2 module.
     @param np_module {ModuleType} Imported numpy module.
-    @param image_rgb_float {object} RGB float tensor in `[0,1]`.
+    @param image_rgb_float {object} Display-referred RGB float tensor in `[0,1]`.
     @param auto_adjust_options {AutoAdjustOptions} Parsed auto-adjust CLAHE controls.
-    @return {object} RGB float tensor after optional CLAHE-luma stage.
-    @satisfies REQ-123, REQ-125, REQ-136, REQ-137
+    @return {object} Display-referred RGB float tensor after optional CLAHE-luma stage.
+    @satisfies REQ-123, REQ-125, REQ-136, REQ-137, REQ-241
     """
 
     rgb_float = _clamp01(
@@ -11725,21 +11824,21 @@ def _call_auto_levels_compat_helper(
     return primary_callable(np_module=np_module, **kwargs)
 
 
-def _apply_auto_levels_float(np_module, image_rgb_float, auto_levels_options):
-    """@brief Apply auto-levels stage on RGB float tensor.
+def _clip_auto_levels_entry_rgb(np_module, image_rgb_float):
+    """@brief Apply the explicit auto-levels entry clip on display-referred RGB.
 
-    @details Executes RawTherapee-compatible histogram analysis on a normalized
-    RGB float tensor, applies the full float-domain tonal transformation driven
-    by exposure, black, brightness, contrast, and highlight-compression
-    metrics, conditionally runs float-native highlight reconstruction, and
-    optionally clips overflowing RGB triplets with RawTherapee film-like gamut
-    logic without any production uint16 staging buffers; no final stage-local
-    `[0,1]` clipping is applied beyond the optional gamut clip.
+    @details Sanitizes one display-referred RGB tensor to finite `float32`
+    samples and clamps the result to `[0,1]` before RawTherapee-compatible
+    histogram analysis and postprocess-local YCrCb/CIELab-like operations.
+    Complexity: O(H*W). Side effects: none.
     @param np_module {ModuleType} Imported numpy module.
-    @param image_rgb_float {object} RGB float tensor.
-    @param auto_levels_options {AutoLevelsOptions} Parsed auto-levels options.
-    @return {object} RGB float tensor after auto-levels stage without final stage-local clipping.
-    @satisfies REQ-100, REQ-101, REQ-102, REQ-119, REQ-120, REQ-165
+    @param image_rgb_float {object} Display-referred RGB float tensor.
+    @return {object} Display-referred RGB float32 tensor bounded to `[0,1]`.
+    @note Boundary classification: contract clipping.
+    @note Source range: display-referred RGB float after static postprocess.
+    @note Target range: display-referred RGB float in `[0,1]`.
+    @note Stage intent: satisfy auto-levels entry requirements before histogram and highlight-reconstruction math.
+    @satisfies REQ-100, REQ-165, REQ-238, REQ-239, REQ-241
     """
 
     normalized_input = _sanitize_finite_float_array(
@@ -11750,7 +11849,31 @@ def _apply_auto_levels_float(np_module, image_rgb_float, auto_levels_options):
         ),
         dtype=np_module.float32,
     )
-    normalized_input = np_module.clip(normalized_input, 0.0, 1.0)
+    return np_module.clip(normalized_input, 0.0, 1.0)
+
+
+def _apply_auto_levels_float(np_module, image_rgb_float, auto_levels_options):
+    """@brief Apply auto-levels stage on display-referred RGB float tensor.
+
+    @details Executes RawTherapee-compatible histogram analysis on a
+    display-referred RGB float tensor, applies the full float-domain tonal
+    transformation driven by exposure, black, brightness, contrast, and
+    highlight-compression metrics, conditionally runs float-native highlight
+    reconstruction, and optionally clips overflowing RGB triplets with
+    RawTherapee film-like gamut logic without any production uint16 staging
+    buffers; no final stage-local `[0,1]` clipping is applied beyond the
+    optional gamut clip.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_float {object} Display-referred RGB float tensor.
+    @param auto_levels_options {AutoLevelsOptions} Parsed auto-levels options.
+    @return {object} Display-referred RGB float tensor after auto-levels stage without final stage-local clipping.
+    @satisfies REQ-100, REQ-101, REQ-102, REQ-119, REQ-120, REQ-165, REQ-238, REQ-241
+    """
+
+    normalized_input = _clip_auto_levels_entry_rgb(
+        np_module=np_module,
+        image_rgb_float=image_rgb_float,
+    )
     histogram = _build_autoexp_histogram_rgb_float(
         np_module=np_module,
         image_rgb_float=normalized_input,
@@ -12115,17 +12238,19 @@ def _hlrecovery_luminance_uint16(np_module, image_rgb, maxval=_AUTO_LEVELS_CODE_
 def _hlrecovery_cielab_float(
     np_module, image_rgb, maxval=1.0, xyz_cam=None, cam_xyz=None
 ):
-    """@brief Apply CIELab blending highlight reconstruction on RGB tensor.
+    """@brief Apply CIELab blending highlight reconstruction on display-referred RGB.
 
     @details Ports CIELab blending method from attached source with Lab-space
-    channel repair under clipped highlights.
+    channel repair under clipped highlights. The default XYZ matrix matches the
+    display-referred standard RGB assumption used by postprocess highlight
+    reconstruction.
     @param np_module {ModuleType} Imported numpy module.
-    @param image_rgb {object} RGB float tensor on normalized scale.
+    @param image_rgb {object} Display-referred RGB float tensor on normalized scale.
     @param maxval {float} Maximum channel value.
     @param xyz_cam {object|None} Optional XYZ conversion matrix.
     @param cam_xyz {object|None} Optional inverse matrix.
-    @return {object} Highlight-reconstructed RGB float tensor.
-    @satisfies REQ-102
+    @return {object} Highlight-reconstructed display-referred RGB float tensor.
+    @satisfies REQ-102, REQ-241
     """
 
     rgb = np_module.asarray(image_rgb, dtype=np_module.float64)
@@ -12598,21 +12723,22 @@ def _apply_auto_brightness_rgb_float(
     image_rgb_float,
     auto_brightness_options,
 ):
-    """@brief Apply original photographic auto-brightness flow on RGB float tensor.
+    """@brief Apply original photographic auto-brightness flow on camera-linear RGB.
 
-    @details Executes `/tmp/auto-brightness.py` step order directly on linear
-    gamma `1.0` RGB float input: derive BT.709 luminance, classify key using
-    normalized distribution thresholds, choose or override key value `a`,
-    apply safeguarded Reinhard tonemap (modified Reinhard on non-degenerate
-    luminance, simple Reinhard fallback on low-variance/low-sample luminance),
-    preserve chromaticity by luminance scaling, optionally desaturate only
-    overflowing RGB pixels, and preserve linear gamma `1.0` output without any
-    CLAHE substep or stage-local `[0,1]` output clipping.
+    @details Executes `/tmp/auto-brightness.py` step order directly on the
+    camera-linear gamma `1.0` RGB working tensor: derive a BT.709-coefficient
+    luminance proxy, classify key using normalized distribution thresholds,
+    choose or override key value `a`, apply safeguarded Reinhard tonemap
+    (modified Reinhard on non-degenerate luminance, simple Reinhard fallback on
+    low-variance/low-sample luminance), preserve chromaticity by luminance
+    scaling, optionally desaturate only overflowing RGB pixels, and preserve
+    camera-linear output without any CLAHE substep or stage-local `[0,1]`
+    output clipping.
     @param np_module {ModuleType} Imported numpy module.
-    @param image_rgb_float {object} RGB float tensor.
+    @param image_rgb_float {object} Camera-linear RGB float tensor.
     @param auto_brightness_options {AutoBrightnessOptions} Parsed auto-brightness parameters.
-    @return {object} RGB float tensor after BT.709 auto-brightness without stage-local clipping.
-    @satisfies REQ-050, REQ-103, REQ-104, REQ-105, REQ-121, REQ-122, REQ-226
+    @return {object} Camera-linear RGB float tensor after auto-brightness without stage-local clipping.
+    @satisfies REQ-050, REQ-103, REQ-104, REQ-105, REQ-121, REQ-122, REQ-226, REQ-242
     """
 
     image_linear = _ensure_three_channel_float_array_no_range_adjust(
@@ -12886,16 +13012,16 @@ def _level_per_channel_adaptive(np_module, rgb, low_pct=0.1, high_pct=99.9):
 
 
 def _sigmoidal_contrast(np_module, rgb, contrast=3.0, midpoint=0.5):
-    """@brief Execute sigmoidal contrast stage.
+    """@brief Execute sigmoidal contrast stage on display-referred RGB.
 
     @details Applies logistic remapping with bounded normalization for each RGB
     channel.
     @param np_module {ModuleType} Imported numpy module.
-    @param rgb {object} RGB float tensor in `[0.0, 1.0]`.
+    @param rgb {object} Display-referred RGB float tensor in `[0.0, 1.0]`.
     @param contrast {float} Logistic slope.
     @param midpoint {float} Logistic midpoint.
-    @return {object} Contrast-adjusted RGB float tensor.
-    @satisfies REQ-075
+    @return {object} Contrast-adjusted display-referred RGB float tensor.
+    @satisfies REQ-075, REQ-241
     """
 
     x_values = _clamp01(
@@ -12918,15 +13044,15 @@ def _sigmoidal_contrast(np_module, rgb, contrast=3.0, midpoint=0.5):
 
 
 def _vibrance_hsl_gamma(np_module, rgb, saturation_gamma=0.8):
-    """@brief Execute HSL saturation gamma stage.
+    """@brief Execute HSL saturation gamma stage on display-referred RGB.
 
-    @details Converts RGB to HSL, applies saturation gamma transform, and
-    converts back to RGB.
+    @details Converts display-referred RGB to HSL, applies saturation gamma
+    transform, and converts back to RGB.
     @param np_module {ModuleType} Imported numpy module.
-    @param rgb {object} RGB float tensor in `[0.0, 1.0]`.
+    @param rgb {object} Display-referred RGB float tensor in `[0.0, 1.0]`.
     @param saturation_gamma {float} Saturation gamma denominator value.
-    @return {object} Saturation-adjusted RGB float tensor.
-    @satisfies REQ-075
+    @return {object} Saturation-adjusted display-referred RGB float tensor.
+    @satisfies REQ-075, REQ-241
     """
 
     rgb = _clamp01(
@@ -13013,6 +13139,34 @@ def _overlay_composite(np_module, base_rgb, overlay_gray):
     return _clamp01(np_module, output)
 
 
+def _clip_auto_adjust_stage_rgb(np_module, stage_rgb):
+    """@brief Apply the explicit auto-adjust clamp on display-referred stage data.
+
+    @details Sanitizes one display-referred stage payload to finite `float64`
+    samples and clamps the result to `[0,1]`. This helper is reused before
+    stage-local statistics and after stage-local arithmetic so repeated
+    auto-adjust clamp points remain explicit and centrally documented.
+    Complexity: O(H*W). Side effects: none.
+    @param np_module {ModuleType} Imported numpy module.
+    @param stage_rgb {object} Display-referred RGB or grayscale stage payload.
+    @return {object} Display-referred float64 payload bounded to `[0,1]`.
+    @note Boundary classification: contract clipping.
+    @note Source range: display-referred RGB float with possible non-finite or out-of-range samples.
+    @note Target range: display-referred RGB float in `[0,1]`.
+    @note Stage intent: stabilize auto-adjust statistics and stage handoffs.
+    @satisfies REQ-123, REQ-225, REQ-243
+    """
+
+    return _clamp01(
+        np_module,
+        _sanitize_finite_float_array(
+            np_module=np_module,
+            image_data=stage_rgb,
+            dtype=np_module.float64,
+        ),
+    )
+
+
 def _apply_validated_auto_adjust_pipeline(
     image_rgb_float,
     cv2_module,
@@ -13023,45 +13177,34 @@ def _apply_validated_auto_adjust_pipeline(
 ):
     """@brief Execute the validated auto-adjust pipeline.
 
-    @details Accepts one normalized RGB float image, executes selective blur,
-    adaptive levels, float-domain CLAHE-luma, sigmoidal contrast, HSL
-    saturation gamma, and high-pass/overlay stages entirely in float domain,
-    optionally persists progressive debug checkpoints, and returns normalized
-    RGB float output without any file round-trip.
-    @param image_rgb_float {object} RGB float tensor.
+    @details Accepts one normalized display-referred RGB float image, executes
+    selective blur, adaptive levels, float-domain CLAHE-luma, sigmoidal
+    contrast, HSL saturation gamma, and high-pass/overlay stages entirely in
+    float domain, reuses `_clip_auto_adjust_stage_rgb(...)` at each explicit
+    clamp boundary, optionally persists progressive debug checkpoints, and
+    returns normalized RGB float output without any file round-trip.
+    @param image_rgb_float {object} Display-referred RGB float tensor.
     @param cv2_module {ModuleType} Imported cv2 module.
     @param np_module {ModuleType} Imported numpy module.
     @param auto_adjust_options {AutoAdjustOptions} Shared auto-adjust knob values.
     @param imageio_module {ModuleType|None} Optional imageio module used for debug TIFF checkpoint emission.
     @param debug_context {DebugArtifactContext|None} Optional persistent debug output metadata.
-    @return {object} RGB float tensor after auto-adjust.
-    @satisfies REQ-051, REQ-075, REQ-106, REQ-123, REQ-136, REQ-137, REQ-148, REQ-235
+    @return {object} Display-referred RGB float tensor after auto-adjust.
+    @satisfies REQ-051, REQ-075, REQ-106, REQ-123, REQ-136, REQ-137, REQ-148, REQ-235, REQ-243
     """
-
-    def _sanitize_auto_adjust_stage(stage_rgb):
-        """@brief Sanitize one auto-adjust RGB stage payload to finite `[0,1]`."""
-
-        return _clamp01(
-            np_module,
-            _sanitize_finite_float_array(
-                np_module=np_module,
-                image_data=stage_rgb,
-                dtype=np_module.float64,
-            ),
-        )
 
     rgb_float = _normalize_float_rgb_image(
         np_module=np_module,
         image_data=image_rgb_float,
     ).astype(np_module.float64)
-    rgb_float = _sanitize_auto_adjust_stage(rgb_float)
+    rgb_float = _clip_auto_adjust_stage_rgb(np_module=np_module, stage_rgb=rgb_float)
     rgb_float = _selective_blur_contrast_gated_vectorized(
         np_module,
         rgb_float,
         sigma=auto_adjust_options.blur_sigma,
         threshold_percent=auto_adjust_options.blur_threshold_pct,
     )
-    rgb_float = _sanitize_auto_adjust_stage(rgb_float)
+    rgb_float = _clip_auto_adjust_stage_rgb(np_module=np_module, stage_rgb=rgb_float)
     if imageio_module is not None and debug_context is not None:
         _write_debug_rgb_float_tiff(
             imageio_module=imageio_module,
@@ -13076,7 +13219,7 @@ def _apply_validated_auto_adjust_pipeline(
         low_pct=auto_adjust_options.level_low_pct,
         high_pct=auto_adjust_options.level_high_pct,
     )
-    rgb_float = _sanitize_auto_adjust_stage(rgb_float)
+    rgb_float = _clip_auto_adjust_stage_rgb(np_module=np_module, stage_rgb=rgb_float)
     if imageio_module is not None and debug_context is not None:
         _write_debug_rgb_float_tiff(
             imageio_module=imageio_module,
@@ -13091,7 +13234,7 @@ def _apply_validated_auto_adjust_pipeline(
         image_rgb_float=rgb_float,
         auto_adjust_options=auto_adjust_options,
     )
-    rgb_float = _sanitize_auto_adjust_stage(rgb_float)
+    rgb_float = _clip_auto_adjust_stage_rgb(np_module=np_module, stage_rgb=rgb_float)
     if imageio_module is not None and debug_context is not None:
         _write_debug_rgb_float_tiff(
             imageio_module=imageio_module,
@@ -13106,7 +13249,7 @@ def _apply_validated_auto_adjust_pipeline(
         contrast=auto_adjust_options.sigmoid_contrast,
         midpoint=auto_adjust_options.sigmoid_midpoint,
     )
-    rgb_float = _sanitize_auto_adjust_stage(rgb_float)
+    rgb_float = _clip_auto_adjust_stage_rgb(np_module=np_module, stage_rgb=rgb_float)
     if imageio_module is not None and debug_context is not None:
         _write_debug_rgb_float_tiff(
             imageio_module=imageio_module,
@@ -13118,7 +13261,7 @@ def _apply_validated_auto_adjust_pipeline(
     rgb_float = _vibrance_hsl_gamma(
         np_module, rgb_float, saturation_gamma=auto_adjust_options.saturation_gamma
     )
-    rgb_float = _sanitize_auto_adjust_stage(rgb_float)
+    rgb_float = _clip_auto_adjust_stage_rgb(np_module=np_module, stage_rgb=rgb_float)
     if imageio_module is not None and debug_context is not None:
         _write_debug_rgb_float_tiff(
             imageio_module=imageio_module,
@@ -13133,16 +13276,15 @@ def _apply_validated_auto_adjust_pipeline(
         rgb_float,
         blur_sigma=auto_adjust_options.highpass_blur_sigma,
     )
-    high_pass_gray = _clamp01(
-        np_module,
-        _sanitize_finite_float_array(
-            np_module=np_module,
-            image_data=high_pass_gray,
-            dtype=np_module.float64,
-        ),
+    high_pass_gray = _clip_auto_adjust_stage_rgb(
+        np_module=np_module,
+        stage_rgb=high_pass_gray,
     )
     rgb_float = _overlay_composite(np_module, rgb_float, high_pass_gray)
-    rgb_float = _sanitize_auto_adjust_stage(rgb_float).astype(np_module.float32)
+    rgb_float = _clip_auto_adjust_stage_rgb(
+        np_module=np_module,
+        stage_rgb=rgb_float,
+    ).astype(np_module.float32)
     if imageio_module is not None and debug_context is not None:
         _write_debug_rgb_float_tiff(
             imageio_module=imageio_module,
@@ -13165,20 +13307,20 @@ def _apply_auto_adjust_stage_float(
     """@brief Execute auto-adjust stage entry with deterministic enable gating.
 
     @details Always executes auto-adjust stage entry after auto-levels stage
-    handoff. Validates enable-state first; returns pass-through RGB float output
-    when disabled; raises deterministic dependency diagnostics when enabled but
-    dependencies are unavailable; delegates enabled processing to
-    `_apply_validated_auto_adjust_pipeline(...)` while preserving RGB float
-    interfaces.
-    @param image_rgb_float {object} RGB float stage input tensor.
+    handoff. Validates enable-state first; returns pass-through
+    display-referred RGB float output when disabled; raises deterministic
+    dependency diagnostics when enabled but dependencies are unavailable; and
+    delegates enabled processing to `_apply_validated_auto_adjust_pipeline(...)`
+    while preserving float interfaces.
+    @param image_rgb_float {object} Display-referred RGB float stage input tensor.
     @param postprocess_options {PostprocessOptions} Shared postprocess options containing auto-adjust state and knobs.
     @param auto_adjust_dependencies {tuple[ModuleType|None, ModuleType]|None} Optional `(cv2, numpy)` dependency tuple.
     @param np_module {ModuleType} Imported numpy module used for pass-through normalization.
     @param imageio_module {ModuleType|None} Optional imageio module used for debug TIFF checkpoint emission.
     @param debug_context {DebugArtifactContext|None} Optional persistent debug output metadata.
-    @return {object} RGB float tensor after enabled auto-adjust processing or disabled pass-through.
+    @return {object} Display-referred RGB float tensor after enabled auto-adjust processing or disabled pass-through.
     @exception RuntimeError Raised when auto-adjust resolves to enabled but OpenCV/numpy dependencies are unavailable.
-    @satisfies REQ-106, REQ-123, REQ-234, REQ-235
+    @satisfies REQ-106, REQ-123, REQ-234, REQ-235, REQ-243
     """
 
     stage_input_rgb = _ensure_three_channel_float_array_no_range_adjust(
@@ -13224,6 +13366,29 @@ def _load_piexif_dependency():
     return piexif
 
 
+def _clip_postprocess_exit_rgb(np_module, image_rgb_float):
+    """@brief Apply the explicit `_postprocess` exit clip on display-referred RGB.
+
+    @details Converts one display-referred RGB payload to `float32`, clamps it
+    to `[0,1]`, and returns the bounded tensor consumed by final JPEG
+    quantization. Complexity: O(H*W). Side effects: none.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_float {object} Display-referred RGB float tensor.
+    @return {object} Display-referred RGB float32 tensor bounded to `[0,1]`.
+    @note Boundary classification: contract clipping.
+    @note Source range: display-referred RGB float after shared postprocess stages.
+    @note Target range: display-referred RGB float in `[0,1]`.
+    @note Stage intent: establish the final-save input contract before JPEG quantization.
+    @satisfies REQ-238, REQ-239
+    """
+
+    return np_module.clip(
+        np_module.asarray(image_rgb_float, dtype=np_module.float32),
+        0.0,
+        1.0,
+    ).astype(np_module.float32, copy=False)
+
+
 def _postprocess(
     imageio_module,
     merged_image_float,
@@ -13236,17 +13401,17 @@ def _postprocess(
 ):
     """@brief Execute post-merge postprocessing stages on one RGB float image.
 
-    @details Accepts one merge-backend RGB payload, adapts postprocess entry by
-    normalizing only non-float encodings while preserving float payload dynamic
-    range, executes optional auto-brightness stage unless pre-applied by the
-    caller, executes optional auto-white-balance stage unless pre-applied by the
-    caller, executes static postprocess stage (numeric
-    gamma/brightness/contrast/saturation or auto-gamma replacement), optional
-    auto-levels stage, and mandatory auto-adjust stage entry with internal
-    enable-state validation while preserving float interfaces. When debug
-    context is present, emits persistent TIFF16
-    checkpoints after each executed stage and returns normalized RGB float
-    output for final JPEG encoding.
+    @details Accepts one merge-backend display-referred RGB payload, adapts
+    postprocess entry by normalizing only non-float encodings while preserving
+    float payload dynamic range, executes optional auto-brightness stage unless
+    pre-applied by the caller, executes optional auto-white-balance stage
+    unless pre-applied by the caller, executes static postprocess stage
+    (numeric gamma/brightness/contrast/saturation or auto-gamma replacement),
+    optional auto-levels stage, and mandatory auto-adjust stage entry with
+    internal enable-state validation while preserving float interfaces. When
+    debug context is present, emits persistent TIFF16 checkpoints after each
+    executed stage and returns clipped display-referred RGB float output for
+    final JPEG encoding.
     @param imageio_module {ModuleType} Imported imageio module used for debug TIFF checkpoint emission.
     @param merged_image_float {object} Merged image payload produced by selected backend.
     @param postprocess_options {PostprocessOptions} Shared TIFF-to-JPG correction settings.
@@ -13255,9 +13420,9 @@ def _postprocess(
     @param bits_per_color {int} Source DNG bit depth used by IA auto-white-balance estimation.
     @param source_gamma_info {SourceGammaInfo|None} Source-gamma diagnostics used by xphoto `source-auto` estimation domain.
     @param debug_context {DebugArtifactContext|None} Optional persistent debug output metadata.
-    @return {object} Postprocessed RGB float tensor in range `[0,1]`.
+    @return {object} Postprocessed display-referred RGB float tensor in range `[0,1]`.
     @exception RuntimeError Raised when numpy or auto-adjust dependencies are missing.
-    @satisfies REQ-012, REQ-013, REQ-050, REQ-075, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-106, REQ-123, REQ-132, REQ-134, REQ-148, REQ-176, REQ-182, REQ-183, REQ-199, REQ-200, REQ-213, REQ-214, REQ-234, REQ-235
+    @satisfies REQ-012, REQ-013, REQ-050, REQ-075, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-106, REQ-123, REQ-132, REQ-134, REQ-148, REQ-176, REQ-182, REQ-183, REQ-199, REQ-200, REQ-213, REQ-214, REQ-234, REQ-235, REQ-237, REQ-238
     """
 
     if numpy_module is not None:
@@ -13350,7 +13515,37 @@ def _postprocess(
         debug_context=debug_context,
     )
 
-    return np_module.clip(image_rgb_float, 0.0, 1.0).astype(np_module.float32, copy=False)
+    return _clip_postprocess_exit_rgb(
+        np_module=np_module,
+        image_rgb_float=image_rgb_float,
+    )
+
+
+def _quantize_final_rgb_uint8(np_module, image_rgb_float):
+    """@brief Apply the explicit final JPEG quantization boundary.
+
+    @details Converts one display-referred RGB float tensor to bounded
+    `float32`, then delegates to `_to_uint8_image_array(...)` for the final
+    byte-domain quantization used by JPEG save and EXIF thumbnail refresh.
+    Complexity: O(H*W). Side effects: none.
+    @param np_module {ModuleType} Imported numpy module.
+    @param image_rgb_float {object} Display-referred RGB float tensor.
+    @return {object} Final RGB `uint8` tensor used for JPEG serialization.
+    @note Boundary classification: integer quantization.
+    @note Source range: display-referred RGB float in `[0,1]`.
+    @note Target range: RGB `uint8` code values in `[0,255]`.
+    @note Stage intent: materialize the sole final-save integer image buffer.
+    @satisfies REQ-133, REQ-238, REQ-239
+    """
+
+    normalized_rgb = _clip_postprocess_exit_rgb(
+        np_module=np_module,
+        image_rgb_float=image_rgb_float,
+    )
+    return _to_uint8_image_array(
+        np_module=np_module,
+        image_data=normalized_rgb,
+    )
 
 
 def _encode_jpg(
@@ -13363,12 +13558,13 @@ def _encode_jpg(
     source_exif_payload=None,
     source_orientation=1,
 ):
-    """@brief Encode one postprocessed RGB float payload into final JPG output.
+    """@brief Encode one postprocessed display-referred RGB payload into final JPG output.
 
-    @details Converts one postprocessed RGB float tensor to final quantized
-    uint8 pixels, writes the JPEG file with resolved compression quality,
-    refreshes EXIF thumbnail bytes when source EXIF payload exists, and leaves
-    timestamp synchronization to the caller.
+    @details Converts one postprocessed display-referred RGB float tensor to
+    final quantized uint8 pixels through `_quantize_final_rgb_uint8(...)`,
+    writes the JPEG file with resolved compression quality, refreshes EXIF
+    thumbnail bytes when source EXIF payload exists, and leaves timestamp
+    synchronization to the caller.
     @param pil_image_module {ModuleType} Imported Pillow image module.
     @param postprocessed_image_float {object} Postprocessed RGB float tensor ready for final JPEG encoding.
     @param output_jpg {Path} Final JPG output path.
@@ -13379,7 +13575,7 @@ def _encode_jpg(
     @param source_orientation {int} Source EXIF orientation value in range `1..8`.
     @return {None} Side effects only.
     @exception RuntimeError Raised when numpy or piexif dependencies are missing.
-    @satisfies REQ-014, REQ-041, REQ-078, REQ-133
+    @satisfies REQ-014, REQ-041, REQ-078, REQ-133, REQ-238
     """
 
     if numpy_module is not None:
@@ -13390,11 +13586,9 @@ def _encode_jpg(
         except ModuleNotFoundError as exc:
             raise RuntimeError("Missing required dependency: numpy") from exc
 
-    image_rgb_float = np_module.asarray(postprocessed_image_float, dtype=np_module.float32)
-    image_rgb_float = np_module.clip(image_rgb_float, 0.0, 1.0)
-    final_image_rgb_uint8 = _to_uint8_image_array(
+    final_image_rgb_uint8 = _quantize_final_rgb_uint8(
         np_module=np_module,
-        image_data=image_rgb_float,
+        image_rgb_float=postprocessed_image_float,
     )
     pil_image = pil_image_module.fromarray(final_image_rgb_uint8)
     if getattr(pil_image, "mode", "") != "RGB":
