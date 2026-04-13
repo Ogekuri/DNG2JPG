@@ -2259,12 +2259,20 @@ def test_resolve_default_postprocess_luminance_uses_updated_tmo_defaults() -> No
 
 
 def test_resolve_default_postprocess_opencv_tonemap_uses_algorithm_defaults() -> None:
-    """OpenCV-Tonemap defaults must resolve per selected tone-map algorithm."""
+    """@brief Verify OpenCV-Tonemap algorithm defaults.
+
+    @details Resolves default postprocess tuples for each supported
+    OpenCV-Tonemap algorithm and verifies the returned factors match the
+    normative per-algorithm static defaults. Complexity: O(K) for `K=3`
+    configured algorithms. Side effects: none.
+    @return {None} Assertions only.
+    @satisfies TST-031
+    """
 
     expected_defaults = {
-        dng2jpg_module.OPENCV_TONEMAP_MAP_DRAGO: (1.0, 1.0, 1.4, 0.6),
+        dng2jpg_module.OPENCV_TONEMAP_MAP_DRAGO: (1.0, 1.0, 1.4, 1.0),
         dng2jpg_module.OPENCV_TONEMAP_MAP_REINHARD: (1.0, 1.0, 1.0, 1.0),
-        dng2jpg_module.OPENCV_TONEMAP_MAP_MANTIUK: (0.9, 1.2, 1.4, 0.5),
+        dng2jpg_module.OPENCV_TONEMAP_MAP_MANTIUK: (0.9, 1.0, 1.3, 1.0),
     }
     for algorithm, expected in expected_defaults.items():
         defaults = dng2jpg_module._resolve_default_postprocess(  # pylint: disable=protected-access
@@ -2332,7 +2340,16 @@ def test_print_help_orders_sections_by_pipeline_step(capsys) -> None:
 
 
 def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> None:
-    """Help output must enumerate accepted conversion options and omitted defaults."""
+    """@brief Verify help output enumerates accepted options and defaults.
+
+    @details Renders conversion help, validates canonical option coverage, and
+    verifies the static default summary reflects the current backend-specific
+    omitted-value defaults. Complexity: O(N) in emitted help length. Side
+    effects: captures stdout only.
+    @param capsys {pytest.CaptureFixture[str]} Pytest capture fixture.
+    @return {None} Assertions only.
+    @satisfies TST-042
+    """
 
     dng2jpg_module.print_help("test-version")
     output = capsys.readouterr().out
@@ -2439,8 +2456,8 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
     assert "Debevec" in output and "1 / 1.2 / 1.5 / 1" in output
     assert "Mertens" in output and "1 / 0.9 / 1.4 / 1.1" in output
     assert "Robertson" in output and "1 / 1.4 / 1.4 / 1" in output
-    assert "drago" in output and "1 / 1 / 1.4 / 0.6" in output
-    assert "mantiuk" in output and "0.9 / 1.2 / 1.4 / 0.5" in output
+    assert "drago" in output and "1 / 1 / 1.4 / 1" in output
+    assert "mantiuk" in output and "0.9 / 1 / 1.3 / 1" in output
 
 
 def test_parse_run_options_rejects_unknown_hdr_merge_backend() -> None:
