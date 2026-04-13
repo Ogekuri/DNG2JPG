@@ -1,6 +1,43 @@
 # dng2jpg/d2j (0.2.0)
 
-Convert a DNG to a JPG with an HDR merge pipeline.
+<p align="center">
+  <img src="https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.11+">
+  <img src="https://img.shields.io/badge/license-GPL--3.0-491?style=flat-square" alt="License: GPL-3.0">
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-6A7EC2?style=flat-square&logo=terminal&logoColor=white" alt="Platforms">
+  <img src="https://img.shields.io/badge/docs-live-b31b1b" alt="Docs">
+<img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json" alt="uv">
+</p>
+
+<p align="center">
+<strong>Convert a DNG to a JPG with an HDR merge pipeline.</strong><br>
+TODO: fill complete description.
+</p>
+
+<p align="center">
+  <a href="#quick-start">Quick Start</a> |
+  <a href="#requirements-uv">Requirements (uv)</a> |
+  <a href="#installation-uv">Installation (uv)</a> |
+  <a href="#feature-highlights">Feature Highlights</a> |
+  <a href="#usage">Usage</a> |
+  <a href="#acknowledgments">Acknowledgments</a>
+</p>
+
+<p align="center">
+<br>
+🚧 <strong>DRAFT</strong>: 👾 Alpha Development 👾 - Work in Progress 🏗️ 🚧<br>
+⚠️ <strong>IMPORTANT NOTICE</strong>: Created with <a href="https://github.com/Ogekuri/useReq"><strong>useReq/req</strong></a> 🤖✨ ⚠️<br>
+<br>
+<p>
+
+# Feature Highlights
+
+TODO: complete Feature Highlights
+
+
+# Requirements (uv)
+
+TODO: complete requirements
+
 
 ## Install with Astral uv
 
@@ -60,6 +97,9 @@ Additional observable behavior:
 - **Metadata behavior**: when the source DNG contains EXIF metadata, the output JPG reuses it, regenerates the embedded thumbnail from the final JPG pixels, and synchronizes output file timestamps from source EXIF datetime when available.
 - **Removed legacy options**: `--auto-ev=<...>` except the supported `--auto-ev-shadow-clipping`, `--auto-ev-highlight-clipping`, `--auto-ev-step`; `--auto-zero=<...>`; `--auto-zero-pct=<...>`.
 
+
+# Quick Start
+
 ## Default conversion profile
 
 When you run only:
@@ -81,6 +121,8 @@ the effective user-visible pipeline is:
 - Auto-levels: enabled.
 - Auto-adjust: enabled.
 - JPEG compression: `15`.
+
+# Usage
 
 ## Processing pipeline overview
 
@@ -595,3 +637,7 @@ This project directly benefits from the ideas, APIs, and reference implementatio
 - **Final save**: clamp to display range, quantize to JPEG, map `--jpg-compression` to JPEG quality.
 - **Metadata output**: copy source EXIF when present, regenerate the embedded thumbnail from the final JPG pixels, preserve orientation metadata, and sync output timestamps from source EXIF datetime when available.
 - **Debug output**: optional persistent TIFF16 checkpoints for executed stages.
+
+# Acknowledgments
+
+TODO: completare
