@@ -3,20 +3,20 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.11+">
   <img src="https://img.shields.io/badge/license-GPL--3.0-491?style=flat-square" alt="License: GPL-3.0">
-  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-6A7EC2?style=flat-square&logo=terminal&logoColor=white" alt="Platforms">
+  <img src="https://img.shields.io/badge/platform-Linux-6A7EC2?style=flat-square&logo=linux&logoColor=white" alt="Platform: Linux">
   <img src="https://img.shields.io/badge/docs-live-b31b1b" alt="Docs">
 <img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json" alt="uv">
 </p>
 
 <p align="center">
-<strong>Convert a DNG to a JPG with an HDR merge pipeline.</strong><br>
-TODO: fill complete description.
+<strong>Convert a DNG to a JPG through a configurable HDR-style pipeline.</strong><br>
+Synthetic exposure bracketing, selectable merge backends, optional pre-merge corrections, shared post-merge enhancement stages, EXIF-aware output, and optional debug TIFF checkpoints.
 </p>
 
 <p align="center">
   <a href="#quick-start">Quick Start</a> |
   <a href="#requirements-uv">Requirements (uv)</a> |
-  <a href="#installation-uv">Installation (uv)</a> |
+  <a href="#install-with-astral-uv">Installation (uv)</a> |
   <a href="#feature-highlights">Feature Highlights</a> |
   <a href="#usage">Usage</a> |
   <a href="#acknowledgments">Acknowledgments</a>
@@ -31,12 +31,27 @@ TODO: fill complete description.
 
 # Feature Highlights
 
-TODO: complete Feature Highlights
+- **Single CLI surface**: install `dng2jpg` and `d2j`, or run the repository launcher `scripts/d2j.sh`.
+- **Four HDR backend families**: `Luminace-HDR`, `OpenCV-Merge`, `OpenCV-Tonemap`, and `HDR-Plus`.
+- **Flexible exposure planning**: choose fully automatic planning, fixed center EV, fixed bracket half-span, or fully manual exposure control.
+- **One-source synthetic bracketing**: derive `ev_minus`, `ev_zero`, and `ev_plus` from one linear RAW extraction instead of requiring multiple input files.
+- **Pre-merge correction stages**: RAW white-balance normalization, optional auto-brightness, and optional auto-white-balance.
+- **Shared post-merge enhancement**: static postprocess controls, default-enabled auto-levels, and default-enabled auto-adjust.
+- **Metadata-aware output**: preserve EXIF when present, rebuild the embedded thumbnail from final JPG pixels, and sync output timestamps from source EXIF datetime when available.
+- **Traceable execution**: print the resolved effective parameter set before processing and optionally persist TIFF16 debug checkpoints with `--debug`.
+- **Repository smoke-test matrix**: `scripts/test_all_pipeline.sh` runs representative backend and stage profiles for one input DNG.
 
 
 # Requirements (uv)
 
-TODO: complete requirements
+| Requirement | Applies to | Notes |
+|---|---|---|
+| Linux runtime | `dng2jpg`, `d2j`, `scripts/d2j.sh` | Non-Linux execution is rejected at runtime. |
+| Python `>=3.11` | installed CLI, `uvx`, local repository execution | Declared in `pyproject.toml`. |
+| Astral `uv` | installation, `uvx`, repository launcher | `scripts/d2j.sh` delegates to `uv run --project <repo-root> python -m dng2jpg`. |
+| Valid Git checkout | repository launcher only | `scripts/d2j.sh` resolves the project root from Git and fails when the launcher path and Git root do not match. |
+| Python dependencies | all processing backends | Installed by the project: `rawpy`, `imageio`, `pillow`, `numpy`, `opencv-contrib-python-headless`, `piexif`, `exifread`, `scikit-image`. |
+| `luminance-hdr-cli` | `--hdr-merge=Luminace-HDR` only | Not required for `OpenCV-Merge`, `OpenCV-Tonemap`, or `HDR-Plus`. |
 
 
 ## Install with Astral uv
@@ -84,6 +99,7 @@ Repository launcher behavior:
 Additional observable behavior:
 - Calling `dng2jpg` with no arguments prints the conversion help.
 - Normal invocations perform a cached latest-release check and print only when a newer version is available or the check fails.
+- After input/output validation succeeds, the CLI prints the resolved effective parameters grouped by stage before the conversion pipeline starts.
 
 ## Runtime contract
 
@@ -587,7 +603,7 @@ Built-in cases:
 | `auto-levels` | `--auto-levels=enable` |
 | `auto-adjust` | `--auto-adjust=enable` |
 
-## Acknowledgements
+## Acknowledgments
 
 This project directly benefits from the ideas, APIs, and reference implementations provided by:
 - **HDR+** authors and contributors: <https://github.com/timothybrooks/hdr-plus/>
@@ -637,7 +653,3 @@ This project directly benefits from the ideas, APIs, and reference implementatio
 - **Final save**: clamp to display range, quantize to JPEG, map `--jpg-compression` to JPEG quality.
 - **Metadata output**: copy source EXIF when present, regenerate the embedded thumbnail from the final JPG pixels, preserve orientation metadata, and sync output timestamps from source EXIF datetime when available.
 - **Debug output**: optional persistent TIFF16 checkpoints for executed stages.
-
-# Acknowledgments
-
-TODO: completare
