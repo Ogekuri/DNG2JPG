@@ -7,14 +7,14 @@
   operate on display-referred standard RGB after backend-local merge-gamma or
   equivalent tone-mapped handoff.
 - Main-flow boundary operators are now centralized through dedicated helpers for
-  bracket clipping, OpenCV radiance high-precision input adaptation, optional
-  OpenCV radiance `uint8` legacy fallback adaptation, Mertens `*255.0`
-  rescale, auto-levels entry clip, repeated auto-adjust clamps, postprocess
-  exit clip, and final JPEG quantization.
-- OpenCV radiance backend now prefers one direct float32 Debevec/Robertson
-  merge path, falls back to backend-local `uint8` calibrate-plus-merge only
-  when high-precision support is unavailable, and emits one explicit
-  `opencv-radiance-path` runtime diagnostic.
+  bracket clipping, OpenCV radiance high-precision input adaptation,
+  high-precision support probing with deterministic fail-fast rejection,
+  Mertens `*255.0` rescale, auto-levels entry clip, repeated auto-adjust
+  clamps, postprocess exit clip, and final JPEG quantization.
+- OpenCV radiance backend now executes one direct float32 Debevec/Robertson
+  merge path, rejects unsupported runtimes before any pre-merge `uint8`
+  quantization, and emits one explicit `opencv-radiance-path` runtime
+  diagnostic.
 - Numeric static post-gamma now applies sign-preserving power on finite
   display-referred RGB float payloads, preventing `NaN`/`Inf` on signed
   OpenCV-Tonemap outputs while preserving non-negative backend behavior and
@@ -311,18 +311,16 @@
         - _order_bracket_paths(bracket_paths): deterministic path ordering [src/dng2jpg/dng2jpg.py]
         - _format_external_command_for_log(command): command log formatting [src/dng2jpg/dng2jpg.py]
       - _run_opencv_merge_backend(...): OpenCV merge backend [src/dng2jpg/dng2jpg.py]
-        - _run_opencv_merge_radiance(...): Debevec/Robertson merge path with high-precision preference and legacy fallback [src/dng2jpg/dng2jpg.py]
-          - _select_opencv_radiance_path_adapters(...): choose one radiance adapter bundle [src/dng2jpg/dng2jpg.py]
+        - _run_opencv_merge_radiance(...): Debevec/Robertson merge path with high-precision-only success contract [src/dng2jpg/dng2jpg.py]
+          - _select_opencv_radiance_path_adapters(...): confirm supported high-precision adapter bundle or reject runtime [src/dng2jpg/dng2jpg.py]
             - _probe_opencv_high_precision_radiance_support(...): probe direct float32 radiance merge support [src/dng2jpg/dng2jpg.py]
               - _merge_opencv_radiance_high_precision(...): execute probe-compatible float32 Debevec/Robertson merge [src/dng2jpg/dng2jpg.py]
-          - _print_opencv_radiance_path_diagnostic(...): emit selected radiance-path runtime line [src/dng2jpg/dng2jpg.py]
-          - _adapt_opencv_radiance_input_high_precision(...): adapt float32 radiance inputs when high-precision path is selected [src/dng2jpg/dng2jpg.py]
-          - _quantize_opencv_radiance_rgb_uint8(...): adapt uint8 radiance inputs when legacy fallback is selected [src/dng2jpg/dng2jpg.py]
+            - Deterministic invariant: emit `opencv-radiance-path: fail-fast` and raise `RuntimeError` when the probe fails.
+          - _print_opencv_radiance_path_diagnostic(...): emit supported radiance-path runtime line [src/dng2jpg/dng2jpg.py]
+          - _adapt_opencv_radiance_input_high_precision(...): adapt float32 radiance inputs for merge entry [src/dng2jpg/dng2jpg.py]
           - _estimate_opencv_camera_response(...): dispatch selected response-estimator adapter [src/dng2jpg/dng2jpg.py]
             - _estimate_opencv_camera_response_high_precision(...): return no response for direct float32 merge [src/dng2jpg/dng2jpg.py]
-            - _estimate_opencv_camera_response_uint8_legacy(...): calibrate inverse response for uint8 legacy fallback [src/dng2jpg/dng2jpg.py]
           - _merge_opencv_radiance_high_precision(...): execute direct float32 Debevec/Robertson merge [src/dng2jpg/dng2jpg.py]
-          - _merge_opencv_radiance_uint8_legacy(...): execute calibrated uint8 Debevec/Robertson merge [src/dng2jpg/dng2jpg.py]
           - _normalize_opencv_hdr_to_unit_range(...): backend normalization to shared float contract [src/dng2jpg/dng2jpg.py]
         - _run_opencv_merge_mertens(...): Mertens merge path [src/dng2jpg/dng2jpg.py]
           - _rescale_mertens_fusion_to_display_range(...): explicit `*255.0` exposure-fusion rescale bridge [src/dng2jpg/dng2jpg.py]

@@ -533,7 +533,7 @@ import numpy as np_module  # type: ignore
 
 ### class `class OpenCvMergeOptions` `@dataclass(frozen=True)` (L856-877)
 - @brief Hold deterministic OpenCV HDR merge option values.
-- @details Encapsulates OpenCV merge controls used by the `--hdr-merge=OpenCV-Merge` backend. Debevec and Robertson prefer one high-precision radiance adapter path without float-to-uint8 pre-merge quantization and retain one backend-local uint8 legacy fallback, Mertens executes exposure fusion on float brackets with OpenCV-equivalent output rescaling plus optional simple tonemap, and all external interfaces stay RGB float `[0,1]`.
+- @details Encapsulates OpenCV merge controls used by the `--hdr-merge=OpenCV-Merge` backend. Debevec and Robertson require one high-precision radiance adapter path without float-to-uint8 pre-merge quantization, Mertens executes exposure fusion on float brackets with OpenCV-equivalent output rescaling plus optional simple tonemap, and all external interfaces stay RGB float `[0,1]`. Complexity: O(1). Side effects: none.
 - @param merge_algorithm {str} Canonical OpenCV merge algorithm in `{"Debevec","Robertson","Mertens"}`.
 - @param tonemap_enabled {bool} `True` enables simple OpenCV gamma tone mapping for Debevec/Robertson/Mertens outputs.
 - @param tonemap_gamma {float} Positive gamma value passed to `cv2.createTonemap`; parser defaults are algorithm-specific (`Debevec=1.0`, `Robertson=0.9`, `Mertens=0.8`).
@@ -542,8 +542,8 @@ import numpy as np_module  # type: ignore
 
 ### class `class OpenCvRadiancePathAdapters` `@dataclass(frozen=True)` (L879-900)
 - @brief Hold one selected OpenCV radiance adapter set.
-- @details Encapsulates one deterministic Debevec/Robertson radiance path as three separable adapters: input adaptation, response estimation, and merge execution. The selected `path_label` is emitted unchanged in runtime diagnostics so downstream agents can distinguish high-precision execution from the legacy uint8 fallback.
-- @param path_label {str} Diagnostic path label in `{"high-precision","uint8-legacy"}`.
+- @details Encapsulates the only supported Debevec/Robertson radiance path as three separable adapters: input adaptation, response estimation, and merge execution. Unsupported runtimes are rejected before adapter-bundle creation, so `path_label` remains the supported execution label emitted in runtime diagnostics. Complexity: O(1). Side effects: none.
+- @param path_label {str} Diagnostic path label in `{"high-precision"}`.
 - @param radiance_input_adapter {object} Callable adapting one camera-linear RGB bracket to backend-local merge input.
 - @param response_estimator {object} Callable estimating optional radiance response for the selected path.
 - @param radiance_merger {object} Callable executing Debevec/Robertson merge for the selected path.
@@ -658,7 +658,7 @@ prints aligned borders and cells using Unicode line-drawing glyphs.
 - @return {None} Writes help text to stdout.
 - @satisfies DES-008, REQ-017, REQ-018, REQ-019, REQ-020, REQ-021, REQ-022, REQ-023, REQ-024, REQ-025, REQ-033, REQ-100, REQ-101, REQ-102, REQ-107, REQ-111, REQ-124, REQ-125, REQ-127, REQ-128, REQ-135, REQ-141, REQ-143, REQ-146, REQ-155, REQ-156, REQ-176, REQ-179, REQ-181, REQ-182, REQ-189, REQ-190, REQ-194, REQ-195, REQ-196, REQ-203
 
-### fn `def _validate_supported_bits_per_color(bits_per_color)` `priv` (L1607-1624)
+### fn `def _validate_supported_bits_per_color(bits_per_color)` `priv` (L1608-1625)
 - @brief Validate supported minimum DNG bits-per-color contract.
 - @details Enforces repository minimum bit-depth support independently from exposure range planning and raises deterministic failure when source DNG metadata exposes a lower precision container.
 - @param bits_per_color {int} Detected source DNG bits per color.
@@ -666,7 +666,7 @@ prints aligned borders and cells using Unicode line-drawing glyphs.
 - @exception ValueError Raised when bit depth is below supported minimum.
 - @satisfies REQ-027
 
-### fn `def _detect_dng_bits_per_color(raw_handle)` `priv` (L1625-1670)
+### fn `def _detect_dng_bits_per_color(raw_handle)` `priv` (L1626-1671)
 - @brief Detect source DNG bits-per-color from RAW metadata.
 - @details Prefers RAW sample container bit depth from `raw_handle.raw_image_visible.dtype.itemsize * 8` because the DNG white level can represent effective sensor range (for example `4000`) while RAW samples are still stored in a wider container (for example `uint16`). Falls back to `raw_handle.white_level` `bit_length` when container metadata is unavailable.
 - @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
@@ -674,42 +674,42 @@ prints aligned borders and cells using Unicode line-drawing glyphs.
 - @exception ValueError Raised when metadata is missing, non-numeric, or non-positive.
 - @satisfies REQ-026, REQ-027
 
-### fn `def _is_ev_value_on_supported_step(ev_value)` `priv` (L1671-1683)
+### fn `def _is_ev_value_on_supported_step(ev_value)` `priv` (L1672-1684)
 - @brief Validate EV value is a finite numeric scalar.
 - @details Performs finite-number validation only. Step-based validation was removed from manual exposure planning.
 - @param ev_value {float} Parsed EV numeric value.
 - @return {bool} `True` when EV value is finite.
 - @satisfies REQ-030
 
-### fn `def _parse_ev_option(ev_raw)` `priv` (L1684-1711)
+### fn `def _parse_ev_option(ev_raw)` `priv` (L1685-1712)
 - @brief Parse and validate one `--bracketing` static value.
 - @details Converts token to `float`, enforces finiteness and non-negativity, rounds the parsed static bracket half-span to one decimal place, and preserves no bit-depth-derived upper-bound contract. Does not handle the `auto` sentinel; callers MUST check for `auto` before invoking this function.
 - @param ev_raw {str} EV token extracted from command arguments.
 - @return {float|None} Parsed EV value when valid; `None` otherwise.
 - @satisfies REQ-030, CTN-003
 
-### fn `def _parse_ev_center_option(ev_center_raw)` `priv` (L1712-1739)
+### fn `def _parse_ev_center_option(ev_center_raw)` `priv` (L1713-1740)
 - @brief Parse and validate one `--exposure` center option value.
 - @details Converts token to `float`, enforces finiteness, rounds the static center EV value to one decimal place, and preserves no bit-depth-derived upper-bound contract. Does not handle the `auto` sentinel; callers MUST check for `auto` before invoking this function.
 - @param ev_center_raw {str} EV-center token extracted from command arguments.
 - @return {float|None} Parsed EV-center value when valid; `None` otherwise.
 - @satisfies REQ-030, CTN-007
 
-### fn `def _is_forced_static_auto_bracketing_selected(args)` `priv` (L1740-1761)
+### fn `def _is_forced_static_auto_bracketing_selected(args)` `priv` (L1741-1762)
 - @brief Detect explicit forced-static bracketing selector usage.
 - @details Scans the raw CLI token vector and returns `True` only when the last `--bracketing=` selector token equals `auto`. This selector is semantically distinct from omitted `--bracketing`, which retains iterative automatic bracketing, and from later static numeric overrides. Complexity: O(N). Side effects: none.
 - @param args {list[str]} Raw command argument vector.
 - @return {bool} `True` when explicit `--bracketing=auto` is present.
 - @satisfies CTN-003, REQ-216, REQ-217
 
-### fn `def _print_forced_static_auto_bracketing_diagnostics(ev_delta)` `priv` (L1762-1778)
+### fn `def _print_forced_static_auto_bracketing_diagnostics(ev_delta)` `priv` (L1763-1779)
 - @brief Emit deterministic diagnostics for forced-static bracketing mode.
 - @details Prints one fixed `Bracket step: skipped` line followed by one selected half-span line for explicit `--bracketing=auto` mode. Complexity: O(1). Side effects: stdout writes only.
 - @param ev_delta {float} Resolved static half-span EV value.
 - @return {None} No return value; side effect is stdout emission.
 - @satisfies REQ-217
 
-### fn `def _parse_percentage_option(option_name, option_raw)` `priv` (L1779-1801)
+### fn `def _parse_percentage_option(option_name, option_raw)` `priv` (L1780-1802)
 - @brief Parse and validate one percentage option value.
 - @details Converts option token to `float`, requires inclusive range `[0, 100]`, and emits deterministic parse errors on malformed values.
 - @param option_name {str} Long-option identifier used in error messages.
@@ -717,21 +717,21 @@ prints aligned borders and cells using Unicode line-drawing glyphs.
 - @return {float|None} Parsed percentage value when valid; `None` otherwise.
 - @satisfies REQ-019, REQ-030
 
-### fn `def _parse_auto_brightness_option(auto_brightness_raw)` `priv` (L1802-1821)
+### fn `def _parse_auto_brightness_option(auto_brightness_raw)` `priv` (L1803-1822)
 - @brief Parse and validate one `--auto-brightness` option value.
 - @details Accepts only explicit enable/disable tokens to keep deterministic toggle behavior for stage activation.
 - @param auto_brightness_raw {str} Raw `--auto-brightness` value token from CLI args.
 - @return {bool|None} Parsed enable-state value; `None` on parse failure.
 - @satisfies REQ-065, REQ-089
 
-### fn `def _parse_auto_levels_option(auto_levels_raw)` `priv` (L1822-1841)
+### fn `def _parse_auto_levels_option(auto_levels_raw)` `priv` (L1823-1842)
 - @brief Parse and validate one `--auto-levels` option value.
 - @details Accepts only explicit enable/disable tokens to keep deterministic toggle behavior for stage activation.
 - @param auto_levels_raw {str} Raw `--auto-levels` value token from CLI args.
 - @return {bool|None} Parsed enable-state value; `None` on parse failure.
 - @satisfies REQ-100, REQ-101
 
-### fn `def _parse_explicit_boolean_option(option_name, option_raw)` `priv` (L1842-1862)
+### fn `def _parse_explicit_boolean_option(option_name, option_raw)` `priv` (L1843-1863)
 - @brief Parse one explicit boolean option value.
 - @details Accepts canonical true/false token families to keep deterministic toggle parsing for CLI knobs that support both enabling and disabling.
 - @param option_name {str} Long-option identifier used in error messages.
@@ -739,30 +739,30 @@ prints aligned borders and cells using Unicode line-drawing glyphs.
 - @return {bool|None} Parsed boolean value; `None` on parse failure.
 - @satisfies REQ-101
 
-### fn `def _parse_opencv_merge_algorithm_option(algorithm_raw)` `priv` (L1863-1887)
+### fn `def _parse_opencv_merge_algorithm_option(algorithm_raw)` `priv` (L1864-1888)
 - @brief Parse OpenCV merge algorithm selector.
 - @details Accepts case-insensitive OpenCV algorithm names, normalizes them to canonical runtime tokens, and rejects unsupported values with deterministic diagnostics.
 - @param algorithm_raw {str} Raw `--opencv-merge-algorithm` selector token.
 - @return {str|None} Canonical OpenCV merge algorithm token or `None` on parse failure.
 - @satisfies REQ-108, REQ-141
 
-### fn `def _resolve_default_opencv_tonemap_gamma(merge_algorithm)` `priv` (L1888-1909)
+### fn `def _resolve_default_opencv_tonemap_gamma(merge_algorithm)` `priv` (L1889-1910)
 - @brief Resolve OpenCV tone-map gamma default from merge algorithm.
 - @details Maps `Debevec`, `Robertson`, and `Mertens` to deterministic default gamma values used when `--opencv-merge-tonemap-gamma` is omitted. Unknown values fall back to the repository default merge algorithm profile.
 - @param merge_algorithm {str} Resolved OpenCV merge algorithm selector.
 - @return {float} Default OpenCV tone-map gamma for the selected algorithm.
 - @satisfies REQ-141, REQ-143
 
-### fn `def _parse_opencv_merge_backend_options(opencv_raw_values)` `priv` (L1910-1962)
+### fn `def _parse_opencv_merge_backend_options(opencv_raw_values)` `priv` (L1911-1963)
 - @brief Parse and validate OpenCV HDR merge knob values.
 - @details Applies OpenCV defaults for algorithm selector, tone-map toggle, and tone-map gamma, validates allowed values, and returns one immutable backend option container for downstream merge dispatch.
 - @param opencv_raw_values {dict[str, str]} Raw `--opencv-*` option values keyed by long option name.
 - @return {OpenCvMergeOptions|None} Parsed OpenCV merge options or `None` on validation error.
 - @satisfies REQ-141, REQ-143
 
-### fn `def _parse_opencv_tonemap_backend_options(` `priv` (L1963-1965)
+### fn `def _parse_opencv_tonemap_backend_options(` `priv` (L1964-1966)
 
-### fn `def _extract_normalized_preview_luminance_stats(raw_handle)` `priv` (L2138-2209)
+### fn `def _extract_normalized_preview_luminance_stats(raw_handle)` `priv` (L2139-2210)
 - @brief Parse and validate OpenCV-Tonemap backend selector and knobs.
 - @brief Extract normalized preview luminance percentiles from RAW handle.
 - @details Accepts zero or one selector in
@@ -780,7 +780,7 @@ to the selected algorithm.
 - @satisfies REQ-190, REQ-194, REQ-195, REQ-196
 - @satisfies REQ-009, REQ-222, REQ-229
 
-### fn `def _percentile(percentile_value)` `priv` (L2174-2184)
+### fn `def _percentile(percentile_value)` `priv` (L2175-2185)
 - @brief Extract normalized preview luminance percentiles from RAW handle.
 - @details Generates one deterministic linear preview (`bright=1.0`,
 `output_bps=16`, camera white balance, no auto-bright, linear gamma,
@@ -793,25 +793,25 @@ are non-finite. Complexity: O(N log N). Side effects: none.
 - @exception ValueError Raised when finite luminance samples or normalized finite statistics are unavailable.
 - @satisfies REQ-009, REQ-222, REQ-229
 
-### fn `def _normalize_percentile(stat_name, stat_value)` `priv` (L2195-2203)
+### fn `def _normalize_percentile(stat_name, stat_value)` `priv` (L2196-2204)
 
-### fn `def _extract_camera_whitebalance_rgb_triplet(raw_handle)` `priv` (L2210-2242)
+### fn `def _extract_camera_whitebalance_rgb_triplet(raw_handle)` `priv` (L2211-2243)
 - @brief Extract one `(R,G,B)` camera white-balance triplet from RAW metadata.
 - @details Reads `rawpy` camera white-balance payload, validates finite positive coefficients, and returns the first three channels as one RGB triplet used for float-domain gain normalization. Falls back to unit triplet when metadata is missing or invalid. Complexity: O(1). Side effects: none.
 - @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
 - @return {tuple[float, float, float]} Positive finite `(r, g, b)` coefficients.
 - @satisfies REQ-031, REQ-158, REQ-183
 
-### fn `def _format_rgb_triplet_fixed4(rgb_values)` `priv` (L2243-2272)
+### fn `def _format_rgb_triplet_fixed4(rgb_values)` `priv` (L2244-2273)
 - @brief Format one RGB triplet for deterministic RAW WB diagnostics.
 - @details Converts one iterable payload to exactly three finite float values and renders deterministic `R/G/B` fixed-point tokens with four fractional digits. Invalid or missing entries are replaced by `1.0000`. Complexity: O(1). Side effects: none.
 - @param rgb_values {object} Iterable-like payload containing at least three channel coefficients.
 - @return {str} Formatted token string `R=<value>, G=<value>, B=<value>`.
 - @satisfies REQ-208, REQ-209
 
-### fn `def _normalize_white_balance_gains_rgb(` `priv` (L2273-2276)
+### fn `def _normalize_white_balance_gains_rgb(` `priv` (L2274-2277)
 
-### fn `def _apply_normalized_white_balance_to_rgb_float(np_module, image_rgb_float, normalized_gains_rgb)` `priv` (L2323-2346)
+### fn `def _apply_normalized_white_balance_to_rgb_float(np_module, image_rgb_float, normalized_gains_rgb)` `priv` (L2324-2347)
 - @brief Normalize one RAW camera WB gain triplet by selected mode.
 - @brief Apply normalized RGB white-balance gains to one RGB float tensor.
 - @details Converts one camera white-balance RGB triplet to float64 and
@@ -833,7 +833,7 @@ none.
 - @satisfies REQ-031, REQ-158, REQ-183, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207
 - @satisfies REQ-031, REQ-158, REQ-183
 
-### fn `def _build_rawpy_neutral_postprocess_kwargs(raw_handle)` `priv` (L2347-2387)
+### fn `def _build_rawpy_neutral_postprocess_kwargs(raw_handle)` `priv` (L2348-2388)
 - @brief Build deterministic neutral `rawpy.postprocess` keyword arguments.
 - @details Produces one neutral linear extraction payload with fixed fields (`gamma`, `no_auto_bright`, `output_bps`, `use_camera_wb`, `user_wb`, `output_color=rawpy.ColorSpace.raw`, `no_auto_scale`, `user_flip`) for deterministic RAW extraction without camera-WB application in postprocess. Complexity: O(1). Side effects: imports `rawpy` when module discovery from the handle does not expose `ColorSpace`.
 - @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
@@ -841,7 +841,7 @@ none.
 - @exception RuntimeError Raised when `rawpy.ColorSpace.raw` cannot be resolved.
 - @satisfies REQ-010
 
-### fn `def _extract_sensor_dynamic_range_max(raw_handle, np_module)` `priv` (L2388-2445)
+### fn `def _extract_sensor_dynamic_range_max(raw_handle, np_module)` `priv` (L2389-2446)
 - @brief Compute one sensor dynamic-range normalization denominator.
 - @details Reads RAW metadata `white_level` and `black_level_per_channel`, computes `dynamic_range_max = white_level - mean(black_level_per_channel)`, and validates a finite positive result for neutral RAW-base normalization. Falls back to `white_level` when black-level payload is unavailable or invalid. Complexity: O(C) where C is black-level channel count. Side effects: none.
 - @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
@@ -850,9 +850,9 @@ none.
 - @exception ValueError Raised when `white_level` metadata is missing or non-positive.
 - @satisfies REQ-158
 
-### fn `def _extract_base_rgb_linear_float(` `priv` (L2446-2449)
+### fn `def _extract_base_rgb_linear_float(` `priv` (L2447-2450)
 
-### fn `def _normalize_source_gamma_label(label_raw)` `priv` (L2497-2515)
+### fn `def _normalize_source_gamma_label(label_raw)` `priv` (L2498-2516)
 - @brief Extract one normalized camera-linear RGB base image from one RAW handle.
 - @brief Normalize one source-gamma label token.
 - @details Executes exactly one neutral linear `rawpy.postprocess` call with
@@ -874,56 +874,56 @@ postprocess invocation.
 - @satisfies REQ-010, REQ-031, REQ-158, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207, REQ-208, REQ-209, REQ-242
 - @satisfies REQ-163, REQ-164
 
-### fn `def _decode_raw_metadata_text(metadata_raw)` `priv` (L2516-2547)
+### fn `def _decode_raw_metadata_text(metadata_raw)` `priv` (L2517-2548)
 - @brief Decode one RAW metadata token to deterministic text.
 - @details Accepts `bytes`, `bytearray`, `str`, and sequence-like metadata payloads, strips null terminators, joins sequence entries with `/`, and returns `None` when no stable textual representation exists.
 - @param metadata_raw {object} Candidate RAW metadata payload.
 - @return {str|None} Normalized text token or `None`.
 - @satisfies REQ-163
 
-### fn `def _classify_explicit_source_gamma(raw_handle)` `priv` (L2548-2597)
+### fn `def _classify_explicit_source_gamma(raw_handle)` `priv` (L2549-2598)
 - @brief Classify source gamma from explicit profile or color-space metadata.
 - @details Inspects common RAW metadata attributes that can already carry an explicit transfer-function declaration, maps recognized tokens to deterministic label/gamma pairs, and returns `None` when no explicit classification is available.
 - @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
 - @return {SourceGammaInfo|None} Classified explicit profile diagnostic or `None`.
 - @satisfies REQ-157, REQ-163
 
-### fn `def _classify_tone_curve_gamma(raw_handle)` `priv` (L2598-2646)
+### fn `def _classify_tone_curve_gamma(raw_handle)` `priv` (L2599-2647)
 - @brief Classify source gamma from `rawpy.tone_curve` metadata.
 - @details Reads the optional tone-curve payload, estimates one effective power-law gamma from valid interior samples, and suppresses the result when the curve is absent, too short, degenerate, or non-finite.
 - @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
 - @return {SourceGammaInfo|None} Tone-curve diagnostic or `None`.
 - @satisfies REQ-157, REQ-163
 
-### fn `def _has_nonzero_matrix(matrix_raw)` `priv` (L2647-2667)
+### fn `def _has_nonzero_matrix(matrix_raw)` `priv` (L2648-2668)
 - @brief Determine whether one RAW metadata matrix carries non-zero values.
 - @details Iterates nested list/tuple/numpy-like matrix payloads and returns `True` when any element coerces to a finite non-zero scalar.
 - @param matrix_raw {object} Candidate RAW metadata matrix.
 - @return {bool} `True` when matrix evidence is non-zero.
 - @satisfies REQ-163
 
-### fn `def _classify_matrix_hint_gamma(raw_handle)` `priv` (L2668-2698)
+### fn `def _classify_matrix_hint_gamma(raw_handle)` `priv` (L2669-2699)
 - @brief Classify source gamma from matrix and color-description hints.
 - @details Uses `rgb_xyz_matrix`, `color_matrix`, and `color_desc` as weaker evidence than explicit profiles or tone curves. Numeric gamma remains undetermined for this class of evidence.
 - @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
 - @return {SourceGammaInfo|None} Matrix-hint diagnostic or `None`.
 - @satisfies REQ-157, REQ-163
 
-### fn `def _extract_source_gamma_info(raw_handle)` `priv` (L2699-2726)
+### fn `def _extract_source_gamma_info(raw_handle)` `priv` (L2700-2727)
 - @brief Derive source-gamma diagnostics from RAW metadata only.
 - @details Applies deterministic evidence priority: explicit profile or color-space metadata first, then `rawpy.tone_curve`, then weaker camera color-matrix hints (`rgb_xyz_matrix`, `color_matrix`, `color_desc`), and finally emits `unknown` when no metadata source can support classification.
 - @param raw_handle {Any} Opened RAW handle from `rawpy.imread`.
 - @return {SourceGammaInfo} Deterministic source-gamma diagnostic payload.
 - @satisfies REQ-157, REQ-163
 
-### fn `def _describe_source_gamma_info(source_gamma_info)` `priv` (L2727-2748)
+### fn `def _describe_source_gamma_info(source_gamma_info)` `priv` (L2728-2749)
 - @brief Format one deterministic source-gamma runtime diagnostic line.
 - @details Renders one stable `print_info` payload that always includes both a source-gamma label and a numeric gamma value or the literal `undetermined`.
 - @param source_gamma_info {SourceGammaInfo} Derived source-gamma metadata payload.
 - @return {str} Deterministic runtime diagnostic line.
 - @satisfies REQ-164
 
-### fn `def _coerce_positive_luminance(value, fallback)` `priv` (L2749-2769)
+### fn `def _coerce_positive_luminance(value, fallback)` `priv` (L2750-2770)
 - @brief Coerce luminance scalar to finite positive range for logarithmic math.
 - @details Converts input to float, rejects non-finite or non-positive values, and returns fallback when conversion fails or finite-positive constraints are not satisfied. Complexity: O(1). Side effects: none.
 - @param value {object} Candidate luminance scalar.
@@ -931,7 +931,7 @@ postprocess invocation.
 - @return {float} Finite positive luminance value suitable for `log2`, or fallback.
 - @satisfies REQ-031, REQ-222
 
-### fn `def _calculate_bt709_luminance(np_module, image_rgb_float)` `priv` (L2770-2795)
+### fn `def _calculate_bt709_luminance(np_module, image_rgb_float)` `priv` (L2771-2796)
 - @brief Convert one camera-linear RGB image to a BT.709-coefficient luminance proxy.
 - @details Normalizes the input image to the repository RGB float contract and computes one deterministic luminance proxy in the linear gamma=`1` domain using BT.709 coefficients `(0.2126, 0.7152, 0.0722)`. The result is used only for exposure planning heuristics and is not asserted to be colorimetrically exact standard-RGB luminance. Complexity: O(H*W). Side effects: none.
 - @param np_module {ModuleType} Imported numpy module.
@@ -939,7 +939,7 @@ postprocess invocation.
 - @return {object} Linear luminance-proxy tensor with shape `(H,W)` and dtype `float32`.
 - @satisfies REQ-008, REQ-032, REQ-242
 
-### fn `def _smoothstep(np_module, values, edge0, edge1)` `priv` (L2796-2814)
+### fn `def _smoothstep(np_module, values, edge0, edge1)` `priv` (L2797-2815)
 - @brief Evaluate one smoothstep ramp with clamped normalized input.
 - @details Computes the cubic Hermite interpolation `t*t*(3-2*t)` over input values normalized into `[0,1]` using denominator `max(edge1-edge0, 1e-6)`. Complexity: O(N). Side effects: none.
 - @param np_module {ModuleType} Imported numpy module.
@@ -949,7 +949,7 @@ postprocess invocation.
 - @return {object} Float tensor with values in `[0,1]`.
 - @satisfies REQ-032
 
-### fn `def _calculate_entropy_optimized_ev(_cv2_module, np_module, luminance_float)` `priv` (L2815-2860)
+### fn `def _calculate_entropy_optimized_ev(_cv2_module, np_module, luminance_float)` `priv` (L2816-2861)
 - @brief Compute the entropy-optimized EV candidate on linear luminance.
 - @details Sweeps EV values in range `[-3.0,+3.0]` with step `0.1`, scales the normalized linear luminance by `2**EV`, clips into `[0,1]`, converts the clipped image directly to 8-bit linear code values, evaluates histogram entropy with clipping penalties, and returns the highest-score EV rounded to one decimal place. Complexity: O(K*H*W)` where `K=61`. Side effects: none.
 - @param cv2_module {ModuleType|None} Optional OpenCV module retained for call compatibility.
@@ -958,7 +958,7 @@ postprocess invocation.
 - @return {float} Entropy-optimized EV candidate rounded to one decimal place.
 - @satisfies REQ-032
 
-### fn `def _calculate_ettr_ev(np_module, luminance_float)` `priv` (L2861-2887)
+### fn `def _calculate_ettr_ev(np_module, luminance_float)` `priv` (L2862-2888)
 - @brief Compute the ETTR EV candidate on linear luminance.
 - @details Extracts finite luminance samples locally, computes the finite `99`th percentile, evaluates `log2(0.90/L99)`, and returns a one-decimal EV value. Returns deterministic fallback `0.0` when finite samples are unavailable or intermediate values are non-finite. Complexity: O(N log N). Side effects: none.
 - @param np_module {ModuleType} Imported numpy module.
@@ -966,7 +966,7 @@ postprocess invocation.
 - @return {float} ETTR EV candidate rounded to one decimal place.
 - @satisfies REQ-032, REQ-228
 
-### fn `def _calculate_detail_preservation_ev(_cv2_module, np_module, luminance_float)` `priv` (L2888-2987)
+### fn `def _calculate_detail_preservation_ev(_cv2_module, np_module, luminance_float)` `priv` (L2889-2988)
 - @brief Compute the detail-preservation EV candidate on linear luminance.
 - @details Sanitizes non-finite luminance samples locally, derives gradient- weighted detail maps from finite `log(luminance+eps)` values, evaluates EV sweep `[-3.0,+3.0]` with step `0.1`, and returns the best one-decimal EV. Returns deterministic fallback `0.0` when finite samples are unavailable or scoring becomes non-finite. Complexity: O(K*N) where `K=61`. Side effects: none.
 - @param cv2_module {ModuleType} Imported OpenCV module.
@@ -975,7 +975,7 @@ postprocess invocation.
 - @return {float} Detail-preservation EV candidate rounded to one decimal place.
 - @satisfies REQ-032, REQ-228
 
-### fn `def _calculate_auto_zero_evaluations(cv2_module, np_module, image_rgb_float)` `priv` (L2988-3026)
+### fn `def _calculate_auto_zero_evaluations(cv2_module, np_module, image_rgb_float)` `priv` (L2989-3027)
 - @brief Compute the three automatic EV-zero candidate evaluations.
 - @details Migrates `calcola_correzioni_ev(immagine_float)` from the external prototype into the current pipeline, adapts it to the repository camera-linear RGB float contract, computes a BT.709-coefficient luminance proxy, evaluates `ev_best`, `ev_ettr`, and `ev_detail`, and returns all three rounded candidates without applying selector quantization. Complexity: dominated by the EV sweeps in entropy/detail evaluation. Side effects: none.
 - @param cv2_module {ModuleType} Imported OpenCV module.
@@ -984,16 +984,16 @@ postprocess invocation.
 - @return {AutoZeroEvaluation} Candidate EV evaluations on the normalized camera-linear image.
 - @satisfies REQ-008, REQ-032, CTN-007, REQ-242
 
-### fn `def _select_ev_zero_candidate(evaluations)` `priv` (L3027-3055)
+### fn `def _select_ev_zero_candidate(evaluations)` `priv` (L3028-3056)
 - @brief Select `ev_zero` from the exposure-measure EV triplet.
 - @details Selects the numeric minimum EV candidate preserving sign using deterministic tie-break order `value -> declaration order` without applying bit-depth-derived clamping. Invoked only when `--exposure=auto` is active.
 - @param evaluations {AutoZeroEvaluation} Exposure-measure EV values.
 - @return {tuple[float, str]} Selected `(ev_zero, source_label)` pair.
 - @satisfies REQ-032, CTN-007
 
-### fn `def _build_unclipped_bracket_images_from_linear_base_float(` `priv` (L3056-3060)
+### fn `def _build_unclipped_bracket_images_from_linear_base_float(` `priv` (L3057-3061)
 
-### fn `def _measure_any_channel_highlight_clipping_pct(np_module, image_rgb_float)` `priv` (L3090-3107)
+### fn `def _measure_any_channel_highlight_clipping_pct(np_module, image_rgb_float)` `priv` (L3091-3108)
 - @brief Build unclipped bracket tensors from the shared linear base image.
 - @brief Measure highlight clipping percentage for one RGB image.
 - @details Applies exposure multipliers for `ev_zero-ev_delta`, `ev_zero`, and
@@ -1010,7 +1010,7 @@ postprocess invocation.
 - @satisfies REQ-167
 - @satisfies REQ-168
 
-### fn `def _measure_any_channel_shadow_clipping_pct(np_module, image_rgb_float)` `priv` (L3108-3125)
+### fn `def _measure_any_channel_shadow_clipping_pct(np_module, image_rgb_float)` `priv` (L3109-3126)
 - @brief Measure shadow clipping percentage for one RGB image.
 - @details Counts pixels where any RGB channel is less than or equal to `0` and returns the result in percent.
 - @param np_module {ModuleType} Imported numpy module.
@@ -1018,9 +1018,9 @@ postprocess invocation.
 - @return {float} Shadow clipping percentage in `0..100`.
 - @satisfies REQ-168
 
-### fn `def _resolve_auto_ev_delta(` `priv` (L3126-3130)
+### fn `def _resolve_auto_ev_delta(` `priv` (L3127-3131)
 
-### fn `def _resolve_opencv_tonemap_auto_ev_delta()` `priv` (L3218-3235)
+### fn `def _resolve_opencv_tonemap_auto_ev_delta()` `priv` (L3219-3236)
 - @brief Resolve automatic bracket half-span by iterative clipping-threshold expansion.
 - @brief Resolve OpenCV-Tonemap automatic bracket half-span without iteration.
 - @details Starts at `auto_ev_options.step`, evaluates unclipped bracket images
@@ -1037,9 +1037,9 @@ shadow clipping exceeds `shadow_clipping_pct` or highlight clipping reaches
 - @satisfies REQ-009, REQ-052, REQ-167, REQ-168
 - @satisfies REQ-216, REQ-217
 
-### fn `def _resolve_joint_auto_ev_solution(` `priv` (L3236-3239)
+### fn `def _resolve_joint_auto_ev_solution(` `priv` (L3237-3240)
 
-### fn `def _parse_luminance_text_option(option_name, option_raw)` `priv` (L3296-3316)
+### fn `def _parse_luminance_text_option(option_name, option_raw)` `priv` (L3297-3317)
 - @brief Resolve the joint automatic symmetric exposure plan.
 - @brief Parse and validate non-empty luminance string option value.
 - @details Loads numeric dependencies, computes the exposure-measure EV
@@ -1058,14 +1058,14 @@ minimum preserving sign, then delegates iterative bracket half-span expansion to
 - @satisfies REQ-008, REQ-009, REQ-031, REQ-032, REQ-037, REQ-052, REQ-167, REQ-168
 - @satisfies REQ-061
 
-### fn `def _parse_luminance_response_curve_option(option_raw)` `priv` (L3317-3343)
+### fn `def _parse_luminance_response_curve_option(option_raw)` `priv` (L3318-3344)
 - @brief Parse one luminance response-curve selector under the linear backend contract.
 - @details Normalizes one raw `--luminance-hdr-response-curve` token through the shared luminance text parser, then enforces the repository luminance backend contract requiring deterministic `linear` response-curve forwarding. Complexity: `O(n)` in token length. Side effects: emits deterministic parse diagnostics on invalid values.
 - @param option_raw {str} Raw CLI payload for `--luminance-hdr-response-curve`.
 - @return {str|None} Canonical `linear` token when valid; `None` otherwise.
 - @satisfies REQ-011
 
-### fn `def _parse_positive_float_option(option_name, option_raw)` `priv` (L3344-3367)
+### fn `def _parse_positive_float_option(option_name, option_raw)` `priv` (L3345-3368)
 - @brief Parse and validate one positive float option value.
 - @details Converts option token to `float`, requires value greater than zero, and emits deterministic parse errors on malformed values.
 - @param option_name {str} Long-option identifier used in error messages.
@@ -1073,14 +1073,14 @@ minimum preserving sign, then delegates iterative bracket half-span expansion to
 - @return {float|None} Parsed positive float value when valid; `None` otherwise.
 - @satisfies REQ-065
 
-### fn `def _parse_post_gamma_selector_option(option_raw)` `priv` (L3368-3389)
+### fn `def _parse_post_gamma_selector_option(option_raw)` `priv` (L3369-3390)
 - @brief Parse `--post-gamma` selector as numeric factor or `auto`.
 - @details Accepts one positive float token for numeric static gamma mode or literal `auto` for auto-gamma replacement mode.
 - @param option_raw {str} Raw `--post-gamma` value token from CLI args.
 - @return {tuple[float, str]|None} `(post_gamma_value, mode)` where `mode` is `numeric` or `auto`; `None` on parse failure.
 - @satisfies REQ-176
 
-### fn `def _parse_positive_int_option(option_name, option_raw)` `priv` (L3390-3413)
+### fn `def _parse_positive_int_option(option_name, option_raw)` `priv` (L3391-3414)
 - @brief Parse and validate one positive integer option value.
 - @details Converts option token to `int`, requires value greater than zero, and emits deterministic parse errors on malformed values.
 - @param option_name {str} Long-option identifier used in error messages.
@@ -1088,14 +1088,14 @@ minimum preserving sign, then delegates iterative bracket half-span expansion to
 - @return {int|None} Parsed positive integer value when valid; `None` otherwise.
 - @satisfies REQ-127, REQ-130
 
-### fn `def _parse_post_gamma_auto_options(post_gamma_auto_raw_values)` `priv` (L3414-3489)
+### fn `def _parse_post_gamma_auto_options(post_gamma_auto_raw_values)` `priv` (L3415-3490)
 - @brief Parse and validate post-gamma auto replacement knobs.
 - @details Applies deterministic defaults for omitted knobs, validates target-gray and luminance guards as exclusive `(0,1)` bounds, validates LUT size as integer `>=2`, and enforces `luma_min < luma_max`.
 - @param post_gamma_auto_raw_values {dict[str, str]} Raw `--post-gamma-auto-*` option values keyed by long option name.
 - @return {PostGammaAutoOptions|None} Parsed auto-gamma options or `None` on validation error.
 - @satisfies REQ-177, REQ-179
 
-### fn `def _parse_tmo_passthrough_value(option_name, option_raw)` `priv` (L3490-3506)
+### fn `def _parse_tmo_passthrough_value(option_name, option_raw)` `priv` (L3491-3507)
 - @brief Parse and validate one luminance `--tmo*` passthrough value.
 - @details Rejects empty values and preserves original payload for transparent forwarding to `luminance-hdr-cli`.
 - @param option_name {str} Long-option identifier used in error messages.
@@ -1103,14 +1103,14 @@ minimum preserving sign, then delegates iterative bracket half-span expansion to
 - @return {str|None} Original value when valid; `None` otherwise.
 - @satisfies REQ-067
 
-### fn `def _parse_jpg_compression_option(compression_raw)` `priv` (L3507-3529)
+### fn `def _parse_jpg_compression_option(compression_raw)` `priv` (L3508-3530)
 - @brief Parse and validate JPEG compression option value.
 - @details Converts option token to `int`, requires inclusive range `[0, 100]`, and emits deterministic parse errors on malformed values.
 - @param compression_raw {str} Raw compression token value from CLI args.
 - @return {int|None} Parsed JPEG compression level when valid; `None` otherwise.
 - @satisfies REQ-065
 
-### fn `def _parse_float_exclusive_range_option(option_name, option_raw, min_value, max_value)` `priv` (L3530-3554)
+### fn `def _parse_float_exclusive_range_option(option_name, option_raw, min_value, max_value)` `priv` (L3531-3555)
 - @brief Parse and validate one float option in an exclusive range.
 - @details Converts option token to `float`, validates `min < value < max`, and emits deterministic parse errors on malformed or out-of-range values.
 - @param option_name {str} Long-option identifier used in error messages.
@@ -1120,7 +1120,7 @@ minimum preserving sign, then delegates iterative bracket half-span expansion to
 - @return {float|None} Parsed float value when valid; `None` otherwise.
 - @satisfies REQ-065, REQ-089
 
-### fn `def _parse_non_negative_float_option(option_name, option_raw)` `priv` (L3555-3577)
+### fn `def _parse_non_negative_float_option(option_name, option_raw)` `priv` (L3556-3578)
 - @brief Parse and validate one non-negative float option value.
 - @details Converts option token to `float`, requires value greater than or equal to zero, and emits deterministic parse errors on malformed values.
 - @param option_name {str} Long-option identifier used in error messages.
@@ -1128,7 +1128,7 @@ minimum preserving sign, then delegates iterative bracket half-span expansion to
 - @return {float|None} Parsed non-negative float value when valid; `None` otherwise.
 - @satisfies REQ-065, REQ-089
 
-### fn `def _parse_float_in_range_option(option_name, option_raw, min_value, max_value)` `priv` (L3578-3603)
+### fn `def _parse_float_in_range_option(option_name, option_raw, min_value, max_value)` `priv` (L3579-3604)
 - @brief Parse and validate one float option constrained to inclusive range.
 - @details Converts option token to `float`, validates inclusive bounds, and emits deterministic parse errors on malformed or out-of-range values.
 - @param option_name {str} Long-option identifier used in error messages.
@@ -1138,7 +1138,7 @@ minimum preserving sign, then delegates iterative bracket half-span expansion to
 - @return {float|None} Parsed bounded float value when valid; `None` otherwise.
 - @satisfies REQ-082, REQ-084
 
-### fn `def _parse_positive_int_pair_option(option_name, option_raw)` `priv` (L3604-3635)
+### fn `def _parse_positive_int_pair_option(option_name, option_raw)` `priv` (L3605-3636)
 - @brief Parse and validate one positive integer pair option value.
 - @details Accepts `rowsxcols`, `rowsXcols`, or `rows,cols`, converts both tokens to `int`, requires each value to be greater than zero, and emits deterministic parse errors on malformed values.
 - @param option_name {str} Long-option identifier used in error messages.
@@ -1146,49 +1146,49 @@ minimum preserving sign, then delegates iterative bracket half-span expansion to
 - @return {tuple[int, int]|None} Parsed positive integer pair when valid; `None` otherwise.
 - @satisfies REQ-065, REQ-125
 
-### fn `def _parse_auto_brightness_options(auto_brightness_raw_values)` `priv` (L3636-3732)
+### fn `def _parse_auto_brightness_options(auto_brightness_raw_values)` `priv` (L3637-3733)
 - @brief Parse and validate auto-brightness parameters.
 - @details Parses optional controls for the original photographic BT.709 float-domain tonemap pipeline and applies deterministic defaults for omitted auto-brightness options.
 - @param auto_brightness_raw_values {dict[str, str]} Raw `--ab-*` option values keyed by long option name.
 - @return {AutoBrightnessOptions|None} Parsed auto-brightness options or `None` on validation error.
 - @satisfies REQ-088, REQ-089, REQ-103, REQ-104, REQ-105, REQ-124, REQ-135
 
-### fn `def _parse_auto_levels_hr_method_option(auto_levels_method_raw)` `priv` (L3733-3764)
+### fn `def _parse_auto_levels_hr_method_option(auto_levels_method_raw)` `priv` (L3734-3765)
 - @brief Parse auto-levels highlight reconstruction method option value.
 - @details Validates case-insensitive method names and normalizes accepted values to canonical tokens used by runtime dispatch.
 - @param auto_levels_method_raw {str} Raw `--al-highlight-reconstruction-method` option token.
 - @return {str|None} Canonical method token or `None` on parse failure.
 - @satisfies REQ-101, REQ-102, REQ-119
 
-### fn `def _parse_auto_levels_options(auto_levels_raw_values)` `priv` (L3765-3837)
+### fn `def _parse_auto_levels_options(auto_levels_raw_values)` `priv` (L3766-3838)
 - @brief Parse and validate auto-levels parameters.
 - @details Parses histogram clip percentage, explicit gamut clipping toggle, explicit highlight reconstruction toggle, optional highlight reconstruction method, and Inpaint Opposed gain threshold using RawTherapee-aligned defaults.
 - @param auto_levels_raw_values {dict[str, str]} Raw `--al-*` option values keyed by long option name.
 - @return {AutoLevelsOptions|None} Parsed auto-levels options or `None` on validation error.
 - @satisfies REQ-100, REQ-101, REQ-102, REQ-116, REQ-120
 
-### fn `def _parse_auto_adjust_options(auto_adjust_raw_values)` `priv` (L3838-3987)
+### fn `def _parse_auto_adjust_options(auto_adjust_raw_values)` `priv` (L3839-3988)
 - @brief Parse and validate auto-adjust knobs.
 - @details Applies defaults for omitted knobs, validates scalar/range constraints, validates CLAHE-luma controls, and enforces level percentile ordering contract.
 - @param auto_adjust_raw_values {dict[str, str]} Raw `--aa-*` option values keyed by long option name.
 - @return {AutoAdjustOptions|None} Parsed shared auto-adjust options or `None` on validation error.
 - @satisfies REQ-051, REQ-082, REQ-083, REQ-084, REQ-123, REQ-125
 
-### fn `def _parse_hdrplus_proxy_mode_option(proxy_mode_raw)` `priv` (L3988-4006)
+### fn `def _parse_hdrplus_proxy_mode_option(proxy_mode_raw)` `priv` (L3989-4007)
 - @brief Parse HDR+ scalar proxy mode selector.
 - @details Accepts case-insensitive proxy mode names, normalizes to canonical lowercase spelling, and rejects unsupported values with deterministic diagnostics.
 - @param proxy_mode_raw {str} Raw HDR+ proxy mode token from CLI args.
 - @return {str|None} Canonical proxy mode token or `None` on parse failure.
 - @satisfies REQ-126, REQ-127, REQ-130
 
-### fn `def _parse_hdrplus_options(hdrplus_raw_values)` `priv` (L4007-4083)
+### fn `def _parse_hdrplus_options(hdrplus_raw_values)` `priv` (L4008-4084)
 - @brief Parse and validate HDR+ merge knob values.
 - @details Applies source-matching defaults for omitted knobs, validates the RGB-to-scalar proxy selector, alignment search radius, and temporal weight parameters, and rejects inconsistent temporal threshold combinations.
 - @param hdrplus_raw_values {dict[str, str]} Raw `--hdrplus-*` option values keyed by long option name.
 - @return {HdrPlusOptions|None} Parsed HDR+ options or `None` on validation error.
 - @satisfies REQ-126, REQ-127, REQ-128, REQ-130
 
-### fn `def _apply_merge_gamma_float_no_clip(np_module, image_rgb_float, resolved_merge_gamma)` `priv` (L4084-4140)
+### fn `def _apply_merge_gamma_float_no_clip(np_module, image_rgb_float, resolved_merge_gamma)` `priv` (L4085-4141)
 - @brief Apply resolved merge gamma at the OpenCV-Tonemap display boundary.
 - @details Executes the same transfer families as `_apply_merge_gamma_float` but intentionally avoids lower-bound clipping to preserve unbounded positive and negative float dynamic range for OpenCV-Tonemap backend execution. This helper is the explicit tone-mapped-to-display-RGB boundary for the OpenCV-Tonemap path. Complexity: O(H*W). Side effects: none.
 - @param np_module {ModuleType} Imported numpy module.
@@ -1198,7 +1198,7 @@ minimum preserving sign, then delegates iterative bracket half-span expansion to
 - @note Boundary classification: transfer boundary from tone-mapped HDR output to display-referred RGB.
 - @satisfies REQ-197, REQ-198, REQ-237, REQ-240
 
-### fn `def _resolve_opencv_tonemap_gamma_inverse(resolved_merge_gamma)` `priv` (L4141-4174)
+### fn `def _resolve_opencv_tonemap_gamma_inverse(resolved_merge_gamma)` `priv` (L4142-4175)
 - @brief Resolve OpenCV-Tonemap gamma inverse from merge-gamma payload.
 - @details Maps resolved merge-gamma transfer families to one OpenCV tone-mapping gamma value that inverts the merge-gamma curve parameter: `sRGB -> 1/2.4`, `power -> 1/param_a`, `rec709 -> 1/param_b`, and `linear -> 1.0`.
 - @param resolved_merge_gamma {ResolvedMergeGamma} Resolved merge-gamma payload.
@@ -1206,58 +1206,58 @@ minimum preserving sign, then delegates iterative bracket half-span expansion to
 - @exception ValueError Raised when required merge-gamma parameters are missing or non-positive.
 - @satisfies REQ-193
 
-### fn `def _parse_auto_adjust_option(auto_adjust_raw)` `priv` (L4175-4198)
+### fn `def _parse_auto_adjust_option(auto_adjust_raw)` `priv` (L4176-4199)
 - @brief Parse auto-adjust enable selector option value.
 - @details Accepts case-insensitive `enable` and `disable` tokens and maps them to the resolved auto-adjust stage state.
 - @param auto_adjust_raw {str} Raw auto-adjust enable token.
 - @return {bool|None} `True` when auto-adjust is enabled; `False` when disabled; `None` on parse failure.
 - @satisfies REQ-065, REQ-073, REQ-075
 
-### fn `def _parse_raw_white_balance_mode_option(raw_white_balance_mode_raw)` `priv` (L4199-4226)
+### fn `def _parse_raw_white_balance_mode_option(raw_white_balance_mode_raw)` `priv` (L4200-4227)
 - @brief Parse RAW white-balance normalization mode selector option value.
 - @details Accepts case-insensitive RAW white-balance normalization mode selectors and normalizes them to canonical runtime names.
 - @param raw_white_balance_mode_raw {str} Raw `--white-balance` selector token.
 - @return {str|None} Canonical RAW white-balance normalization mode or `None` on parse failure.
 - @satisfies REQ-203
 
-### fn `def _parse_auto_white_balance_mode_option(auto_white_balance_raw)` `priv` (L4227-4258)
+### fn `def _parse_auto_white_balance_mode_option(auto_white_balance_raw)` `priv` (L4228-4259)
 - @brief Parse `--auto-white-balance` mode selector option value.
 - @details Accepts case-insensitive auto-white-balance selector names and normalizes them to canonical runtime mode names, including explicit `disable` alias token.
 - @param auto_white_balance_raw {str} Raw `--auto-white-balance` selector token.
 - @return {str|None} Canonical selector token including `disable` alias or `None` on parse failure.
 - @satisfies REQ-181, REQ-183
 
-### fn `def _parse_white_balance_mode_option(white_balance_raw)` `priv` (L4259-4271)
+### fn `def _parse_white_balance_mode_option(white_balance_raw)` `priv` (L4260-4272)
 - @brief Parse compatibility alias for `--auto-white-balance` selector.
 - @details Preserves compatibility for existing internal/test references while delegating parsing logic to `_parse_auto_white_balance_mode_option`.
 - @param white_balance_raw {str} Raw `--auto-white-balance` selector token.
 - @return {str|None} Canonical auto-white-balance mode or `None` on parse failure.
 - @satisfies REQ-181, REQ-183
 
-### fn `def _parse_white_balance_analysis_source_option(analysis_source_raw)` `priv` (L4272-4301)
+### fn `def _parse_white_balance_analysis_source_option(analysis_source_raw)` `priv` (L4273-4302)
 - @brief Parse white-balance analysis source selector option value.
 - @details Accepts case-insensitive white-balance analysis-source selector names and normalizes them to canonical runtime selector names.
 - @param analysis_source_raw {str} Raw `--white-balance-analysis-source` selector token.
 - @return {str|None} Canonical analysis-source selector or `None` on parse failure.
 - @satisfies REQ-199
 
-### fn `def _parse_white_balance_xphoto_domain_option(xphoto_domain_raw)` `priv` (L4302-4328)
+### fn `def _parse_white_balance_xphoto_domain_option(xphoto_domain_raw)` `priv` (L4303-4329)
 - @brief Parse white-balance xphoto estimation-domain selector option value.
 - @details Accepts case-insensitive xphoto estimation-domain selector names and normalizes them to canonical runtime selector names.
 - @param xphoto_domain_raw {str} Raw `--white-balance-xphoto-domain` selector token.
 - @return {str|None} Canonical xphoto estimation-domain selector or `None` on parse failure.
 - @satisfies REQ-210
 
-### fn `def _parse_hdr_merge_option(hdr_merge_raw)` `priv` (L4329-4359)
+### fn `def _parse_hdr_merge_option(hdr_merge_raw)` `priv` (L4330-4360)
 - @brief Parse HDR backend selector option value.
 - @details Accepts case-insensitive backend selector names and normalizes them to canonical runtime mode names.
 - @param hdr_merge_raw {str} Raw `--hdr-merge` selector token.
 - @return {str|None} Canonical HDR merge mode or `None` on parse failure.
 - @satisfies CTN-002, REQ-023, REQ-024, REQ-107, REQ-111, REQ-189
 
-### fn `def _resolve_default_postprocess(` `priv` (L4360-4364)
+### fn `def _resolve_default_postprocess(` `priv` (L4361-4365)
 
-### fn `def _parse_gamma_option(option_value)` `priv` (L4473-4511)
+### fn `def _parse_gamma_option(option_value)` `priv` (L4474-4512)
 - @brief Resolve backend-specific postprocess defaults.
 - @brief Parse one `--gamma` selector into normalized request state.
 - @details Selects backend-specific defaults. Uses algorithm-specific OpenCV
@@ -1277,28 +1277,28 @@ untuned luminance operators. Complexity: O(1). Side effects: none.
 - @satisfies DES-006, DES-008, REQ-145
 - @satisfies REQ-020
 
-### fn `def _decode_exif_text_value(exif_value)` `priv` (L4512-4531)
+### fn `def _decode_exif_text_value(exif_value)` `priv` (L4513-4532)
 - @brief Normalize one EXIF scalar payload to deterministic stripped text.
 - @details Accepts bytes, rationals, enums, or generic scalar-like values and returns one normalized text token for merge-gamma auto resolution. Complexity: O(len(value_text)). Side effects: none.
 - @param exif_value {object} Raw EXIF payload.
 - @return {str|None} Normalized text token or `None` when payload is absent/empty.
 - @satisfies REQ-169
 
-### fn `def _exiftool_color_space_fallback(input_dng)` `priv` (L4532-4583)
+### fn `def _exiftool_color_space_fallback(input_dng)` `priv` (L4533-4584)
 - @brief Extract color-space evidence via exiftool subprocess fallback.
 - @details Invokes `exiftool -j -ColorSpace` as a subprocess to recover color-space metadata from MakerNotes or vendor-specific IFDs that `exifread` cannot parse (e.g., Canon MakerNotes embedded in DNG). Maps exiftool text labels to EXIF-compatible numeric tokens: `Adobe RGB` -> `"2"`, `sRGB` -> `"1"`. Returns `None` when exiftool is unavailable, times out, or yields no color-space evidence. Complexity: O(1) subprocess invocation. Side effects: read-only.
 - @param input_dng {Path} Source RAW/DNG file path.
 - @return {str|None} EXIF-compatible numeric `ColorSpace` token or `None`.
 - @satisfies REQ-169
 
-### fn `def _extract_exif_gamma_tags(input_dng)` `priv` (L4584-4652)
+### fn `def _extract_exif_gamma_tags(input_dng)` `priv` (L4585-4653)
 - @brief Extract EXIF color-space metadata relevant to auto merge gamma.
 - @details Opens the source RAW/DNG file as a binary stream via `exifread.process_file` and normalizes `EXIF ColorSpace`, `Interop InteroperabilityIndex`, `Image Model`, and `Image Make` tags for deterministic auto transfer resolution. When `exifread` yields no `ColorSpace` evidence, falls back to `exiftool` subprocess extraction to recover vendor-specific MakerNotes color-space data (e.g., Canon DNG). Does not use Pillow for this extraction. Complexity: O(file_size). Side effects: none (read-only file access).
 - @param input_dng {Path} Source RAW/DNG file path.
 - @return {ExifGammaTags} Normalized EXIF merge-gamma evidence payload.
 - @satisfies REQ-169, REQ-172, REQ-173
 
-### fn `def _resolve_auto_merge_gamma(exif_gamma_tags, source_gamma_info)` `priv` (L4653-4699)
+### fn `def _resolve_auto_merge_gamma(exif_gamma_tags, source_gamma_info)` `priv` (L4654-4700)
 - @brief Resolve auto merge-output transfer from EXIF-first metadata evidence.
 - @details Applies deterministic priority: EXIF `ColorSpace==1` selects sRGB, EXIF `ColorSpace==2` or interoperability token containing `R03` selects Adobe RGB power gamma `2.19921875`, and unresolved cases default to sRGB transfer as fallback.
 - @param exif_gamma_tags {ExifGammaTags} Normalized EXIF color-space evidence.
@@ -1306,14 +1306,14 @@ untuned luminance operators. Complexity: O(1). Side effects: none.
 - @return {ResolvedMergeGamma} Resolved auto transfer payload.
 - @satisfies REQ-169
 
-### fn `def _describe_resolved_merge_gamma(resolved_merge_gamma)` `priv` (L4700-4759)
+### fn `def _describe_resolved_merge_gamma(resolved_merge_gamma)` `priv` (L4701-4760)
 - @brief Format one deterministic merge-gamma runtime diagnostic line.
 - @details Renders one stable diagnostic payload including request mode, resolved transfer family, label, explicit linear-segment parameters, explicit curve-segment parameters, and evidence token.
 - @param resolved_merge_gamma {ResolvedMergeGamma} Resolved merge-gamma payload.
 - @return {str} Deterministic runtime diagnostic line.
 - @satisfies REQ-171
 
-### fn `def _format_gamma_number(value)` `priv` (L4711-4724)
+### fn `def _format_gamma_number(value)` `priv` (L4712-4725)
 - @brief Format one deterministic merge-gamma runtime diagnostic line.
 - @brief Format one finite gamma parameter for deterministic diagnostics.
 - @details Renders one stable diagnostic payload including request mode,
@@ -1327,14 +1327,14 @@ explicit curve-segment parameters, and evidence token.
 - @satisfies REQ-171
 - @satisfies REQ-171
 
-### fn `def _describe_exif_gamma_tags(exif_gamma_tags)` `priv` (L4760-4802)
+### fn `def _describe_exif_gamma_tags(exif_gamma_tags)` `priv` (L4761-4803)
 - @brief Format one deterministic EXIF merge-gamma input diagnostic line.
 - @details Renders one stable runtime payload exposing the normalized EXIF `ColorSpace`, `InteroperabilityIndex`, `ImageModel`, `ImageMake`, and a human-readable `ColorProfile` label derived from `ColorSpace` and `InteroperabilityIndex`. Mapping: `ColorSpace==1` -> `sRGB`, `ColorSpace==2` or `InteroperabilityIndex` containing `R03` -> `Adobe RGB`, `ColorSpace==65535` -> `Uncalibrated`, otherwise `Unknown`. Missing values are rendered as `missing`.
 - @param exif_gamma_tags {ExifGammaTags} Normalized EXIF merge-gamma evidence payload.
 - @return {str} Deterministic runtime diagnostic line.
 - @satisfies REQ-172
 
-### fn `def _ensure_three_channel_float_array_no_clip(np_module, image_data)` `priv` (L4803-4834)
+### fn `def _ensure_three_channel_float_array_no_clip(np_module, image_data)` `priv` (L4804-4835)
 - @brief Normalize one image payload to three-channel float tensor without upper clipping.
 - @details Converts arbitrary numeric image payloads into RGB `float64`, preserving finite positive values above `1.0`, clearing non-finite and negative values only, expanding grayscale/single-channel inputs to RGB, and dropping alpha channels. Used exclusively by backend-final merge-gamma application to avoid unnecessary clipping around transfer evaluation.
 - @param np_module {ModuleType} Imported numpy module.
@@ -1343,7 +1343,7 @@ explicit curve-segment parameters, and evidence token.
 - @exception ValueError Raised when the input shape cannot be normalized to RGB.
 - @satisfies REQ-170
 
-### fn `def _ensure_three_channel_float_array_no_bounds(np_module, image_data)` `priv` (L4835-4864)
+### fn `def _ensure_three_channel_float_array_no_bounds(np_module, image_data)` `priv` (L4836-4865)
 - @brief Normalize one image payload to RGB float tensor without clipping bounds.
 - @details Converts numeric image payloads into RGB `float64`, preserves finite values on the full float range without lower/upper clipping, replaces non-finite payload samples with `0.0`, expands grayscale/single- channel data to RGB, and drops alpha.
 - @param np_module {ModuleType} Imported numpy module.
@@ -1352,7 +1352,7 @@ explicit curve-segment parameters, and evidence token.
 - @exception ValueError Raised when image shape is unsupported.
 - @satisfies REQ-198
 
-### fn `def _apply_merge_gamma_float(np_module, image_rgb_float, resolved_merge_gamma)` `priv` (L4865-4921)
+### fn `def _apply_merge_gamma_float(np_module, image_rgb_float, resolved_merge_gamma)` `priv` (L4866-4922)
 - @brief Apply one resolved merge-output transfer at the display boundary.
 - @details Executes backend-final transfer encoding on positive float-domain RGB values after backend normalization. The helper intentionally avoids upper clipping before and after transfer evaluation so highlight headroom is preserved until the shared downstream pipeline chooses its own bounds. This helper is the explicit camera-linear-to-display-RGB boundary for OpenCV Debevec/Robertson and HDR+, and the merge-gamma-conditioned input bridge for OpenCV Mertens. Complexity: O(H*W). Side effects: none.
 - @param np_module {ModuleType} Imported numpy module.
@@ -1362,34 +1362,34 @@ explicit curve-segment parameters, and evidence token.
 - @note Boundary classification: transfer boundary from backend-normalized HDR output to display-referred RGB.
 - @satisfies REQ-170, REQ-237, REQ-240
 
-### fn `def _parse_run_options(args)` `priv` (L4922-5121)
+### fn `def _parse_run_options(args)` `priv` (L4923-5122)
 - @brief Parse CLI args into input, output, and EV parameters.
 - @details Supports positional file arguments, bracket delta selector (`--bracketing=<auto|value>` where omitted enables iterative automatic solving and explicit `auto` forces static half-span `0.1`), bracket center selector (`--exposure=<auto|value>`, default `auto`), optional automatic exposure clipping and step controls, optional RAW white-balance normalization selector (`--white-balance=<GREEN|MAX|MIN|MEAN>`), optional auto-white-balance selector (`--auto-white-balance=<mode>`) applied to the linear base image after auto-brightness and before auto-zero evaluation, optional xphoto estimation-domain selector (`--white-balance-xphoto-domain=<linear|srgb|source-auto>`), optional postprocess controls including `--post-gamma=<value|auto>` and optional `--post-gamma-auto-*` knobs, optional auto-brightness stage and `--ab-*` knobs, optional auto-levels stage and `--al-*` knobs, optional shared auto-adjust knobs, optional backend selector (`--hdr-merge=<Luminace-HDR|OpenCV-Merge|OpenCV-Tonemap|HDR-Plus>` default `OpenCV-Tonemap`), OpenCV backend controls, OpenCV-Tonemap backend controls, HDR+ backend controls, and luminance backend controls including explicit `--tmo*` passthrough options and optional auto-adjust enable selector (`--auto-adjust <enable|disable>`), plus optional `--debug` persistent checkpoint emission; parses `--gamma=<auto|linear_coeff,exponent>` merge-output transfer selector defaulting to `auto` when omitted, rejects unknown options, and rejects invalid arity.
 - @param args {list[str]} Raw command argument vector.
 - @return {tuple[Path, Path, float|None, bool, PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, bool, AutoEvOptions]|None} Parsed `(input, output, ev, auto_ev_delta_enabled, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, auto_ev_zero_enabled, auto_ev_options)` tuple; `None` on parse failure. `auto_ev_zero_enabled=True` when `--exposure` is absent or `=auto`; `auto_ev_zero_enabled=False` when `--exposure=<value>` is parsed. `--exposure=<value>` without static `--bracketing=<value>` or explicit `--bracketing=auto` is rejected.
 - @satisfies CTN-002, CTN-003, CTN-007, REQ-006, REQ-007, REQ-008, REQ-009, REQ-018, REQ-020, REQ-022, REQ-023, REQ-024, REQ-025, REQ-030, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146, REQ-176, REQ-179, REQ-180, REQ-181, REQ-183, REQ-189, REQ-190, REQ-191, REQ-194, REQ-195, REQ-196, REQ-199, REQ-203, REQ-210
 
-### fn `def _load_image_dependencies()` `priv` (L5589-5626)
+### fn `def _load_image_dependencies()` `priv` (L5590-5627)
 - @brief Load optional Python dependencies required by `dng2jpg`.
 - @details Imports `rawpy` for RAW decoding and `imageio` for image IO using `imageio.v3` when available with fallback to top-level `imageio` module.
 - @return {tuple[ModuleType, ModuleType, ModuleType]|None} `(rawpy_module, imageio_module, pil_image_module)` on success; `None` on missing dependency.
 - @satisfies REQ-059, REQ-066, REQ-074
 
-### fn `def _parse_exif_datetime_to_timestamp(datetime_raw)` `priv` (L5627-5657)
+### fn `def _parse_exif_datetime_to_timestamp(datetime_raw)` `priv` (L5628-5658)
 - @brief Parse one EXIF datetime token into POSIX timestamp.
 - @details Normalizes scalar EXIF datetime input (`str` or `bytes`), trims optional null-terminated EXIF payload suffix, and parses strict EXIF format `YYYY:MM:DD HH:MM:SS` to generate filesystem timestamp.
 - @param datetime_raw {str|bytes|object} EXIF datetime scalar.
 - @return {float|None} Parsed POSIX timestamp; `None` when value is missing or invalid.
 - @satisfies REQ-074, REQ-077
 
-### fn `def _parse_exif_exposure_time_to_seconds(exposure_raw)` `priv` (L5658-5720)
+### fn `def _parse_exif_exposure_time_to_seconds(exposure_raw)` `priv` (L5659-5721)
 - @brief Parse one EXIF exposure-time token into positive seconds.
 - @details Normalizes scalar or rational-like EXIF `ExposureTime` payloads from Pillow metadata into one positive Python `float` measured in seconds. Accepted forms include numeric scalars, two-item `(numerator, denominator)` pairs, and objects exposing `numerator`/`denominator` attributes.
 - @param exposure_raw {object} EXIF `ExposureTime` scalar or rational-like payload.
 - @return {float|None} Positive exposure time in seconds; `None` when missing or invalid.
 - @satisfies REQ-161
 
-### fn `def _extract_dng_exif_payload_and_timestamp(pil_image_module, input_dng)` `priv` (L5721-5815)
+### fn `def _extract_dng_exif_payload_and_timestamp(pil_image_module, input_dng)` `priv` (L5722-5816)
 - @brief Extract DNG EXIF payload bytes, preferred datetime timestamp, source orientation, and exposure time.
 - @details Opens input DNG via Pillow, suppresses known non-actionable `PIL.TiffImagePlugin` metadata warning for malformed TIFF tag `33723`, reads EXIF mapping without orientation mutation, serializes payload for JPEG save while source image handle is still open, resolves source orientation from EXIF tag `274`, resolves datetime/exposure metadata from the top-level EXIF mapping with fallback to the nested EXIF IFD (`34665`) when Pillow omits those tags from the root mapping, parses EXIF `ExposureTime` to positive seconds, and resolves filesystem timestamp priority: `DateTimeOriginal`(36867) > `DateTimeDigitized`(36868) > `DateTime`(306).
 - @param pil_image_module {ModuleType} Imported Pillow Image module.
@@ -1397,7 +1397,7 @@ explicit curve-segment parameters, and evidence token.
 - @return {tuple[bytes|None, float|None, int, float|None]} `(exif_payload, exif_timestamp, source_orientation, exposure_time_seconds)` with orientation defaulting to `1`.
 - @satisfies REQ-066, REQ-074, REQ-077, REQ-161
 
-### fn `def _read_exif_value(exif_tag)` `priv` (L5765-5782)
+### fn `def _read_exif_value(exif_tag)` `priv` (L5766-5783)
 - @brief Extract DNG EXIF payload bytes, preferred datetime timestamp, source orientation, and exposure time.
 - @brief Resolve one EXIF value from root EXIF data with nested-IFD fallback.
 - @details Opens input DNG via Pillow, suppresses known non-actionable
@@ -1418,14 +1418,14 @@ seconds, and resolves filesystem timestamp priority:
 - @satisfies REQ-066, REQ-074, REQ-077, REQ-161
 - @satisfies REQ-161
 
-### fn `def _resolve_thumbnail_transpose_map(pil_image_module)` `priv` (L5816-5847)
+### fn `def _resolve_thumbnail_transpose_map(pil_image_module)` `priv` (L5817-5848)
 - @brief Build deterministic EXIF-orientation-to-transpose mapping.
 - @details Resolves Pillow transpose constants from modern `Image.Transpose` namespace with fallback to legacy module-level constants.
 - @param pil_image_module {ModuleType} Imported Pillow Image module.
 - @return {dict[int, int]} Orientation-to-transpose mapping for values `2..8`.
 - @satisfies REQ-077, REQ-078
 
-### fn `def _apply_orientation_transform(pil_image_module, pil_image, source_orientation)` `priv` (L5848-5870)
+### fn `def _apply_orientation_transform(pil_image_module, pil_image, source_orientation)` `priv` (L5849-5871)
 - @brief Apply EXIF orientation transform to one image copy.
 - @details Produces display-oriented pixels from source-oriented input while preserving the original image object and preserving orientation invariants in the main processing pipeline.
 - @param pil_image_module {ModuleType} Imported Pillow Image module.
@@ -1434,9 +1434,9 @@ seconds, and resolves filesystem timestamp priority:
 - @return {object} Transformed Pillow image object.
 - @satisfies REQ-077, REQ-078
 
-### fn `def _build_oriented_thumbnail_jpeg_bytes(` `priv` (L5871-5872)
+### fn `def _build_oriented_thumbnail_jpeg_bytes(` `priv` (L5872-5873)
 
-### fn `def _coerce_exif_int_like_value(raw_value)` `priv` (L5903-5945)
+### fn `def _coerce_exif_int_like_value(raw_value)` `priv` (L5904-5946)
 - @brief Build refreshed JPEG thumbnail bytes from final quantized JPG pixels.
 - @brief Coerce integer-like EXIF scalar values to Python integers.
 - @details Creates a Pillow image from the final RGB uint8 array that is saved
@@ -1453,7 +1453,7 @@ for EXIF embedding without re-reading the output file.
 - @satisfies REQ-041, REQ-078
 - @satisfies REQ-066, REQ-077, REQ-078
 
-### fn `def _normalize_ifd_integer_like_values_for_piexif_dump(piexif_module, exif_dict)` `priv` (L5946-6084)
+### fn `def _normalize_ifd_integer_like_values_for_piexif_dump(piexif_module, exif_dict)` `priv` (L5947-6085)
 - @brief Normalize integer-like IFD values before `piexif.dump`.
 - @details Traverses EXIF IFD mappings (`0th`, `Exif`, `GPS`, `Interop`, `1st`) and coerces integer-like values that can trigger `piexif.dump` packing failures when represented as strings or other non-int scalars. Tuple/list values are normalized only when all items are integer-like. For integer sequence tag types, nested two-item pairs are flattened to a single integer sequence for `piexif.dump` compatibility. Scalar conversion is additionally constrained by `piexif.TAGS` integer field types when tag metadata is available. Type-7 (UNDEFINED) tags stored as a scalar `int` are dropped; only tuple-of-int values are converted to `bytes` for type-7 compatibility.
 - @param piexif_module {ModuleType} Imported piexif module.
@@ -1461,9 +1461,9 @@ for EXIF embedding without re-reading the output file.
 - @return {None} Mutates `exif_dict` in place.
 - @satisfies REQ-042, REQ-066, REQ-077, REQ-078
 
-### fn `def _refresh_output_jpg_exif_thumbnail_after_save(` `priv` (L6085-6091)
+### fn `def _refresh_output_jpg_exif_thumbnail_after_save(` `priv` (L6086-6092)
 
-### fn `def _set_output_file_timestamps(output_jpg, exif_timestamp)` `priv` (L6141-6155)
+### fn `def _set_output_file_timestamps(output_jpg, exif_timestamp)` `priv` (L6142-6156)
 - @brief Refresh output JPG EXIF thumbnail while preserving source orientation.
 - @brief Set output JPG atime and mtime from EXIF timestamp.
 - @details Loads source EXIF payload, regenerates thumbnail from the final
@@ -1486,7 +1486,7 @@ EXIF payload into output JPG before any filesystem timestamp synchronization.
 - @satisfies REQ-014, REQ-041, REQ-078
 - @satisfies REQ-074, REQ-077
 
-### fn `def _sync_output_file_timestamps_from_exif(output_jpg, exif_timestamp)` `priv` (L6156-6173)
+### fn `def _sync_output_file_timestamps_from_exif(output_jpg, exif_timestamp)` `priv` (L6157-6174)
 - @brief Synchronize output JPG atime/mtime from optional EXIF timestamp.
 - @details Provides one dedicated call site for filesystem timestamp sync and applies update only when EXIF datetime parsing produced a valid POSIX value after refreshed EXIF metadata has already been written to the output JPG.
 - @param output_jpg {Path} Output JPG path.
@@ -1495,7 +1495,7 @@ EXIF payload into output JPG before any filesystem timestamp synchronization.
 - @exception OSError Raised when filesystem metadata update fails.
 - @satisfies REQ-014, REQ-074, REQ-077
 
-### fn `def _safe_pow2_ev(exponent, context)` `priv` (L6174-6211)
+### fn `def _safe_pow2_ev(exponent, context)` `priv` (L6175-6212)
 - @brief Compute `2**EV` with deterministic finite and overflow validation.
 - @details Converts `exponent` to float, rejects non-finite values, executes `2**exponent` with overflow handling, validates that the multiplier is finite and strictly positive, and emits context-specific deterministic `ValueError` diagnostics for grep-friendly processing traces. Complexity: O(1). Side effects: none.
 - @param exponent {object} EV exponent candidate consumed by `2**EV`.
@@ -1504,7 +1504,7 @@ EXIF payload into output JPG before any filesystem timestamp synchronization.
 - @exception ValueError Raised when exponent parsing fails, exponent is non-finite, overflow occurs, or multiplier is non-finite/non-positive.
 - @satisfies REQ-227
 
-### fn `def _build_exposure_multipliers(ev_value, ev_zero=0.0)` `priv` (L6212-6240)
+### fn `def _build_exposure_multipliers(ev_value, ev_zero=0.0)` `priv` (L6213-6241)
 - @brief Compute bracketing brightness multipliers from EV delta and center.
 - @details Produces exactly three multipliers mapped to exposure stops `[ev_zero-ev, ev_zero, ev_zero+ev]` using `_safe_pow2_ev(...)` so overflow/non-finite EV scaling fails fast with deterministic diagnostics.
 - @param ev_value {float} Exposure bracket EV delta.
@@ -1513,7 +1513,7 @@ EXIF payload into output JPG before any filesystem timestamp synchronization.
 - @exception ValueError Raised when any EV scaling exponent is invalid or non-representable.
 - @satisfies REQ-009, REQ-159, REQ-160, REQ-227
 
-### fn `def _clip_bracket_rgb_unit_interval(np_module, image_rgb_float)` `priv` (L6241-6264)
+### fn `def _clip_bracket_rgb_unit_interval(np_module, image_rgb_float)` `priv` (L6242-6265)
 - @brief Apply the explicit bracket-contract clip on camera-linear RGB data.
 - @details Converts one EV-scaled camera-linear RGB tensor to `float64` and clamps every sample into `[0,1]`. This helper is the explicit main-flow clipping boundary that materializes the shared bracket contract before backend dispatch. Complexity: O(H*W). Side effects: none.
 - @param np_module {ModuleType} Imported numpy module.
@@ -1525,7 +1525,7 @@ EXIF payload into output JPG before any filesystem timestamp synchronization.
 - @note Stage intent: establish the shared bracket payload consumed by HDR backends.
 - @satisfies REQ-159, REQ-215, REQ-238, REQ-239
 
-### fn `def _build_bracket_images_from_linear_base_float(np_module, base_rgb_float, multipliers)` `priv` (L6265-6294)
+### fn `def _build_bracket_images_from_linear_base_float(np_module, base_rgb_float, multipliers)` `priv` (L6266-6295)
 - @brief Build normalized HDR brackets from one camera-linear RGB base tensor.
 - @details Broadcast-multiplies one camera-linear RGB base tensor by the ordered EV multiplier triplet `(ev_minus, ev_zero, ev_plus)`, routes each result through `_clip_bracket_rgb_unit_interval(...)`, and returns float32 bracket tensors in canonical downstream order. The input base tensor range is preserved before EV scaling to avoid pre-clipping. Complexity: `O(3*H*W)`. Side effects: none.
 - @param np_module {ModuleType} Imported numpy module.
@@ -1534,9 +1534,9 @@ EXIF payload into output JPG before any filesystem timestamp synchronization.
 - @return {list[object]} Ordered camera-linear RGB float32 bracket tensors.
 - @satisfies REQ-159, REQ-160, REQ-238, REQ-242
 
-### fn `def _build_white_balance_analysis_image_from_linear_base_float(` `priv` (L6295-6298)
+### fn `def _build_white_balance_analysis_image_from_linear_base_float(` `priv` (L6296-6299)
 
-### fn `def _validate_white_balance_triplet_shape(np_module, bracket_images_float)` `priv` (L6324-6353)
+### fn `def _validate_white_balance_triplet_shape(np_module, bracket_images_float)` `priv` (L6325-6354)
 - @brief Build unclipped white-balance analysis image from linear base and EV center.
 - @brief Validate white-balance bracket triplet shape contract.
 - @details Converts the shared linear base tensor to RGB float without range
@@ -1555,7 +1555,7 @@ scaling rejects non-finite and overflow cases deterministically.
 - @satisfies REQ-183, REQ-200, REQ-227
 - @satisfies REQ-183
 
-### fn `def _downsample_xphoto_analysis_image_half(np_module, analysis_rgb, cv2_module)` `priv` (L6354-6400)
+### fn `def _downsample_xphoto_analysis_image_half(np_module, analysis_rgb, cv2_module)` `priv` (L6355-6401)
 - @brief Downsample one RGB analysis payload by factor `2` with anti-aliasing.
 - @details Uses OpenCV `resize(..., INTER_AREA)` when available; otherwise applies deterministic `2x2` area averaging with edge padding for odd image dimensions. The output keeps RGB channel order and finite non-negative values.
 - @param np_module {ModuleType} Imported numpy module.
@@ -1564,9 +1564,9 @@ scaling rejects non-finite and overflow cases deterministically.
 - @return {object} Anti-aliased half-resolution RGB float tensor.
 - @satisfies REQ-184, REQ-185, REQ-186
 
-### fn `def _build_xphoto_analysis_image_rgb_float(` `priv` (L6401-6404)
+### fn `def _build_xphoto_analysis_image_rgb_float(` `priv` (L6402-6405)
 
-### fn `def _build_white_balance_robust_analysis_mask(np_module, analysis_rgb_float)` `priv` (L6436-6475)
+### fn `def _build_white_balance_robust_analysis_mask(np_module, analysis_rgb_float)` `priv` (L6437-6476)
 - @brief Build deterministic real-image xphoto analysis payload.
 - @brief Build robust white-balance mask excluding near-black and near-saturated pixels.
 - @details Converts one analysis image to RGB float, preserves values above
@@ -1585,9 +1585,9 @@ assumptions while reducing chromatic aliasing bias in estimation.
 - @satisfies REQ-183, REQ-184, REQ-185, REQ-186
 - @satisfies REQ-187, REQ-188
 
-### fn `def _resolve_xphoto_estimation_payload_scale(` `priv` (L6476-6478)
+### fn `def _resolve_xphoto_estimation_payload_scale(` `priv` (L6477-6479)
 
-### fn `def _rescale_xphoto_estimation_payload_rgb_float(` `priv` (L6509-6511)
+### fn `def _rescale_xphoto_estimation_payload_rgb_float(` `priv` (L6510-6512)
 - @brief Resolve robust xphoto estimation rescale factor from payload percentiles.
 - @details Uses finite non-negative payload samples to compute one robust
 percentile scale for xphoto estimation adaptation. Falls back to `1.0`
@@ -1597,7 +1597,7 @@ when percentile resolution is non-finite or degenerate.
 - @return {float} Positive robust rescale factor.
 - @satisfies REQ-201
 
-### fn `def _compress_xphoto_estimation_payload_highlights_soft_knee(` `priv` (L6538-6540)
+### fn `def _compress_xphoto_estimation_payload_highlights_soft_knee(` `priv` (L6539-6541)
 - @brief Apply robust percentile rescaling to xphoto estimation payload.
 - @details Sanitizes payload samples to finite non-negative float values and
 divides by one robust percentile-derived scale to normalize dynamic range
@@ -1607,7 +1607,7 @@ without mutating stage-working tensors.
 - @return {object} Robust-rescaled RGB float32 payload.
 - @satisfies REQ-201
 
-### fn `def _quantize_xphoto_estimation_payload_rgb(` `priv` (L6581-6585)
+### fn `def _quantize_xphoto_estimation_payload_rgb(` `priv` (L6582-6586)
 - @brief Compress xphoto estimation payload highlights using monotonic soft-knee.
 - @details Applies one monotonic piecewise mapping on robust-rescaled payload
 values: linear passthrough up to knee start, then exponential shoulder
@@ -1618,7 +1618,7 @@ estimation-local and does not alter stage-working tensors.
 - @return {object} Soft-knee-compressed RGB float32 payload bounded below by `0.0`.
 - @satisfies REQ-201
 
-### fn `def _extract_white_balance_channel_gains_from_xphoto(` `priv` (L6621-6627)
+### fn `def _extract_white_balance_channel_gains_from_xphoto(` `priv` (L6622-6628)
 - @brief Quantize xphoto estimation payload using selected integer precision.
 - @details Converts soft-knee-compressed xphoto estimation payload into one
 backend-local integer image: `uint16` with bit-depth-coherent `range_max`
@@ -1631,7 +1631,7 @@ xphoto estimation boundaries.
 - @return {object} Quantized RGB payload as `uint8` or `uint16`.
 - @satisfies REQ-201, REQ-211
 
-### fn `def _probe_xphoto_uint16_payload_support(np_module, wb_algorithm)` `priv` (L6698-6720)
+### fn `def _probe_xphoto_uint16_payload_support(np_module, wb_algorithm)` `priv` (L6699-6721)
 - @brief Derive per-channel white-balance gains from one OpenCV xphoto algorithm.
 - @brief Probe one xphoto algorithm for uint16 payload compatibility.
 - @details Builds one real-image analysis payload with deterministic pyramid
@@ -1654,9 +1654,9 @@ xphoto `balanceWhite(...)`, and derives one gain vector from channel means
 - @satisfies REQ-183, REQ-184, REQ-185, REQ-186, REQ-201, REQ-211
 - @satisfies REQ-211
 
-### fn `def _resolve_white_balance_xphoto_estimation_domain(` `priv` (L6721-6723)
+### fn `def _resolve_white_balance_xphoto_estimation_domain(` `priv` (L6722-6724)
 
-### fn `def _prepare_xphoto_estimation_image_rgb_float(` `priv` (L6766-6769)
+### fn `def _prepare_xphoto_estimation_image_rgb_float(` `priv` (L6767-6770)
 - @brief Resolve effective xphoto estimation domain from selector and source diagnostics.
 - @details Returns explicit selector values unchanged for `linear` and `srgb`.
 For `source-auto`, derives one deterministic domain from source-gamma
@@ -1667,7 +1667,7 @@ falling back to label-token classification.
 - @return {str} Effective xphoto estimation-domain selector in `{"linear","srgb"}`.
 - @satisfies REQ-212
 
-### fn `def _resolve_learning_based_wb_hist_bin_num(bits_per_color)` `priv` (L6804-6819)
+### fn `def _resolve_learning_based_wb_hist_bin_num(bits_per_color)` `priv` (L6805-6820)
 - @brief Build xphoto estimation payload in selected estimation domain.
 - @brief Resolve IA histogram-bin count from source bit depth.
 - @details Normalizes one analysis image to finite non-negative RGB float.
@@ -1685,9 +1685,9 @@ processing domains.
 - @satisfies REQ-212
 - @satisfies REQ-211
 
-### fn `def _estimate_xphoto_white_balance_gains_rgb(` `priv` (L6820-6827)
+### fn `def _estimate_xphoto_white_balance_gains_rgb(` `priv` (L6821-6828)
 
-### fn `def _estimate_color_constancy_white_balance_gains_rgb(` `priv` (L6915-6918)
+### fn `def _estimate_color_constancy_white_balance_gains_rgb(` `priv` (L6916-6919)
 - @brief Estimate EV0-derived white-balance gains using OpenCV xphoto modes.
 - @details Creates one OpenCV xphoto white-balance instance for `Simple`,
 `GrayworldWB`, or `IA`, applies mode-specific setup and uint16 capability
@@ -1704,7 +1704,7 @@ probing, then derives one channel-gain vector from EV0 analysis only.
 - @exception ValueError Raised when mode is unsupported for xphoto estimation.
 - @satisfies REQ-183, REQ-184, REQ-185, REQ-186, REQ-211, REQ-212
 
-### fn `def _estimate_ttl_white_balance_gains_rgb(np_module, analysis_image_rgb_float)` `priv` (L6953-6984)
+### fn `def _estimate_ttl_white_balance_gains_rgb(np_module, analysis_image_rgb_float)` `priv` (L6954-6985)
 - @brief Estimate EV0-derived white-balance gains using scikit-image color constancy.
 - @brief Estimate EV0-derived TTL white-balance gains using channel averages.
 - @details Normalizes the analysis image to RGB float, builds one robust mask
@@ -1723,9 +1723,9 @@ channel and luminance means, and derives one Von-Kries-like gain vector
 - @satisfies REQ-183, REQ-187
 - @satisfies REQ-183, REQ-188
 
-### fn `def _apply_channel_gains_to_white_balance_triplet(` `priv` (L6985-6988)
+### fn `def _apply_channel_gains_to_white_balance_triplet(` `priv` (L6986-6989)
 
-### fn `def _apply_channel_gains_to_white_balance_image(` `priv` (L7014-7017)
+### fn `def _apply_channel_gains_to_white_balance_image(` `priv` (L7015-7018)
 - @brief Apply one shared channel-gain vector to all three bracket images.
 - @details Broadcast-multiplies RGB channels of each bracket with the same
 gain vector to enforce identical white-balance transform across
@@ -1736,7 +1736,7 @@ gain vector to enforce identical white-balance transform across
 - @return {list[object]} White-balanced bracket tensors in canonical order.
 - @satisfies REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188
 
-### fn `def _apply_auto_white_balance_stage_float(` `priv` (L7039-7047)
+### fn `def _apply_auto_white_balance_stage_float(` `priv` (L7040-7048)
 - @brief Apply one channel-gain vector to one RGB image.
 - @details Broadcast-multiplies one normalized RGB float image by one
 channel-gain vector `(r_gain,g_gain,b_gain)` without stage-local clipping.
@@ -1746,11 +1746,11 @@ channel-gain vector `(r_gain,g_gain,b_gain)` without stage-local clipping.
 - @return {object} White-balanced RGB float image.
 - @satisfies REQ-200
 
-### fn `def _apply_white_balance_to_bracket_triplet(` `priv` (L7144-7151)
+### fn `def _apply_white_balance_to_bracket_triplet(` `priv` (L7145-7152)
 
-### fn `def _extract_bracket_images_float(` `priv` (L7237-7243)
+### fn `def _extract_bracket_images_float(` `priv` (L7238-7244)
 
-### fn `def _order_bracket_paths(bracket_paths)` `priv` (L7298-7323)
+### fn `def _order_bracket_paths(bracket_paths)` `priv` (L7299-7324)
 - @brief Extract normalized RGB float brackets from one RAW handle.
 - @brief Validate and reorder bracket TIFF paths for deterministic backend argv.
 - @details Reuses an optional precomputed normalized linear base tensor when
@@ -1774,23 +1774,23 @@ one RAW postprocess invocation.
 - @satisfies REQ-010, REQ-157, REQ-158, REQ-159, REQ-160, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207, REQ-215, REQ-219
 - @satisfies REQ-062, REQ-112
 
-### fn `def _order_hdr_plus_reference_paths(bracket_paths)` `priv` (L7324-7339)
+### fn `def _order_hdr_plus_reference_paths(bracket_paths)` `priv` (L7325-7340)
 - @brief Reorder bracket TIFF paths into HDR+ reference-first frame order.
 - @details Converts canonical bracket order `(ev_minus, ev_zero, ev_plus)` to source-algorithm frame order `(ev_zero, ev_minus, ev_plus)` so the central bracket acts as temporal reference frame `n=0`, matching HDR+ temporal merge semantics while preserving existing bracket export filenames.
 - @param bracket_paths {list[Path]} Temporary bracket TIFF paths generated from RAW.
 - @return {list[Path]} Ordered bracket paths in HDR+ reference-first order.
 - @satisfies REQ-112
 
-### fn `def _format_external_command_for_log(command)` `priv` (L7340-7355)
+### fn `def _format_external_command_for_log(command)` `priv` (L7341-7356)
 - @brief Format one external command argv into deterministic shell-like text.
 - @details Converts one sequence of raw argv tokens into one reproducible shell-style command string using POSIX quoting rules so runtime diagnostics can report the exact external command syntax and parameters without relying on shell execution. Complexity: `O(n)` in total token length. Side effects: none.
 - @param command {Sequence[str]} External command argv tokens in execution order.
 - @return {str} One shell-quoted command string suitable for runtime logging.
 - @satisfies REQ-011
 
-### fn `def _run_luminance_hdr_cli(` `priv` (L7356-7363)
+### fn `def _run_luminance_hdr_cli(` `priv` (L7357-7364)
 
-### fn `def _build_opencv_radiance_exposure_times(` `priv` (L7439-7442)
+### fn `def _build_opencv_radiance_exposure_times(` `priv` (L7440-7443)
 - @brief Merge bracket float images into one RGB float image via `luminance-hdr-cli`.
 - @details Builds deterministic luminance-hdr-cli argv using EV sequence
 centered around zero-reference (`-ev_value,0,+ev_value`) even when extraction
@@ -1811,7 +1811,7 @@ it back to DNG2JPG RGB float `[0,1]` working format.
 - @exception subprocess.CalledProcessError Raised when `luminance-hdr-cli` returns non-zero exit status.
 - @satisfies REQ-011, REQ-033, REQ-034, REQ-035, REQ-174, REQ-175
 
-### fn `def _build_ev_times_from_ev_zero_and_delta(ev_zero, ev_delta)` `priv` (L7490-7509)
+### fn `def _build_ev_times_from_ev_zero_and_delta(ev_zero, ev_delta)` `priv` (L7491-7510)
 - @brief Build deterministic unit-base exposure times array from EV center and EV delta.
 - @details Delegates to the OpenCV radiance exposure-time helper using unit source exposure `1.0` second so tests and compatibility callers can verify deterministic stop-space mapping without EXIF metadata dependency.
 - @param ev_zero {float} Central EV used during bracket extraction.
@@ -1820,9 +1820,9 @@ it back to DNG2JPG RGB float `[0,1]` working format.
 - @exception RuntimeError Raised when numpy dependency is unavailable.
 - @satisfies REQ-109, REQ-142
 
-### fn `def _normalize_opencv_hdr_to_unit_range(np_module, hdr_rgb_float32)` `priv` (L7510-7541)
+### fn `def _normalize_opencv_hdr_to_unit_range(np_module, hdr_rgb_float32)` `priv` (L7511-7542)
 - @brief Normalize OpenCV HDR tensor to unit range with deterministic bounds.
-- @details Normalizes arbitrary OpenCV HDR or fusion output from either the high-precision Debevec/Robertson path, the uint8 legacy fallback, or the Mertens path to one congruent RGB float contract. Negative and non-finite values are cleared via `np.maximum(0.0)` floor, and values above unit range are scaled down by global maximum; no final `[0,1]` clipping is applied because the floor-and-scale sequence guarantees the output is bounded within `[0,1]` deterministically. Complexity: O(H*W). Side effects: none.
+- @details Normalizes arbitrary OpenCV HDR or fusion output from either the high-precision Debevec/Robertson path or the Mertens path to one congruent RGB float contract. Negative and non-finite values are cleared via `np.maximum(0.0)` floor, and values above unit range are scaled down by global maximum; no final `[0,1]` clipping is applied because the floor-and-scale sequence guarantees the output is bounded within `[0,1]` deterministically. Complexity: O(H*W). Side effects: none.
 - @param np_module {ModuleType} Imported numpy module.
 - @param hdr_rgb_float32 {object} OpenCV HDR or fusion RGB tensor.
 - @return {object} Normalized RGB float tensor bounded within `[0,1]` by floor-and-scale normalization.
@@ -1832,7 +1832,7 @@ it back to DNG2JPG RGB float `[0,1]` working format.
 - @note Stage intent: provide one congruent backend output contract before merge gamma or shared postprocess.
 - @satisfies REQ-110, REQ-143, REQ-144, REQ-238, REQ-239
 
-### fn `def _rescale_mertens_fusion_to_display_range(np_module, fusion_rgb_float)` `priv` (L7542-7563)
+### fn `def _rescale_mertens_fusion_to_display_range(np_module, fusion_rgb_float)` `priv` (L7543-7564)
 - @brief Apply the documented OpenCV Mertens `*255.0` rescale bridge.
 - @details Multiplies raw `cv2.MergeMertens.process(...)` float output by `255.0` to reproduce OpenCV exposure-fusion brightness semantics before the optional simple tonemap and the shared backend normalization step. Complexity: O(H*W). Side effects: none.
 - @param np_module {ModuleType} Imported numpy module.
@@ -1844,9 +1844,9 @@ it back to DNG2JPG RGB float `[0,1]` working format.
 - @note Stage intent: preserve documented OpenCV exposure-fusion brightness semantics before backend normalization.
 - @satisfies REQ-154, REQ-238, REQ-239
 
-### fn `def _run_opencv_merge_mertens(` `priv` (L7564-7569)
+### fn `def _run_opencv_merge_mertens(` `priv` (L7565-7570)
 
-### fn `def _adapt_opencv_radiance_input_high_precision(np_module, image_rgb_float)` `priv` (L7602-7621)
+### fn `def _adapt_opencv_radiance_input_high_precision(np_module, image_rgb_float)` `priv` (L7603-7622)
 - @brief Execute OpenCV Mertens exposure fusion path.
 - @brief Adapt one radiance-path bracket to backend-local float32.
 - @details Runs `cv2.createMergeMertens().process(...)` on RGB float
@@ -1868,14 +1868,15 @@ RGB float contract.
 - @satisfies REQ-108, REQ-110, REQ-143, REQ-144, REQ-154, REQ-237, REQ-238
 - @satisfies REQ-110, REQ-162, REQ-245
 
-### fn `def _estimate_opencv_camera_response_high_precision(` `priv` (L7622-7626)
+### fn `def _estimate_opencv_camera_response_high_precision(` `priv` (L7623-7627)
 
-### fn `def _estimate_opencv_camera_response_uint8_legacy(` `priv` (L7646-7650)
+### fn `def _estimate_opencv_camera_response_uint8_legacy(` `priv` (L7648-7652)
 - @brief Resolve optional response payload for high-precision radiance merge.
 - @details High-precision Debevec/Robertson execution calls OpenCV merge
 entrypoints directly on float32 brackets and therefore does not require a
 calibrated response tensor. Arguments are accepted only to preserve the
-shared adapter signature. Complexity: O(1). Side effects: none.
+shared adapter signature for the only supported success path. Complexity:
+O(1). Side effects: none.
 - @param cv2_module {ModuleType} Imported OpenCV module.
 - @param exposures_radiance_float32 {list[object]} Ordered backend-local RGB float32 bracket tensors.
 - @param exposure_times {object} OpenCV exposure-time vector.
@@ -1883,26 +1884,27 @@ shared adapter signature. Complexity: O(1). Side effects: none.
 - @return {None} No response payload; the selected merger consumes `times` only.
 - @satisfies REQ-153, REQ-245
 
-### fn `def _estimate_opencv_camera_response(` `priv` (L7677-7682)
-- @brief Estimate OpenCV inverse camera response for uint8 legacy radiance merge.
+### fn `def _estimate_opencv_camera_response(` `priv` (L7679-7684)
+- @brief Estimate OpenCV inverse camera response for retained uint8 legacy radiance scaffolding.
 - @details Selects the OpenCV calibrator matching the requested radiance merge
 algorithm and computes one inverse camera response tensor from backend-local
-`uint8` bracket views derived from the shared linear float contract. This
-adapter implements the compatibility fallback used when the high-precision
-path is unavailable. Complexity: O(n*p). Side effects: none.
+`uint8` bracket views derived from the shared linear float contract. Normal
+conversion no longer selects this adapter; it is retained only for isolated
+compatibility scaffolding. Complexity: O(n*p). Side effects: none.
 - @param cv2_module {ModuleType} Imported OpenCV module.
 - @param exposures_radiance_uint8 {list[object]} Ordered backend-local RGB `uint8` bracket tensors.
 - @param exposure_times {object} OpenCV exposure-time vector.
 - @param merge_algorithm {str} Canonical OpenCV merge algorithm token.
 - @return {object} OpenCV response tensor compatible with Debevec/Robertson merge calls.
 - @exception RuntimeError Raised when `merge_algorithm` is unsupported.
-- @satisfies REQ-153, REQ-162, REQ-245
+- @deprecated Normal conversion no longer selects the uint8 radiance path.
 
-### fn `def _merge_opencv_radiance_high_precision(` `priv` (L7707-7712)
+### fn `def _merge_opencv_radiance_high_precision(` `priv` (L7710-7715)
 - @brief Execute the selected OpenCV radiance response-estimator adapter.
 - @details Delegates Debevec/Robertson response estimation to the selected
-adapter so high-precision and uint8-legacy paths share one deterministic
-dispatcher. Complexity and backend requirements are adapter-defined. Side
+adapter so high-precision execution uses one deterministic dispatcher.
+Retained legacy adapters remain callable only for isolated compatibility
+scaffolding. Complexity and backend requirements are adapter-defined. Side
 effects: none.
 - @param cv2_module {ModuleType} Imported OpenCV module.
 - @param exposures_radiance_payloads {list[object]} Ordered backend-local radiance inputs selected for the active path.
@@ -1912,7 +1914,7 @@ effects: none.
 - @return {object} Adapter-defined response payload or `None`.
 - @satisfies DES-011, REQ-153, REQ-245
 
-### fn `def _merge_opencv_radiance_uint8_legacy(` `priv` (L7745-7750)
+### fn `def _merge_opencv_radiance_uint8_legacy(` `priv` (L7748-7753)
 - @brief Execute high-precision Debevec/Robertson merge without uint8 adaptation.
 - @details Dispatches directly to OpenCV `MergeDebevec` or
 `MergeRobertson` using float32 brackets and `times` only. The selected path
@@ -1928,11 +1930,13 @@ none.
 - @exception RuntimeError Raised when `merge_algorithm` is unsupported.
 - @satisfies REQ-109, REQ-110, REQ-143, REQ-152, REQ-245
 
-### fn `def _probe_opencv_high_precision_radiance_support(` `priv` (L7782-7785)
-- @brief Execute uint8 legacy Debevec/Robertson merge with calibrated response.
+### fn `def _probe_opencv_high_precision_radiance_support(` `priv` (L7787-7790)
+- @brief Execute retained uint8 legacy Debevec/Robertson merge scaffolding.
 - @details Dispatches to OpenCV `MergeDebevec` or `MergeRobertson` using
 backend-local uint8 brackets together with calibrated response data from the
-legacy calibrator path. Complexity: O(n*p). Side effects: none.
+legacy calibrator path. Normal conversion no longer selects this merger; it
+is retained only for isolated compatibility scaffolding. Complexity: O(n*p).
+Side effects: none.
 - @param cv2_module {ModuleType} Imported OpenCV module.
 - @param exposures_radiance_uint8 {list[object]} Ordered backend-local RGB uint8 bracket tensors.
 - @param exposure_times {object} OpenCV exposure-time vector.
@@ -1940,65 +1944,64 @@ legacy calibrator path. Complexity: O(n*p). Side effects: none.
 - @param response {object} Calibrated response payload required by the legacy merge path.
 - @return {object} OpenCV radiance float tensor before optional tonemap and normalization.
 - @exception RuntimeError Raised when `merge_algorithm` is unsupported.
-- @satisfies REQ-109, REQ-110, REQ-143, REQ-152, REQ-153, REQ-162, REQ-245
+- @deprecated Normal conversion no longer selects the uint8 radiance path.
 
-### fn `def _select_opencv_radiance_path_adapters(` `priv` (L7823-7826)
+### fn `def _select_opencv_radiance_path_adapters(` `priv` (L7829-7832)
 - @brief Probe high-precision Debevec/Robertson merge compatibility.
 - @details Executes one minimal float32 merge call without calibrated
 response and accepts support only when OpenCV returns one float tensor that
 preserves the probe shape. Probe failures or exceptions are treated as
-unsupported so the caller can deterministically select the uint8 legacy
-fallback. Complexity: O(1). Side effects: one backend-local probe merge.
+unsupported so the caller can deterministically reject execution before any
+pre-merge uint8 quantization. Complexity: O(1). Side effects: one
+backend-local probe merge.
 - @param cv2_module {ModuleType} Imported OpenCV module.
 - @param np_module {ModuleType} Imported numpy module.
 - @param merge_algorithm {str} Canonical OpenCV merge algorithm token.
 - @return {bool} `True` when direct float32 radiance merge is confirmed.
-- @satisfies REQ-245
+- @satisfies REQ-245, REQ-247
 
-### fn `def _print_opencv_radiance_path_diagnostic(path_label)` `priv` (L7862-7876)
-- @brief Select one deterministic OpenCV radiance adapter bundle.
+### fn `def _print_opencv_radiance_path_diagnostic(path_label)` `priv` (L7866-7880)
+- @brief Select the supported OpenCV radiance adapter bundle.
 - @brief Emit deterministic OpenCV radiance path diagnostics.
-- @details Chooses the high-precision float32 path when the runtime probe
-confirms direct Debevec/Robertson merge support; otherwise selects the
-uint8 legacy calibrate-plus-merge fallback. The returned bundle carries one
-shared-signature adapter for input adaptation, response estimation, and
-radiance merge execution. Complexity: O(1). Side effects: one probe merge
-call when evaluating the high-precision candidate.
-- @details Prints exactly one runtime line naming the selected Debevec/Robertson radiance path so downstream logs can distinguish high-precision execution from the uint8 legacy fallback. Complexity: O(1). Side effects: stdout write via `print_info`.
+- @details Returns the high-precision float32 Debevec/Robertson path only
+when the runtime probe confirms direct merge support. Unsupported runtimes
+emit deterministic fail-fast diagnostics and raise `RuntimeError` instead of
+selecting any pre-merge uint8 fallback. Complexity: O(1). Side effects:
+one probe merge and one diagnostic stdout write on unsupported runtimes.
+- @details Prints exactly one runtime line naming the supported Debevec/Robertson radiance execution path or the deterministic fail-fast rejection path. Complexity: O(1). Side effects: stdout write via `print_info`.
 - @param cv2_module {ModuleType} Imported OpenCV module.
 - @param np_module {ModuleType} Imported numpy module.
 - @param merge_algorithm {str} Canonical OpenCV merge algorithm token.
 - @param path_label {str} Selected path label.
-- @return {OpenCvRadiancePathAdapters} Selected radiance adapter bundle.
+- @return {OpenCvRadiancePathAdapters} Selected high-precision radiance adapter bundle.
 - @return {None} No return value.
-- @satisfies DES-011, REQ-245
-- @satisfies REQ-246
+- @exception RuntimeError Raised when direct high-precision radiance merge support is unavailable.
+- @satisfies DES-011, REQ-245, REQ-247
+- @satisfies REQ-246, REQ-247
 
-### fn `def _quantize_opencv_radiance_rgb_uint8(np_module, image_rgb_float)` `priv` (L7877-7899)
-- @brief Quantize one legacy radiance-path bracket at the OpenCV uint8 boundary.
-- @details Converts one camera-linear RGB float bracket to `uint8` using the repository byte-quantization helper. Scope is restricted to the OpenCV Debevec/Robertson uint8 legacy fallback where calibrator and merge APIs require `CV_8U` payloads. Complexity: O(H*W). Side effects: none.
+### fn `def _quantize_opencv_radiance_rgb_uint8(np_module, image_rgb_float)` `priv` (L7881-7902)
+- @brief Quantize one retained legacy radiance-path bracket at the OpenCV uint8 boundary.
+- @details Converts one camera-linear RGB float bracket to `uint8` using the repository byte-quantization helper. Normal conversion no longer selects this helper; it is retained only for isolated compatibility scaffolding. Complexity: O(H*W). Side effects: none.
 - @param np_module {ModuleType} Imported numpy module.
 - @param image_rgb_float {object} Camera-linear RGB float bracket tensor.
 - @return {object} Backend-local RGB `uint8` tensor.
+- @deprecated Normal conversion no longer selects the uint8 radiance path.
 - @note Boundary classification: integer quantization.
 - @note Source range: camera-linear RGB float bracket contract in `[0,1]`.
 - @note Target range: backend-local RGB `uint8` code values in `[0,255]`.
-- @note Stage intent: satisfy the OpenCV legacy radiance fallback without changing external float interfaces.
-- @satisfies REQ-110, REQ-162, REQ-238, REQ-239, REQ-245
 
-### fn `def _run_opencv_merge_radiance(` `priv` (L7900-7907)
+### fn `def _run_opencv_merge_radiance(` `priv` (L7903-7910)
 
-### fn `def _normalize_debevec_hdr_to_unit_range(np_module, hdr_rgb_float32, white_point_percentile)` `priv` (L7969-7988)
+### fn `def _normalize_debevec_hdr_to_unit_range(np_module, hdr_rgb_float32, white_point_percentile)` `priv` (L7971-7990)
 - @brief Execute OpenCV radiance HDR path for Debevec or Robertson.
 - @brief Preserve legacy Debevec normalization helper contract.
-- @details Selects one deterministic radiance adapter bundle, prints the
-selected path diagnostic, adapts each camera-linear bracket through the
+- @details Selects the supported radiance adapter bundle, prints the
+supported path diagnostic, adapts each camera-linear bracket through the
 selected input adapter, resolves optional response payloads through the
 selected response estimator, and executes the selected radiance merger.
-High-precision mode keeps float32 payloads through merge entry. The legacy
-fallback preserves the existing backend-local uint8 calibrate-plus-merge
-path when direct high-precision execution is unavailable. Complexity:
-O(n*p). Side effects: one runtime diagnostic line.
+Unsupported runtimes emit one fail-fast diagnostic and raise `RuntimeError`
+before any pre-merge uint8 quantization. Complexity: O(n*p). Side effects:
+at most one runtime diagnostic line.
 - @details Keeps the historical helper name as one compatibility adapter for tests and references while delegating to the unified OpenCV normalization contract used by Debevec, Robertson, and Mertens outputs.
 - @param cv2_module {ModuleType} Imported OpenCV module.
 - @param np_module {ModuleType} Imported numpy module.
@@ -2012,13 +2015,13 @@ O(n*p). Side effects: one runtime diagnostic line.
 - @param white_point_percentile {float} Unused legacy parameter retained for compatibility.
 - @return {object} Normalized backend RGB float tensor.
 - @return {object} Normalized RGB float tensor clamped to `[0,1]`.
-- @exception RuntimeError Raised when `merge_algorithm` is unsupported.
-- @satisfies REQ-108, REQ-109, REQ-110, REQ-143, REQ-144, REQ-152, REQ-153, REQ-162, REQ-237, REQ-238, REQ-245, REQ-246
+- @exception RuntimeError Raised when `merge_algorithm` is unsupported or high-precision radiance merge support is unavailable.
+- @satisfies REQ-108, REQ-109, REQ-110, REQ-143, REQ-144, REQ-152, REQ-153, REQ-162, REQ-237, REQ-238, REQ-245, REQ-246, REQ-247
 - @satisfies REQ-144
 
-### fn `def _run_opencv_tonemap_backend(` `priv` (L7989-7994)
+### fn `def _run_opencv_tonemap_backend(` `priv` (L7991-7996)
 
-### fn `def _derive_opencv_tonemap_enabled(postprocess_options)` `priv` (L8074-8087)
+### fn `def _derive_opencv_tonemap_enabled(postprocess_options)` `priv` (L8076-8089)
 - @brief Execute OpenCV-Tonemap backend on ev-zero only.
 - @brief Resolve OpenCV-Tonemap backend enable state from parsed options.
 - @details Selects bracket index `1` (`ev_zero`) as the only tone-map input,
@@ -2041,7 +2044,7 @@ before shared static postprocess.
 - @satisfies REQ-148, REQ-192, REQ-193, REQ-194, REQ-195, REQ-196, REQ-197, REQ-198
 - @satisfies REQ-189, REQ-190
 
-### fn `def _run_opencv_merge_backend(` `priv` (L8088-8096)
+### fn `def _run_opencv_merge_backend(` `priv` (L8090-8098)
 
 ### fn `def _hdrplus_box_down2_float32(np_module, frames_float32)` `priv` (L8195-8223)
 - @brief Merge bracket float images into one RGB float image via OpenCV.
@@ -2051,14 +2054,12 @@ before shared static postprocess.
 entry re-normalization or clipping, derives OpenCV radiance exposure times
 in seconds from EXIF `ExposureTime` for Debevec/Robertson or dispatches
 Mertens directly, and returns one congruent normalized RGB float image.
-Debevec and Robertson select one deterministic adapter bundle that prefers
-high-precision float32 merge execution, falls back to the backend-local
-uint8 legacy calibrate-plus-merge path only when high-precision support is
-unavailable, and applies resolved merge gamma as one explicit
-display-boundary step. Mertens first applies one identical resolved
-merge-gamma transfer to each bracket input, executes exposure fusion, and
-optionally applies OpenCV simple tonemap on fused output before final
-normalization.
+Debevec and Robertson select the deterministic high-precision float32 merge
+path, reject unsupported runtimes before any pre-merge uint8 quantization,
+and apply resolved merge gamma as one explicit display-boundary step.
+Mertens first applies one identical resolved merge-gamma transfer to each
+bracket input, executes exposure fusion, and optionally applies OpenCV
+simple tonemap on fused output before final normalization.
 - @details Ports `box_down2` from `util.cpp` for repository HDR+ execution by reflect-padding odd image sizes to even extents, summing each 2x2 region, and multiplying by `0.25` once. Input and output stay in float domain to preserve the repository-wide HDR+ internal arithmetic contract.
 - @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors.
 - @param ev_value {float} EV bracket delta used to generate exposure files.
@@ -2073,7 +2074,7 @@ normalization.
 - @return {object} Normalized RGB float merged image.
 - @return {object} Downsampled float tensor with shape `(N,ceil(H/2),ceil(W/2))`.
 - @exception RuntimeError Raised when OpenCV/numpy dependencies are missing or bracket payloads are invalid.
-- @satisfies REQ-107, REQ-108, REQ-109, REQ-110, REQ-142, REQ-143, REQ-144, REQ-148, REQ-152, REQ-153, REQ-154, REQ-160, REQ-161, REQ-162, REQ-170, REQ-245, REQ-246
+- @satisfies REQ-107, REQ-108, REQ-109, REQ-110, REQ-142, REQ-143, REQ-144, REQ-148, REQ-152, REQ-153, REQ-154, REQ-160, REQ-161, REQ-162, REQ-170, REQ-245, REQ-246, REQ-247
 - @satisfies REQ-112, REQ-113, REQ-129
 
 ### fn `def _hdrplus_gauss_down4_float32(np_module, frames_float32)` `priv` (L8224-8270)
@@ -3586,156 +3587,156 @@ to stdout via `print_info`.
 |`_print_help_section`|fn|priv|1081-1095|def _print_help_section(title)|
 |`_print_help_option`|fn|priv|1096-1137|def _print_help_option(option_label, description, detail_...|
 |`print_help`|fn|pub|1138-1337|def print_help(version)|
-|`_validate_supported_bits_per_color`|fn|priv|1607-1624|def _validate_supported_bits_per_color(bits_per_color)|
-|`_detect_dng_bits_per_color`|fn|priv|1625-1670|def _detect_dng_bits_per_color(raw_handle)|
-|`_is_ev_value_on_supported_step`|fn|priv|1671-1683|def _is_ev_value_on_supported_step(ev_value)|
-|`_parse_ev_option`|fn|priv|1684-1711|def _parse_ev_option(ev_raw)|
-|`_parse_ev_center_option`|fn|priv|1712-1739|def _parse_ev_center_option(ev_center_raw)|
-|`_is_forced_static_auto_bracketing_selected`|fn|priv|1740-1761|def _is_forced_static_auto_bracketing_selected(args)|
-|`_print_forced_static_auto_bracketing_diagnostics`|fn|priv|1762-1778|def _print_forced_static_auto_bracketing_diagnostics(ev_d...|
-|`_parse_percentage_option`|fn|priv|1779-1801|def _parse_percentage_option(option_name, option_raw)|
-|`_parse_auto_brightness_option`|fn|priv|1802-1821|def _parse_auto_brightness_option(auto_brightness_raw)|
-|`_parse_auto_levels_option`|fn|priv|1822-1841|def _parse_auto_levels_option(auto_levels_raw)|
-|`_parse_explicit_boolean_option`|fn|priv|1842-1862|def _parse_explicit_boolean_option(option_name, option_raw)|
-|`_parse_opencv_merge_algorithm_option`|fn|priv|1863-1887|def _parse_opencv_merge_algorithm_option(algorithm_raw)|
-|`_resolve_default_opencv_tonemap_gamma`|fn|priv|1888-1909|def _resolve_default_opencv_tonemap_gamma(merge_algorithm)|
-|`_parse_opencv_merge_backend_options`|fn|priv|1910-1962|def _parse_opencv_merge_backend_options(opencv_raw_values)|
-|`_parse_opencv_tonemap_backend_options`|fn|priv|1963-1965|def _parse_opencv_tonemap_backend_options(|
-|`_extract_normalized_preview_luminance_stats`|fn|priv|2138-2209|def _extract_normalized_preview_luminance_stats(raw_handle)|
-|`_percentile`|fn|priv|2174-2184|def _percentile(percentile_value)|
-|`_normalize_percentile`|fn|priv|2195-2203|def _normalize_percentile(stat_name, stat_value)|
-|`_extract_camera_whitebalance_rgb_triplet`|fn|priv|2210-2242|def _extract_camera_whitebalance_rgb_triplet(raw_handle)|
-|`_format_rgb_triplet_fixed4`|fn|priv|2243-2272|def _format_rgb_triplet_fixed4(rgb_values)|
-|`_normalize_white_balance_gains_rgb`|fn|priv|2273-2276|def _normalize_white_balance_gains_rgb(|
-|`_apply_normalized_white_balance_to_rgb_float`|fn|priv|2323-2346|def _apply_normalized_white_balance_to_rgb_float(np_modul...|
-|`_build_rawpy_neutral_postprocess_kwargs`|fn|priv|2347-2387|def _build_rawpy_neutral_postprocess_kwargs(raw_handle)|
-|`_extract_sensor_dynamic_range_max`|fn|priv|2388-2445|def _extract_sensor_dynamic_range_max(raw_handle, np_module)|
-|`_extract_base_rgb_linear_float`|fn|priv|2446-2449|def _extract_base_rgb_linear_float(|
-|`_normalize_source_gamma_label`|fn|priv|2497-2515|def _normalize_source_gamma_label(label_raw)|
-|`_decode_raw_metadata_text`|fn|priv|2516-2547|def _decode_raw_metadata_text(metadata_raw)|
-|`_classify_explicit_source_gamma`|fn|priv|2548-2597|def _classify_explicit_source_gamma(raw_handle)|
-|`_classify_tone_curve_gamma`|fn|priv|2598-2646|def _classify_tone_curve_gamma(raw_handle)|
-|`_has_nonzero_matrix`|fn|priv|2647-2667|def _has_nonzero_matrix(matrix_raw)|
-|`_classify_matrix_hint_gamma`|fn|priv|2668-2698|def _classify_matrix_hint_gamma(raw_handle)|
-|`_extract_source_gamma_info`|fn|priv|2699-2726|def _extract_source_gamma_info(raw_handle)|
-|`_describe_source_gamma_info`|fn|priv|2727-2748|def _describe_source_gamma_info(source_gamma_info)|
-|`_coerce_positive_luminance`|fn|priv|2749-2769|def _coerce_positive_luminance(value, fallback)|
-|`_calculate_bt709_luminance`|fn|priv|2770-2795|def _calculate_bt709_luminance(np_module, image_rgb_float)|
-|`_smoothstep`|fn|priv|2796-2814|def _smoothstep(np_module, values, edge0, edge1)|
-|`_calculate_entropy_optimized_ev`|fn|priv|2815-2860|def _calculate_entropy_optimized_ev(_cv2_module, np_modul...|
-|`_calculate_ettr_ev`|fn|priv|2861-2887|def _calculate_ettr_ev(np_module, luminance_float)|
-|`_calculate_detail_preservation_ev`|fn|priv|2888-2987|def _calculate_detail_preservation_ev(_cv2_module, np_mod...|
-|`_calculate_auto_zero_evaluations`|fn|priv|2988-3026|def _calculate_auto_zero_evaluations(cv2_module, np_modul...|
-|`_select_ev_zero_candidate`|fn|priv|3027-3055|def _select_ev_zero_candidate(evaluations)|
-|`_build_unclipped_bracket_images_from_linear_base_float`|fn|priv|3056-3060|def _build_unclipped_bracket_images_from_linear_base_float(|
-|`_measure_any_channel_highlight_clipping_pct`|fn|priv|3090-3107|def _measure_any_channel_highlight_clipping_pct(np_module...|
-|`_measure_any_channel_shadow_clipping_pct`|fn|priv|3108-3125|def _measure_any_channel_shadow_clipping_pct(np_module, i...|
-|`_resolve_auto_ev_delta`|fn|priv|3126-3130|def _resolve_auto_ev_delta(|
-|`_resolve_opencv_tonemap_auto_ev_delta`|fn|priv|3218-3235|def _resolve_opencv_tonemap_auto_ev_delta()|
-|`_resolve_joint_auto_ev_solution`|fn|priv|3236-3239|def _resolve_joint_auto_ev_solution(|
-|`_parse_luminance_text_option`|fn|priv|3296-3316|def _parse_luminance_text_option(option_name, option_raw)|
-|`_parse_luminance_response_curve_option`|fn|priv|3317-3343|def _parse_luminance_response_curve_option(option_raw)|
-|`_parse_positive_float_option`|fn|priv|3344-3367|def _parse_positive_float_option(option_name, option_raw)|
-|`_parse_post_gamma_selector_option`|fn|priv|3368-3389|def _parse_post_gamma_selector_option(option_raw)|
-|`_parse_positive_int_option`|fn|priv|3390-3413|def _parse_positive_int_option(option_name, option_raw)|
-|`_parse_post_gamma_auto_options`|fn|priv|3414-3489|def _parse_post_gamma_auto_options(post_gamma_auto_raw_va...|
-|`_parse_tmo_passthrough_value`|fn|priv|3490-3506|def _parse_tmo_passthrough_value(option_name, option_raw)|
-|`_parse_jpg_compression_option`|fn|priv|3507-3529|def _parse_jpg_compression_option(compression_raw)|
-|`_parse_float_exclusive_range_option`|fn|priv|3530-3554|def _parse_float_exclusive_range_option(option_name, opti...|
-|`_parse_non_negative_float_option`|fn|priv|3555-3577|def _parse_non_negative_float_option(option_name, option_...|
-|`_parse_float_in_range_option`|fn|priv|3578-3603|def _parse_float_in_range_option(option_name, option_raw,...|
-|`_parse_positive_int_pair_option`|fn|priv|3604-3635|def _parse_positive_int_pair_option(option_name, option_raw)|
-|`_parse_auto_brightness_options`|fn|priv|3636-3732|def _parse_auto_brightness_options(auto_brightness_raw_va...|
-|`_parse_auto_levels_hr_method_option`|fn|priv|3733-3764|def _parse_auto_levels_hr_method_option(auto_levels_metho...|
-|`_parse_auto_levels_options`|fn|priv|3765-3837|def _parse_auto_levels_options(auto_levels_raw_values)|
-|`_parse_auto_adjust_options`|fn|priv|3838-3987|def _parse_auto_adjust_options(auto_adjust_raw_values)|
-|`_parse_hdrplus_proxy_mode_option`|fn|priv|3988-4006|def _parse_hdrplus_proxy_mode_option(proxy_mode_raw)|
-|`_parse_hdrplus_options`|fn|priv|4007-4083|def _parse_hdrplus_options(hdrplus_raw_values)|
-|`_apply_merge_gamma_float_no_clip`|fn|priv|4084-4140|def _apply_merge_gamma_float_no_clip(np_module, image_rgb...|
-|`_resolve_opencv_tonemap_gamma_inverse`|fn|priv|4141-4174|def _resolve_opencv_tonemap_gamma_inverse(resolved_merge_...|
-|`_parse_auto_adjust_option`|fn|priv|4175-4198|def _parse_auto_adjust_option(auto_adjust_raw)|
-|`_parse_raw_white_balance_mode_option`|fn|priv|4199-4226|def _parse_raw_white_balance_mode_option(raw_white_balanc...|
-|`_parse_auto_white_balance_mode_option`|fn|priv|4227-4258|def _parse_auto_white_balance_mode_option(auto_white_bala...|
-|`_parse_white_balance_mode_option`|fn|priv|4259-4271|def _parse_white_balance_mode_option(white_balance_raw)|
-|`_parse_white_balance_analysis_source_option`|fn|priv|4272-4301|def _parse_white_balance_analysis_source_option(analysis_...|
-|`_parse_white_balance_xphoto_domain_option`|fn|priv|4302-4328|def _parse_white_balance_xphoto_domain_option(xphoto_doma...|
-|`_parse_hdr_merge_option`|fn|priv|4329-4359|def _parse_hdr_merge_option(hdr_merge_raw)|
-|`_resolve_default_postprocess`|fn|priv|4360-4364|def _resolve_default_postprocess(|
-|`_parse_gamma_option`|fn|priv|4473-4511|def _parse_gamma_option(option_value)|
-|`_decode_exif_text_value`|fn|priv|4512-4531|def _decode_exif_text_value(exif_value)|
-|`_exiftool_color_space_fallback`|fn|priv|4532-4583|def _exiftool_color_space_fallback(input_dng)|
-|`_extract_exif_gamma_tags`|fn|priv|4584-4652|def _extract_exif_gamma_tags(input_dng)|
-|`_resolve_auto_merge_gamma`|fn|priv|4653-4699|def _resolve_auto_merge_gamma(exif_gamma_tags, source_gam...|
-|`_describe_resolved_merge_gamma`|fn|priv|4700-4759|def _describe_resolved_merge_gamma(resolved_merge_gamma)|
-|`_format_gamma_number`|fn|priv|4711-4724|def _format_gamma_number(value)|
-|`_describe_exif_gamma_tags`|fn|priv|4760-4802|def _describe_exif_gamma_tags(exif_gamma_tags)|
-|`_ensure_three_channel_float_array_no_clip`|fn|priv|4803-4834|def _ensure_three_channel_float_array_no_clip(np_module, ...|
-|`_ensure_three_channel_float_array_no_bounds`|fn|priv|4835-4864|def _ensure_three_channel_float_array_no_bounds(np_module...|
-|`_apply_merge_gamma_float`|fn|priv|4865-4921|def _apply_merge_gamma_float(np_module, image_rgb_float, ...|
-|`_parse_run_options`|fn|priv|4922-5121|def _parse_run_options(args)|
-|`_load_image_dependencies`|fn|priv|5589-5626|def _load_image_dependencies()|
-|`_parse_exif_datetime_to_timestamp`|fn|priv|5627-5657|def _parse_exif_datetime_to_timestamp(datetime_raw)|
-|`_parse_exif_exposure_time_to_seconds`|fn|priv|5658-5720|def _parse_exif_exposure_time_to_seconds(exposure_raw)|
-|`_extract_dng_exif_payload_and_timestamp`|fn|priv|5721-5815|def _extract_dng_exif_payload_and_timestamp(pil_image_mod...|
-|`_read_exif_value`|fn|priv|5765-5782|def _read_exif_value(exif_tag)|
-|`_resolve_thumbnail_transpose_map`|fn|priv|5816-5847|def _resolve_thumbnail_transpose_map(pil_image_module)|
-|`_apply_orientation_transform`|fn|priv|5848-5870|def _apply_orientation_transform(pil_image_module, pil_im...|
-|`_build_oriented_thumbnail_jpeg_bytes`|fn|priv|5871-5872|def _build_oriented_thumbnail_jpeg_bytes(|
-|`_coerce_exif_int_like_value`|fn|priv|5903-5945|def _coerce_exif_int_like_value(raw_value)|
-|`_normalize_ifd_integer_like_values_for_piexif_dump`|fn|priv|5946-6084|def _normalize_ifd_integer_like_values_for_piexif_dump(pi...|
-|`_refresh_output_jpg_exif_thumbnail_after_save`|fn|priv|6085-6091|def _refresh_output_jpg_exif_thumbnail_after_save(|
-|`_set_output_file_timestamps`|fn|priv|6141-6155|def _set_output_file_timestamps(output_jpg, exif_timestamp)|
-|`_sync_output_file_timestamps_from_exif`|fn|priv|6156-6173|def _sync_output_file_timestamps_from_exif(output_jpg, ex...|
-|`_safe_pow2_ev`|fn|priv|6174-6211|def _safe_pow2_ev(exponent, context)|
-|`_build_exposure_multipliers`|fn|priv|6212-6240|def _build_exposure_multipliers(ev_value, ev_zero=0.0)|
-|`_clip_bracket_rgb_unit_interval`|fn|priv|6241-6264|def _clip_bracket_rgb_unit_interval(np_module, image_rgb_...|
-|`_build_bracket_images_from_linear_base_float`|fn|priv|6265-6294|def _build_bracket_images_from_linear_base_float(np_modul...|
-|`_build_white_balance_analysis_image_from_linear_base_float`|fn|priv|6295-6298|def _build_white_balance_analysis_image_from_linear_base_...|
-|`_validate_white_balance_triplet_shape`|fn|priv|6324-6353|def _validate_white_balance_triplet_shape(np_module, brac...|
-|`_downsample_xphoto_analysis_image_half`|fn|priv|6354-6400|def _downsample_xphoto_analysis_image_half(np_module, ana...|
-|`_build_xphoto_analysis_image_rgb_float`|fn|priv|6401-6404|def _build_xphoto_analysis_image_rgb_float(|
-|`_build_white_balance_robust_analysis_mask`|fn|priv|6436-6475|def _build_white_balance_robust_analysis_mask(np_module, ...|
-|`_resolve_xphoto_estimation_payload_scale`|fn|priv|6476-6478|def _resolve_xphoto_estimation_payload_scale(|
-|`_rescale_xphoto_estimation_payload_rgb_float`|fn|priv|6509-6511|def _rescale_xphoto_estimation_payload_rgb_float(|
-|`_compress_xphoto_estimation_payload_highlights_soft_knee`|fn|priv|6538-6540|def _compress_xphoto_estimation_payload_highlights_soft_k...|
-|`_quantize_xphoto_estimation_payload_rgb`|fn|priv|6581-6585|def _quantize_xphoto_estimation_payload_rgb(|
-|`_extract_white_balance_channel_gains_from_xphoto`|fn|priv|6621-6627|def _extract_white_balance_channel_gains_from_xphoto(|
-|`_probe_xphoto_uint16_payload_support`|fn|priv|6698-6720|def _probe_xphoto_uint16_payload_support(np_module, wb_al...|
-|`_resolve_white_balance_xphoto_estimation_domain`|fn|priv|6721-6723|def _resolve_white_balance_xphoto_estimation_domain(|
-|`_prepare_xphoto_estimation_image_rgb_float`|fn|priv|6766-6769|def _prepare_xphoto_estimation_image_rgb_float(|
-|`_resolve_learning_based_wb_hist_bin_num`|fn|priv|6804-6819|def _resolve_learning_based_wb_hist_bin_num(bits_per_color)|
-|`_estimate_xphoto_white_balance_gains_rgb`|fn|priv|6820-6827|def _estimate_xphoto_white_balance_gains_rgb(|
-|`_estimate_color_constancy_white_balance_gains_rgb`|fn|priv|6915-6918|def _estimate_color_constancy_white_balance_gains_rgb(|
-|`_estimate_ttl_white_balance_gains_rgb`|fn|priv|6953-6984|def _estimate_ttl_white_balance_gains_rgb(np_module, anal...|
-|`_apply_channel_gains_to_white_balance_triplet`|fn|priv|6985-6988|def _apply_channel_gains_to_white_balance_triplet(|
-|`_apply_channel_gains_to_white_balance_image`|fn|priv|7014-7017|def _apply_channel_gains_to_white_balance_image(|
-|`_apply_auto_white_balance_stage_float`|fn|priv|7039-7047|def _apply_auto_white_balance_stage_float(|
-|`_apply_white_balance_to_bracket_triplet`|fn|priv|7144-7151|def _apply_white_balance_to_bracket_triplet(|
-|`_extract_bracket_images_float`|fn|priv|7237-7243|def _extract_bracket_images_float(|
-|`_order_bracket_paths`|fn|priv|7298-7323|def _order_bracket_paths(bracket_paths)|
-|`_order_hdr_plus_reference_paths`|fn|priv|7324-7339|def _order_hdr_plus_reference_paths(bracket_paths)|
-|`_format_external_command_for_log`|fn|priv|7340-7355|def _format_external_command_for_log(command)|
-|`_run_luminance_hdr_cli`|fn|priv|7356-7363|def _run_luminance_hdr_cli(|
-|`_build_opencv_radiance_exposure_times`|fn|priv|7439-7442|def _build_opencv_radiance_exposure_times(|
-|`_build_ev_times_from_ev_zero_and_delta`|fn|priv|7490-7509|def _build_ev_times_from_ev_zero_and_delta(ev_zero, ev_de...|
-|`_normalize_opencv_hdr_to_unit_range`|fn|priv|7510-7541|def _normalize_opencv_hdr_to_unit_range(np_module, hdr_rg...|
-|`_rescale_mertens_fusion_to_display_range`|fn|priv|7542-7563|def _rescale_mertens_fusion_to_display_range(np_module, f...|
-|`_run_opencv_merge_mertens`|fn|priv|7564-7569|def _run_opencv_merge_mertens(|
-|`_adapt_opencv_radiance_input_high_precision`|fn|priv|7602-7621|def _adapt_opencv_radiance_input_high_precision(np_module...|
-|`_estimate_opencv_camera_response_high_precision`|fn|priv|7622-7626|def _estimate_opencv_camera_response_high_precision(|
-|`_estimate_opencv_camera_response_uint8_legacy`|fn|priv|7646-7650|def _estimate_opencv_camera_response_uint8_legacy(|
-|`_estimate_opencv_camera_response`|fn|priv|7677-7682|def _estimate_opencv_camera_response(|
-|`_merge_opencv_radiance_high_precision`|fn|priv|7707-7712|def _merge_opencv_radiance_high_precision(|
-|`_merge_opencv_radiance_uint8_legacy`|fn|priv|7745-7750|def _merge_opencv_radiance_uint8_legacy(|
-|`_probe_opencv_high_precision_radiance_support`|fn|priv|7782-7785|def _probe_opencv_high_precision_radiance_support(|
-|`_select_opencv_radiance_path_adapters`|fn|priv|7823-7826|def _select_opencv_radiance_path_adapters(|
-|`_print_opencv_radiance_path_diagnostic`|fn|priv|7862-7876|def _print_opencv_radiance_path_diagnostic(path_label)|
-|`_quantize_opencv_radiance_rgb_uint8`|fn|priv|7877-7899|def _quantize_opencv_radiance_rgb_uint8(np_module, image_...|
-|`_run_opencv_merge_radiance`|fn|priv|7900-7907|def _run_opencv_merge_radiance(|
-|`_normalize_debevec_hdr_to_unit_range`|fn|priv|7969-7988|def _normalize_debevec_hdr_to_unit_range(np_module, hdr_r...|
-|`_run_opencv_tonemap_backend`|fn|priv|7989-7994|def _run_opencv_tonemap_backend(|
-|`_derive_opencv_tonemap_enabled`|fn|priv|8074-8087|def _derive_opencv_tonemap_enabled(postprocess_options)|
-|`_run_opencv_merge_backend`|fn|priv|8088-8096|def _run_opencv_merge_backend(|
+|`_validate_supported_bits_per_color`|fn|priv|1608-1625|def _validate_supported_bits_per_color(bits_per_color)|
+|`_detect_dng_bits_per_color`|fn|priv|1626-1671|def _detect_dng_bits_per_color(raw_handle)|
+|`_is_ev_value_on_supported_step`|fn|priv|1672-1684|def _is_ev_value_on_supported_step(ev_value)|
+|`_parse_ev_option`|fn|priv|1685-1712|def _parse_ev_option(ev_raw)|
+|`_parse_ev_center_option`|fn|priv|1713-1740|def _parse_ev_center_option(ev_center_raw)|
+|`_is_forced_static_auto_bracketing_selected`|fn|priv|1741-1762|def _is_forced_static_auto_bracketing_selected(args)|
+|`_print_forced_static_auto_bracketing_diagnostics`|fn|priv|1763-1779|def _print_forced_static_auto_bracketing_diagnostics(ev_d...|
+|`_parse_percentage_option`|fn|priv|1780-1802|def _parse_percentage_option(option_name, option_raw)|
+|`_parse_auto_brightness_option`|fn|priv|1803-1822|def _parse_auto_brightness_option(auto_brightness_raw)|
+|`_parse_auto_levels_option`|fn|priv|1823-1842|def _parse_auto_levels_option(auto_levels_raw)|
+|`_parse_explicit_boolean_option`|fn|priv|1843-1863|def _parse_explicit_boolean_option(option_name, option_raw)|
+|`_parse_opencv_merge_algorithm_option`|fn|priv|1864-1888|def _parse_opencv_merge_algorithm_option(algorithm_raw)|
+|`_resolve_default_opencv_tonemap_gamma`|fn|priv|1889-1910|def _resolve_default_opencv_tonemap_gamma(merge_algorithm)|
+|`_parse_opencv_merge_backend_options`|fn|priv|1911-1963|def _parse_opencv_merge_backend_options(opencv_raw_values)|
+|`_parse_opencv_tonemap_backend_options`|fn|priv|1964-1966|def _parse_opencv_tonemap_backend_options(|
+|`_extract_normalized_preview_luminance_stats`|fn|priv|2139-2210|def _extract_normalized_preview_luminance_stats(raw_handle)|
+|`_percentile`|fn|priv|2175-2185|def _percentile(percentile_value)|
+|`_normalize_percentile`|fn|priv|2196-2204|def _normalize_percentile(stat_name, stat_value)|
+|`_extract_camera_whitebalance_rgb_triplet`|fn|priv|2211-2243|def _extract_camera_whitebalance_rgb_triplet(raw_handle)|
+|`_format_rgb_triplet_fixed4`|fn|priv|2244-2273|def _format_rgb_triplet_fixed4(rgb_values)|
+|`_normalize_white_balance_gains_rgb`|fn|priv|2274-2277|def _normalize_white_balance_gains_rgb(|
+|`_apply_normalized_white_balance_to_rgb_float`|fn|priv|2324-2347|def _apply_normalized_white_balance_to_rgb_float(np_modul...|
+|`_build_rawpy_neutral_postprocess_kwargs`|fn|priv|2348-2388|def _build_rawpy_neutral_postprocess_kwargs(raw_handle)|
+|`_extract_sensor_dynamic_range_max`|fn|priv|2389-2446|def _extract_sensor_dynamic_range_max(raw_handle, np_module)|
+|`_extract_base_rgb_linear_float`|fn|priv|2447-2450|def _extract_base_rgb_linear_float(|
+|`_normalize_source_gamma_label`|fn|priv|2498-2516|def _normalize_source_gamma_label(label_raw)|
+|`_decode_raw_metadata_text`|fn|priv|2517-2548|def _decode_raw_metadata_text(metadata_raw)|
+|`_classify_explicit_source_gamma`|fn|priv|2549-2598|def _classify_explicit_source_gamma(raw_handle)|
+|`_classify_tone_curve_gamma`|fn|priv|2599-2647|def _classify_tone_curve_gamma(raw_handle)|
+|`_has_nonzero_matrix`|fn|priv|2648-2668|def _has_nonzero_matrix(matrix_raw)|
+|`_classify_matrix_hint_gamma`|fn|priv|2669-2699|def _classify_matrix_hint_gamma(raw_handle)|
+|`_extract_source_gamma_info`|fn|priv|2700-2727|def _extract_source_gamma_info(raw_handle)|
+|`_describe_source_gamma_info`|fn|priv|2728-2749|def _describe_source_gamma_info(source_gamma_info)|
+|`_coerce_positive_luminance`|fn|priv|2750-2770|def _coerce_positive_luminance(value, fallback)|
+|`_calculate_bt709_luminance`|fn|priv|2771-2796|def _calculate_bt709_luminance(np_module, image_rgb_float)|
+|`_smoothstep`|fn|priv|2797-2815|def _smoothstep(np_module, values, edge0, edge1)|
+|`_calculate_entropy_optimized_ev`|fn|priv|2816-2861|def _calculate_entropy_optimized_ev(_cv2_module, np_modul...|
+|`_calculate_ettr_ev`|fn|priv|2862-2888|def _calculate_ettr_ev(np_module, luminance_float)|
+|`_calculate_detail_preservation_ev`|fn|priv|2889-2988|def _calculate_detail_preservation_ev(_cv2_module, np_mod...|
+|`_calculate_auto_zero_evaluations`|fn|priv|2989-3027|def _calculate_auto_zero_evaluations(cv2_module, np_modul...|
+|`_select_ev_zero_candidate`|fn|priv|3028-3056|def _select_ev_zero_candidate(evaluations)|
+|`_build_unclipped_bracket_images_from_linear_base_float`|fn|priv|3057-3061|def _build_unclipped_bracket_images_from_linear_base_float(|
+|`_measure_any_channel_highlight_clipping_pct`|fn|priv|3091-3108|def _measure_any_channel_highlight_clipping_pct(np_module...|
+|`_measure_any_channel_shadow_clipping_pct`|fn|priv|3109-3126|def _measure_any_channel_shadow_clipping_pct(np_module, i...|
+|`_resolve_auto_ev_delta`|fn|priv|3127-3131|def _resolve_auto_ev_delta(|
+|`_resolve_opencv_tonemap_auto_ev_delta`|fn|priv|3219-3236|def _resolve_opencv_tonemap_auto_ev_delta()|
+|`_resolve_joint_auto_ev_solution`|fn|priv|3237-3240|def _resolve_joint_auto_ev_solution(|
+|`_parse_luminance_text_option`|fn|priv|3297-3317|def _parse_luminance_text_option(option_name, option_raw)|
+|`_parse_luminance_response_curve_option`|fn|priv|3318-3344|def _parse_luminance_response_curve_option(option_raw)|
+|`_parse_positive_float_option`|fn|priv|3345-3368|def _parse_positive_float_option(option_name, option_raw)|
+|`_parse_post_gamma_selector_option`|fn|priv|3369-3390|def _parse_post_gamma_selector_option(option_raw)|
+|`_parse_positive_int_option`|fn|priv|3391-3414|def _parse_positive_int_option(option_name, option_raw)|
+|`_parse_post_gamma_auto_options`|fn|priv|3415-3490|def _parse_post_gamma_auto_options(post_gamma_auto_raw_va...|
+|`_parse_tmo_passthrough_value`|fn|priv|3491-3507|def _parse_tmo_passthrough_value(option_name, option_raw)|
+|`_parse_jpg_compression_option`|fn|priv|3508-3530|def _parse_jpg_compression_option(compression_raw)|
+|`_parse_float_exclusive_range_option`|fn|priv|3531-3555|def _parse_float_exclusive_range_option(option_name, opti...|
+|`_parse_non_negative_float_option`|fn|priv|3556-3578|def _parse_non_negative_float_option(option_name, option_...|
+|`_parse_float_in_range_option`|fn|priv|3579-3604|def _parse_float_in_range_option(option_name, option_raw,...|
+|`_parse_positive_int_pair_option`|fn|priv|3605-3636|def _parse_positive_int_pair_option(option_name, option_raw)|
+|`_parse_auto_brightness_options`|fn|priv|3637-3733|def _parse_auto_brightness_options(auto_brightness_raw_va...|
+|`_parse_auto_levels_hr_method_option`|fn|priv|3734-3765|def _parse_auto_levels_hr_method_option(auto_levels_metho...|
+|`_parse_auto_levels_options`|fn|priv|3766-3838|def _parse_auto_levels_options(auto_levels_raw_values)|
+|`_parse_auto_adjust_options`|fn|priv|3839-3988|def _parse_auto_adjust_options(auto_adjust_raw_values)|
+|`_parse_hdrplus_proxy_mode_option`|fn|priv|3989-4007|def _parse_hdrplus_proxy_mode_option(proxy_mode_raw)|
+|`_parse_hdrplus_options`|fn|priv|4008-4084|def _parse_hdrplus_options(hdrplus_raw_values)|
+|`_apply_merge_gamma_float_no_clip`|fn|priv|4085-4141|def _apply_merge_gamma_float_no_clip(np_module, image_rgb...|
+|`_resolve_opencv_tonemap_gamma_inverse`|fn|priv|4142-4175|def _resolve_opencv_tonemap_gamma_inverse(resolved_merge_...|
+|`_parse_auto_adjust_option`|fn|priv|4176-4199|def _parse_auto_adjust_option(auto_adjust_raw)|
+|`_parse_raw_white_balance_mode_option`|fn|priv|4200-4227|def _parse_raw_white_balance_mode_option(raw_white_balanc...|
+|`_parse_auto_white_balance_mode_option`|fn|priv|4228-4259|def _parse_auto_white_balance_mode_option(auto_white_bala...|
+|`_parse_white_balance_mode_option`|fn|priv|4260-4272|def _parse_white_balance_mode_option(white_balance_raw)|
+|`_parse_white_balance_analysis_source_option`|fn|priv|4273-4302|def _parse_white_balance_analysis_source_option(analysis_...|
+|`_parse_white_balance_xphoto_domain_option`|fn|priv|4303-4329|def _parse_white_balance_xphoto_domain_option(xphoto_doma...|
+|`_parse_hdr_merge_option`|fn|priv|4330-4360|def _parse_hdr_merge_option(hdr_merge_raw)|
+|`_resolve_default_postprocess`|fn|priv|4361-4365|def _resolve_default_postprocess(|
+|`_parse_gamma_option`|fn|priv|4474-4512|def _parse_gamma_option(option_value)|
+|`_decode_exif_text_value`|fn|priv|4513-4532|def _decode_exif_text_value(exif_value)|
+|`_exiftool_color_space_fallback`|fn|priv|4533-4584|def _exiftool_color_space_fallback(input_dng)|
+|`_extract_exif_gamma_tags`|fn|priv|4585-4653|def _extract_exif_gamma_tags(input_dng)|
+|`_resolve_auto_merge_gamma`|fn|priv|4654-4700|def _resolve_auto_merge_gamma(exif_gamma_tags, source_gam...|
+|`_describe_resolved_merge_gamma`|fn|priv|4701-4760|def _describe_resolved_merge_gamma(resolved_merge_gamma)|
+|`_format_gamma_number`|fn|priv|4712-4725|def _format_gamma_number(value)|
+|`_describe_exif_gamma_tags`|fn|priv|4761-4803|def _describe_exif_gamma_tags(exif_gamma_tags)|
+|`_ensure_three_channel_float_array_no_clip`|fn|priv|4804-4835|def _ensure_three_channel_float_array_no_clip(np_module, ...|
+|`_ensure_three_channel_float_array_no_bounds`|fn|priv|4836-4865|def _ensure_three_channel_float_array_no_bounds(np_module...|
+|`_apply_merge_gamma_float`|fn|priv|4866-4922|def _apply_merge_gamma_float(np_module, image_rgb_float, ...|
+|`_parse_run_options`|fn|priv|4923-5122|def _parse_run_options(args)|
+|`_load_image_dependencies`|fn|priv|5590-5627|def _load_image_dependencies()|
+|`_parse_exif_datetime_to_timestamp`|fn|priv|5628-5658|def _parse_exif_datetime_to_timestamp(datetime_raw)|
+|`_parse_exif_exposure_time_to_seconds`|fn|priv|5659-5721|def _parse_exif_exposure_time_to_seconds(exposure_raw)|
+|`_extract_dng_exif_payload_and_timestamp`|fn|priv|5722-5816|def _extract_dng_exif_payload_and_timestamp(pil_image_mod...|
+|`_read_exif_value`|fn|priv|5766-5783|def _read_exif_value(exif_tag)|
+|`_resolve_thumbnail_transpose_map`|fn|priv|5817-5848|def _resolve_thumbnail_transpose_map(pil_image_module)|
+|`_apply_orientation_transform`|fn|priv|5849-5871|def _apply_orientation_transform(pil_image_module, pil_im...|
+|`_build_oriented_thumbnail_jpeg_bytes`|fn|priv|5872-5873|def _build_oriented_thumbnail_jpeg_bytes(|
+|`_coerce_exif_int_like_value`|fn|priv|5904-5946|def _coerce_exif_int_like_value(raw_value)|
+|`_normalize_ifd_integer_like_values_for_piexif_dump`|fn|priv|5947-6085|def _normalize_ifd_integer_like_values_for_piexif_dump(pi...|
+|`_refresh_output_jpg_exif_thumbnail_after_save`|fn|priv|6086-6092|def _refresh_output_jpg_exif_thumbnail_after_save(|
+|`_set_output_file_timestamps`|fn|priv|6142-6156|def _set_output_file_timestamps(output_jpg, exif_timestamp)|
+|`_sync_output_file_timestamps_from_exif`|fn|priv|6157-6174|def _sync_output_file_timestamps_from_exif(output_jpg, ex...|
+|`_safe_pow2_ev`|fn|priv|6175-6212|def _safe_pow2_ev(exponent, context)|
+|`_build_exposure_multipliers`|fn|priv|6213-6241|def _build_exposure_multipliers(ev_value, ev_zero=0.0)|
+|`_clip_bracket_rgb_unit_interval`|fn|priv|6242-6265|def _clip_bracket_rgb_unit_interval(np_module, image_rgb_...|
+|`_build_bracket_images_from_linear_base_float`|fn|priv|6266-6295|def _build_bracket_images_from_linear_base_float(np_modul...|
+|`_build_white_balance_analysis_image_from_linear_base_float`|fn|priv|6296-6299|def _build_white_balance_analysis_image_from_linear_base_...|
+|`_validate_white_balance_triplet_shape`|fn|priv|6325-6354|def _validate_white_balance_triplet_shape(np_module, brac...|
+|`_downsample_xphoto_analysis_image_half`|fn|priv|6355-6401|def _downsample_xphoto_analysis_image_half(np_module, ana...|
+|`_build_xphoto_analysis_image_rgb_float`|fn|priv|6402-6405|def _build_xphoto_analysis_image_rgb_float(|
+|`_build_white_balance_robust_analysis_mask`|fn|priv|6437-6476|def _build_white_balance_robust_analysis_mask(np_module, ...|
+|`_resolve_xphoto_estimation_payload_scale`|fn|priv|6477-6479|def _resolve_xphoto_estimation_payload_scale(|
+|`_rescale_xphoto_estimation_payload_rgb_float`|fn|priv|6510-6512|def _rescale_xphoto_estimation_payload_rgb_float(|
+|`_compress_xphoto_estimation_payload_highlights_soft_knee`|fn|priv|6539-6541|def _compress_xphoto_estimation_payload_highlights_soft_k...|
+|`_quantize_xphoto_estimation_payload_rgb`|fn|priv|6582-6586|def _quantize_xphoto_estimation_payload_rgb(|
+|`_extract_white_balance_channel_gains_from_xphoto`|fn|priv|6622-6628|def _extract_white_balance_channel_gains_from_xphoto(|
+|`_probe_xphoto_uint16_payload_support`|fn|priv|6699-6721|def _probe_xphoto_uint16_payload_support(np_module, wb_al...|
+|`_resolve_white_balance_xphoto_estimation_domain`|fn|priv|6722-6724|def _resolve_white_balance_xphoto_estimation_domain(|
+|`_prepare_xphoto_estimation_image_rgb_float`|fn|priv|6767-6770|def _prepare_xphoto_estimation_image_rgb_float(|
+|`_resolve_learning_based_wb_hist_bin_num`|fn|priv|6805-6820|def _resolve_learning_based_wb_hist_bin_num(bits_per_color)|
+|`_estimate_xphoto_white_balance_gains_rgb`|fn|priv|6821-6828|def _estimate_xphoto_white_balance_gains_rgb(|
+|`_estimate_color_constancy_white_balance_gains_rgb`|fn|priv|6916-6919|def _estimate_color_constancy_white_balance_gains_rgb(|
+|`_estimate_ttl_white_balance_gains_rgb`|fn|priv|6954-6985|def _estimate_ttl_white_balance_gains_rgb(np_module, anal...|
+|`_apply_channel_gains_to_white_balance_triplet`|fn|priv|6986-6989|def _apply_channel_gains_to_white_balance_triplet(|
+|`_apply_channel_gains_to_white_balance_image`|fn|priv|7015-7018|def _apply_channel_gains_to_white_balance_image(|
+|`_apply_auto_white_balance_stage_float`|fn|priv|7040-7048|def _apply_auto_white_balance_stage_float(|
+|`_apply_white_balance_to_bracket_triplet`|fn|priv|7145-7152|def _apply_white_balance_to_bracket_triplet(|
+|`_extract_bracket_images_float`|fn|priv|7238-7244|def _extract_bracket_images_float(|
+|`_order_bracket_paths`|fn|priv|7299-7324|def _order_bracket_paths(bracket_paths)|
+|`_order_hdr_plus_reference_paths`|fn|priv|7325-7340|def _order_hdr_plus_reference_paths(bracket_paths)|
+|`_format_external_command_for_log`|fn|priv|7341-7356|def _format_external_command_for_log(command)|
+|`_run_luminance_hdr_cli`|fn|priv|7357-7364|def _run_luminance_hdr_cli(|
+|`_build_opencv_radiance_exposure_times`|fn|priv|7440-7443|def _build_opencv_radiance_exposure_times(|
+|`_build_ev_times_from_ev_zero_and_delta`|fn|priv|7491-7510|def _build_ev_times_from_ev_zero_and_delta(ev_zero, ev_de...|
+|`_normalize_opencv_hdr_to_unit_range`|fn|priv|7511-7542|def _normalize_opencv_hdr_to_unit_range(np_module, hdr_rg...|
+|`_rescale_mertens_fusion_to_display_range`|fn|priv|7543-7564|def _rescale_mertens_fusion_to_display_range(np_module, f...|
+|`_run_opencv_merge_mertens`|fn|priv|7565-7570|def _run_opencv_merge_mertens(|
+|`_adapt_opencv_radiance_input_high_precision`|fn|priv|7603-7622|def _adapt_opencv_radiance_input_high_precision(np_module...|
+|`_estimate_opencv_camera_response_high_precision`|fn|priv|7623-7627|def _estimate_opencv_camera_response_high_precision(|
+|`_estimate_opencv_camera_response_uint8_legacy`|fn|priv|7648-7652|def _estimate_opencv_camera_response_uint8_legacy(|
+|`_estimate_opencv_camera_response`|fn|priv|7679-7684|def _estimate_opencv_camera_response(|
+|`_merge_opencv_radiance_high_precision`|fn|priv|7710-7715|def _merge_opencv_radiance_high_precision(|
+|`_merge_opencv_radiance_uint8_legacy`|fn|priv|7748-7753|def _merge_opencv_radiance_uint8_legacy(|
+|`_probe_opencv_high_precision_radiance_support`|fn|priv|7787-7790|def _probe_opencv_high_precision_radiance_support(|
+|`_select_opencv_radiance_path_adapters`|fn|priv|7829-7832|def _select_opencv_radiance_path_adapters(|
+|`_print_opencv_radiance_path_diagnostic`|fn|priv|7866-7880|def _print_opencv_radiance_path_diagnostic(path_label)|
+|`_quantize_opencv_radiance_rgb_uint8`|fn|priv|7881-7902|def _quantize_opencv_radiance_rgb_uint8(np_module, image_...|
+|`_run_opencv_merge_radiance`|fn|priv|7903-7910|def _run_opencv_merge_radiance(|
+|`_normalize_debevec_hdr_to_unit_range`|fn|priv|7971-7990|def _normalize_debevec_hdr_to_unit_range(np_module, hdr_r...|
+|`_run_opencv_tonemap_backend`|fn|priv|7991-7996|def _run_opencv_tonemap_backend(|
+|`_derive_opencv_tonemap_enabled`|fn|priv|8076-8089|def _derive_opencv_tonemap_enabled(postprocess_options)|
+|`_run_opencv_merge_backend`|fn|priv|8090-8098|def _run_opencv_merge_backend(|
 |`_hdrplus_box_down2_float32`|fn|priv|8195-8223|def _hdrplus_box_down2_float32(np_module, frames_float32)|
 |`_hdrplus_gauss_down4_float32`|fn|priv|8224-8270|def _hdrplus_gauss_down4_float32(np_module, frames_float32)|
 |`_hdrplus_build_scalar_proxy_float32`|fn|priv|8271-8304|def _hdrplus_build_scalar_proxy_float32(np_module, frames...|

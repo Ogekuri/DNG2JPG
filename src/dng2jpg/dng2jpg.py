@@ -857,12 +857,12 @@ class OpenCvMergeOptions:
     """@brief Hold deterministic OpenCV HDR merge option values.
 
     @details Encapsulates OpenCV merge controls used by the
-    `--hdr-merge=OpenCV-Merge` backend. Debevec and Robertson prefer one
+    `--hdr-merge=OpenCV-Merge` backend. Debevec and Robertson require one
     high-precision radiance adapter path without float-to-uint8 pre-merge
-    quantization and retain one backend-local uint8 legacy fallback, Mertens
-    executes exposure fusion on float brackets with OpenCV-equivalent output
-    rescaling plus optional simple tonemap, and all external interfaces stay
-    RGB float `[0,1]`.
+    quantization, Mertens executes exposure fusion on float brackets with
+    OpenCV-equivalent output rescaling plus optional simple tonemap, and all
+    external interfaces stay RGB float `[0,1]`. Complexity: O(1). Side
+    effects: none.
     @param merge_algorithm {str} Canonical OpenCV merge algorithm in `{"Debevec","Robertson","Mertens"}`.
     @param tonemap_enabled {bool} `True` enables simple OpenCV gamma tone mapping for Debevec/Robertson/Mertens outputs.
     @param tonemap_gamma {float} Positive gamma value passed to `cv2.createTonemap`; parser defaults are algorithm-specific (`Debevec=1.0`, `Robertson=0.9`, `Mertens=0.8`).
@@ -879,12 +879,12 @@ class OpenCvMergeOptions:
 class OpenCvRadiancePathAdapters:
     """@brief Hold one selected OpenCV radiance adapter set.
 
-    @details Encapsulates one deterministic Debevec/Robertson radiance path as
+    @details Encapsulates the only supported Debevec/Robertson radiance path as
     three separable adapters: input adaptation, response estimation, and merge
-    execution. The selected `path_label` is emitted unchanged in runtime
-    diagnostics so downstream agents can distinguish high-precision execution
-    from the legacy uint8 fallback.
-    @param path_label {str} Diagnostic path label in `{"high-precision","uint8-legacy"}`.
+    execution. Unsupported runtimes are rejected before adapter-bundle
+    creation, so `path_label` remains the supported execution label emitted in
+    runtime diagnostics. Complexity: O(1). Side effects: none.
+    @param path_label {str} Diagnostic path label in `{"high-precision"}`.
     @param radiance_input_adapter {object} Callable adapting one camera-linear RGB bracket to backend-local merge input.
     @param response_estimator {object} Callable estimating optional radiance response for the selected path.
     @param radiance_merger {object} Callable executing Debevec/Robertson merge for the selected path.
@@ -1305,6 +1305,7 @@ def print_help(version):
         (
             f"Allowed values: {', '.join(_OPENCV_MERGE_ALGORITHMS)}.",
             f"Default: `{DEFAULT_OPENCV_MERGE_ALGORITHM}`.",
+            "Debevec and Robertson require probe-verified high-precision radiance merge support; unsupported runtimes fail explicitly before merge.",
         ),
     )
     _print_help_option(
@@ -7511,8 +7512,8 @@ def _normalize_opencv_hdr_to_unit_range(np_module, hdr_rgb_float32):
     """@brief Normalize OpenCV HDR tensor to unit range with deterministic bounds.
 
     @details Normalizes arbitrary OpenCV HDR or fusion output from either the
-    high-precision Debevec/Robertson path, the uint8 legacy fallback, or the
-    Mertens path to one congruent RGB float contract. Negative and non-finite
+    high-precision Debevec/Robertson path or the Mertens path to one congruent
+    RGB float contract. Negative and non-finite
     values are cleared via `np.maximum(0.0)` floor, and values above unit
     range are scaled down by global maximum; no final `[0,1]` clipping is
     applied because the floor-and-scale sequence guarantees the output is
@@ -7630,7 +7631,8 @@ def _estimate_opencv_camera_response_high_precision(
     @details High-precision Debevec/Robertson execution calls OpenCV merge
     entrypoints directly on float32 brackets and therefore does not require a
     calibrated response tensor. Arguments are accepted only to preserve the
-    shared adapter signature. Complexity: O(1). Side effects: none.
+    shared adapter signature for the only supported success path. Complexity:
+    O(1). Side effects: none.
     @param cv2_module {ModuleType} Imported OpenCV module.
     @param exposures_radiance_float32 {list[object]} Ordered backend-local RGB float32 bracket tensors.
     @param exposure_times {object} OpenCV exposure-time vector.
@@ -7649,20 +7651,20 @@ def _estimate_opencv_camera_response_uint8_legacy(
     exposure_times,
     merge_algorithm,
 ):
-    """@brief Estimate OpenCV inverse camera response for uint8 legacy radiance merge.
+    """@brief Estimate OpenCV inverse camera response for retained uint8 legacy radiance scaffolding.
 
     @details Selects the OpenCV calibrator matching the requested radiance merge
     algorithm and computes one inverse camera response tensor from backend-local
-    `uint8` bracket views derived from the shared linear float contract. This
-    adapter implements the compatibility fallback used when the high-precision
-    path is unavailable. Complexity: O(n*p). Side effects: none.
+    `uint8` bracket views derived from the shared linear float contract. Normal
+    conversion no longer selects this adapter; it is retained only for isolated
+    compatibility scaffolding. Complexity: O(n*p). Side effects: none.
     @param cv2_module {ModuleType} Imported OpenCV module.
     @param exposures_radiance_uint8 {list[object]} Ordered backend-local RGB `uint8` bracket tensors.
     @param exposure_times {object} OpenCV exposure-time vector.
     @param merge_algorithm {str} Canonical OpenCV merge algorithm token.
     @return {object} OpenCV response tensor compatible with Debevec/Robertson merge calls.
     @exception RuntimeError Raised when `merge_algorithm` is unsupported.
-    @satisfies REQ-153, REQ-162, REQ-245
+    @deprecated Normal conversion no longer selects the uint8 radiance path.
     """
 
     if merge_algorithm == OPENCV_MERGE_ALGORITHM_DEBEVEC:
@@ -7684,8 +7686,9 @@ def _estimate_opencv_camera_response(
     """@brief Execute the selected OpenCV radiance response-estimator adapter.
 
     @details Delegates Debevec/Robertson response estimation to the selected
-    adapter so high-precision and uint8-legacy paths share one deterministic
-    dispatcher. Complexity and backend requirements are adapter-defined. Side
+    adapter so high-precision execution uses one deterministic dispatcher.
+    Retained legacy adapters remain callable only for isolated compatibility
+    scaffolding. Complexity and backend requirements are adapter-defined. Side
     effects: none.
     @param cv2_module {ModuleType} Imported OpenCV module.
     @param exposures_radiance_payloads {list[object]} Ordered backend-local radiance inputs selected for the active path.
@@ -7749,11 +7752,13 @@ def _merge_opencv_radiance_uint8_legacy(
     merge_algorithm,
     response,
 ):
-    """@brief Execute uint8 legacy Debevec/Robertson merge with calibrated response.
+    """@brief Execute retained uint8 legacy Debevec/Robertson merge scaffolding.
 
     @details Dispatches to OpenCV `MergeDebevec` or `MergeRobertson` using
     backend-local uint8 brackets together with calibrated response data from the
-    legacy calibrator path. Complexity: O(n*p). Side effects: none.
+    legacy calibrator path. Normal conversion no longer selects this merger; it
+    is retained only for isolated compatibility scaffolding. Complexity: O(n*p).
+    Side effects: none.
     @param cv2_module {ModuleType} Imported OpenCV module.
     @param exposures_radiance_uint8 {list[object]} Ordered backend-local RGB uint8 bracket tensors.
     @param exposure_times {object} OpenCV exposure-time vector.
@@ -7761,7 +7766,7 @@ def _merge_opencv_radiance_uint8_legacy(
     @param response {object} Calibrated response payload required by the legacy merge path.
     @return {object} OpenCV radiance float tensor before optional tonemap and normalization.
     @exception RuntimeError Raised when `merge_algorithm` is unsupported.
-    @satisfies REQ-109, REQ-110, REQ-143, REQ-152, REQ-153, REQ-162, REQ-245
+    @deprecated Normal conversion no longer selects the uint8 radiance path.
     """
 
     if merge_algorithm == OPENCV_MERGE_ALGORITHM_DEBEVEC:
@@ -7789,13 +7794,14 @@ def _probe_opencv_high_precision_radiance_support(
     @details Executes one minimal float32 merge call without calibrated
     response and accepts support only when OpenCV returns one float tensor that
     preserves the probe shape. Probe failures or exceptions are treated as
-    unsupported so the caller can deterministically select the uint8 legacy
-    fallback. Complexity: O(1). Side effects: one backend-local probe merge.
+    unsupported so the caller can deterministically reject execution before any
+    pre-merge uint8 quantization. Complexity: O(1). Side effects: one
+    backend-local probe merge.
     @param cv2_module {ModuleType} Imported OpenCV module.
     @param np_module {ModuleType} Imported numpy module.
     @param merge_algorithm {str} Canonical OpenCV merge algorithm token.
     @return {bool} `True` when direct float32 radiance merge is confirmed.
-    @satisfies REQ-245
+    @satisfies REQ-245, REQ-247
     """
 
     probe_exposures_float32 = [
@@ -7825,19 +7831,19 @@ def _select_opencv_radiance_path_adapters(
     np_module,
     merge_algorithm,
 ):
-    """@brief Select one deterministic OpenCV radiance adapter bundle.
+    """@brief Select the supported OpenCV radiance adapter bundle.
 
-    @details Chooses the high-precision float32 path when the runtime probe
-    confirms direct Debevec/Robertson merge support; otherwise selects the
-    uint8 legacy calibrate-plus-merge fallback. The returned bundle carries one
-    shared-signature adapter for input adaptation, response estimation, and
-    radiance merge execution. Complexity: O(1). Side effects: one probe merge
-    call when evaluating the high-precision candidate.
+    @details Returns the high-precision float32 Debevec/Robertson path only
+    when the runtime probe confirms direct merge support. Unsupported runtimes
+    emit deterministic fail-fast diagnostics and raise `RuntimeError` instead of
+    selecting any pre-merge uint8 fallback. Complexity: O(1). Side effects:
+    one probe merge and one diagnostic stdout write on unsupported runtimes.
     @param cv2_module {ModuleType} Imported OpenCV module.
     @param np_module {ModuleType} Imported numpy module.
     @param merge_algorithm {str} Canonical OpenCV merge algorithm token.
-    @return {OpenCvRadiancePathAdapters} Selected radiance adapter bundle.
-    @satisfies DES-011, REQ-245
+    @return {OpenCvRadiancePathAdapters} Selected high-precision radiance adapter bundle.
+    @exception RuntimeError Raised when direct high-precision radiance merge support is unavailable.
+    @satisfies DES-011, REQ-245, REQ-247
     """
 
     if _probe_opencv_high_precision_radiance_support(
@@ -7851,44 +7857,41 @@ def _select_opencv_radiance_path_adapters(
             response_estimator=_estimate_opencv_camera_response_high_precision,
             radiance_merger=_merge_opencv_radiance_high_precision,
         )
-    return OpenCvRadiancePathAdapters(
-        path_label="uint8-legacy",
-        radiance_input_adapter=_quantize_opencv_radiance_rgb_uint8,
-        response_estimator=_estimate_opencv_camera_response_uint8_legacy,
-        radiance_merger=_merge_opencv_radiance_uint8_legacy,
+    _print_opencv_radiance_path_diagnostic("fail-fast")
+    raise RuntimeError(
+        f"OpenCV {merge_algorithm} high-precision radiance merge support is unavailable; uint8 fallback is disabled"
     )
 
 
 def _print_opencv_radiance_path_diagnostic(path_label):
     """@brief Emit deterministic OpenCV radiance path diagnostics.
 
-    @details Prints exactly one runtime line naming the selected
-    Debevec/Robertson radiance path so downstream logs can distinguish
-    high-precision execution from the uint8 legacy fallback. Complexity: O(1).
-    Side effects: stdout write via `print_info`.
+    @details Prints exactly one runtime line naming the supported
+    Debevec/Robertson radiance execution path or the deterministic fail-fast
+    rejection path. Complexity: O(1). Side effects: stdout write via
+    `print_info`.
     @param path_label {str} Selected path label.
     @return {None} No return value.
-    @satisfies REQ-246
+    @satisfies REQ-246, REQ-247
     """
 
     print_info(f"opencv-radiance-path: {path_label}")
 
 
 def _quantize_opencv_radiance_rgb_uint8(np_module, image_rgb_float):
-    """@brief Quantize one legacy radiance-path bracket at the OpenCV uint8 boundary.
+    """@brief Quantize one retained legacy radiance-path bracket at the OpenCV uint8 boundary.
 
     @details Converts one camera-linear RGB float bracket to `uint8` using the
-    repository byte-quantization helper. Scope is restricted to the OpenCV
-    Debevec/Robertson uint8 legacy fallback where calibrator and merge APIs
-    require `CV_8U` payloads. Complexity: O(H*W). Side effects: none.
+    repository byte-quantization helper. Normal conversion no longer selects
+    this helper; it is retained only for isolated compatibility scaffolding.
+    Complexity: O(H*W). Side effects: none.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} Camera-linear RGB float bracket tensor.
     @return {object} Backend-local RGB `uint8` tensor.
     @note Boundary classification: integer quantization.
     @note Source range: camera-linear RGB float bracket contract in `[0,1]`.
     @note Target range: backend-local RGB `uint8` code values in `[0,255]`.
-    @note Stage intent: satisfy the OpenCV legacy radiance fallback without changing external float interfaces.
-    @satisfies REQ-110, REQ-162, REQ-238, REQ-239, REQ-245
+    @deprecated Normal conversion no longer selects the uint8 radiance path.
     """
 
     return _to_uint8_image_array(
@@ -7908,14 +7911,13 @@ def _run_opencv_merge_radiance(
 ):
     """@brief Execute OpenCV radiance HDR path for Debevec or Robertson.
 
-    @details Selects one deterministic radiance adapter bundle, prints the
-    selected path diagnostic, adapts each camera-linear bracket through the
+    @details Selects the supported radiance adapter bundle, prints the
+    supported path diagnostic, adapts each camera-linear bracket through the
     selected input adapter, resolves optional response payloads through the
     selected response estimator, and executes the selected radiance merger.
-    High-precision mode keeps float32 payloads through merge entry. The legacy
-    fallback preserves the existing backend-local uint8 calibrate-plus-merge
-    path when direct high-precision execution is unavailable. Complexity:
-    O(n*p). Side effects: one runtime diagnostic line.
+    Unsupported runtimes emit one fail-fast diagnostic and raise `RuntimeError`
+    before any pre-merge uint8 quantization. Complexity: O(n*p). Side effects:
+    at most one runtime diagnostic line.
     @param cv2_module {ModuleType} Imported OpenCV module.
     @param np_module {ModuleType} Imported numpy module.
     @param exposures_linear_float {list[object]} Ordered camera-linear RGB float bracket tensors.
@@ -7924,8 +7926,8 @@ def _run_opencv_merge_radiance(
     @param tonemap_enabled {bool} `True` enables simple OpenCV tone mapping.
     @param tonemap_gamma {float} Positive gamma passed to `createTonemap`.
     @return {object} Normalized backend RGB float tensor.
-    @exception RuntimeError Raised when `merge_algorithm` is unsupported.
-    @satisfies REQ-108, REQ-109, REQ-110, REQ-143, REQ-144, REQ-152, REQ-153, REQ-162, REQ-237, REQ-238, REQ-245, REQ-246
+    @exception RuntimeError Raised when `merge_algorithm` is unsupported or high-precision radiance merge support is unavailable.
+    @satisfies REQ-108, REQ-109, REQ-110, REQ-143, REQ-144, REQ-152, REQ-153, REQ-162, REQ-237, REQ-238, REQ-245, REQ-246, REQ-247
     """
 
     path_adapters = _select_opencv_radiance_path_adapters(
@@ -8102,14 +8104,12 @@ def _run_opencv_merge_backend(
     entry re-normalization or clipping, derives OpenCV radiance exposure times
     in seconds from EXIF `ExposureTime` for Debevec/Robertson or dispatches
     Mertens directly, and returns one congruent normalized RGB float image.
-    Debevec and Robertson select one deterministic adapter bundle that prefers
-    high-precision float32 merge execution, falls back to the backend-local
-    uint8 legacy calibrate-plus-merge path only when high-precision support is
-    unavailable, and applies resolved merge gamma as one explicit
-    display-boundary step. Mertens first applies one identical resolved
-    merge-gamma transfer to each bracket input, executes exposure fusion, and
-    optionally applies OpenCV simple tonemap on fused output before final
-    normalization.
+    Debevec and Robertson select the deterministic high-precision float32 merge
+    path, reject unsupported runtimes before any pre-merge uint8 quantization,
+    and apply resolved merge gamma as one explicit display-boundary step.
+    Mertens first applies one identical resolved merge-gamma transfer to each
+    bracket input, executes exposure fusion, and optionally applies OpenCV
+    simple tonemap on fused output before final normalization.
     @param bracket_images_float {Sequence[object]} Ordered RGB float bracket tensors.
     @param ev_value {float} EV bracket delta used to generate exposure files.
     @param ev_zero {float} Central EV used to generate exposure files.
@@ -8120,7 +8120,7 @@ def _run_opencv_merge_backend(
     @param merge_debug_snapshots {dict|None} Optional mutable mapping populated with merge-stage debug images.
     @return {object} Normalized RGB float merged image.
     @exception RuntimeError Raised when OpenCV/numpy dependencies are missing or bracket payloads are invalid.
-    @satisfies REQ-107, REQ-108, REQ-109, REQ-110, REQ-142, REQ-143, REQ-144, REQ-148, REQ-152, REQ-153, REQ-154, REQ-160, REQ-161, REQ-162, REQ-170, REQ-245, REQ-246
+    @satisfies REQ-107, REQ-108, REQ-109, REQ-110, REQ-142, REQ-143, REQ-144, REQ-148, REQ-152, REQ-153, REQ-154, REQ-160, REQ-161, REQ-162, REQ-170, REQ-245, REQ-246, REQ-247
     """
 
     if resolved_merge_gamma is None:
