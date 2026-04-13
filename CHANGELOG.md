@@ -1,5 +1,110 @@
 # Changelog
 
+## [0.3.0](https://github.com/Ogekuri/DNG2JPG/compare/v0.2.0..v0.3.0) - 2026-04-13
+### ⛰️  Features
+- Add flowchart images.
+- add pipeline matrix runner with toggle support [useReq] *(scripts)*
+  - add scripts/test_all_pipeline.sh for deterministic d2j pipeline matrix dispatch
+  - extend docs/REQUIREMENTS.md with REQ-230..REQ-233 and TST-094
+  - update docs/WORKFLOW.md and regenerate docs/REFERENCES.md for new runtime unit
+
+### 🐛  Bug Fixes
+- Fix parameters parsing.
+- add removed-option detection and fix static EV semantics [useReq] *(_parse_run_options)*
+  - Add 'Removed option:' diagnostics for --auto-ev, --auto-zero, --auto-zero-pct
+  - Accept --exposure=<value> only with numeric --bracketing; reject otherwise
+  - Keep auto_ev_zero_enabled=True when --exposure=<value> given with static bracket
+  - In run(), static EV branch computes EV metrics but uses manual ev_zero as center
+  - Update mode print: print 'static' when auto_ev_delta_enabled=False regardless of auto_ev_zero_enabled
+  - All 145 tests pass (was 5 failing)
+
+### 🚜  Changes
+- align pre-merge stages and auto bracketing [useReq] *(dng2jpg)*
+  - Update requirements for explicit auto-delta reachability and pre-merge AB/AWB scope.
+  - Remove dormant white_balance_analysis_source from runtime options.
+  - Simplify _postprocess to post-merge stages only and move AB/AWB debug checkpoints into run.
+  - Harden _hlrecovery_*_float helpers against NaN/Inf inputs.
+  - Refresh workflow/reference docs and update targeted parser/runtime/helper tests.
+- update tonemap default profiles [useReq] *(opencv-tonemap)*
+  - Worktree: useReq-DNG2JPG-work-20260413131147
+  - REQ-145 was split into atomic backend-default requirements.
+  - REQ-249 updates OpenCV-Tonemap drago defaults to (1.0,1.0,1.4,1.0).
+  - REQ-250 updates OpenCV-Tonemap mantiuk defaults to (0.9,1.0,1.3,1.0).
+  - Tests and help-output expectations now reflect the revised defaults.
+- enforce fail-fast float-only merge [useReq] *(opencv-radiance)*
+  - update REQ-245/246 and add REQ-247 fail-fast contract
+  - remove normal Debevec/Robertson uint8 fallback selection
+  - emit fail-fast diagnostic and RuntimeError on unsupported runtimes
+  - keep final JPEG quantization as the only required uint8 boundary
+  - refresh workflow and references documentation
+- prefer high-precision OpenCV merge path [useReq] *(opencv-radiance)*
+  - update requirements for high-precision Debevec/Robertson dispatch
+  - add radiance adapter selection with float32-first merge path
+  - keep uint8 legacy fallback with explicit runtime path diagnostics
+  - preserve downstream merge gamma and RGB float32 output contract
+  - refresh workflow and references traceability
+  - align OpenCV backend tests with high-precision preference
+- prevent NaN in signed post-gamma path [useReq] *(postprocess)*
+  - add REQ-244 and TST-096..TST-098 for signed post-gamma handling
+  - implement sign-preserving numeric post-gamma in float static postprocess
+  - cover OpenCV-Tonemap Mantiuk signed payloads and non-negative backend defaults
+  - refresh WORKFLOW and REFERENCES traceability for the postprocess contract
+- clarify color-space and quantization boundaries [useReq] *(dng2jpg)*
+  - update SRS contracts for camera-linear and display-referred stages
+  - align OpenCV radiance requirements with backend-local uint8 adaptation
+  - centralize documented clipping, rescale, LUT, and JPEG quantization boundaries
+- enforce mandatory stage-entry sequencing [useReq] *(dng2jpg.pipeline)*
+  - Update REQUIREMENTS with REQ-234/235/236 and TST-095.
+  - Run stage entry always for auto-white-balance after auto-brightness.
+  - Add disabled AWB diagnostic and propagate AB output into AWB input.
+  - Add auto-adjust stage-entry wrapper after auto-levels with disabled pass-through.
+  - Adjust postprocess orchestration and update WORKFLOW/REFERENCES docs.
+  - Extend unit tests for mandatory stage-entry behavior and pass-through checks.
+- expand AWB matrix outputs [useReq] *(pipeline-test-runner)*
+  - Update REQ-233 and TST-094 to require one output per auto-white-balance mode.
+  - Extend scripts/test_all_pipeline.sh with GrayworldWB, IA, ColorConstancy, and TTL runs.
+  - Refresh WORKFLOW.md runtime edge payload description for AWB mode selectors.
+  - Regenerate REFERENCES.md to keep symbol index aligned with script changes.
+- drop toggle parsing and emit fixed stage variants [useReq] *(test_all_pipeline)*
+  - Update REQ-232 to reject script-level stage toggle arguments.
+  - Update REQ-233 to require four default-pipeline stage-variant outputs.
+  - Refactor scripts/test_all_pipeline.sh to accept only input/help options.
+  - Add deterministic default-pipeline runs for auto-brightness, auto-white-balance-Simple, auto-levels, and auto-adjust suffix outputs.
+  - Refresh WORKFLOW and REFERENCES documentation for removed shell functions and updated call trace.
+- enforce static auto bracketing semantics [useReq] *(dng2jpg)*
+- add low-variance Reinhard safeguard [useReq] *(auto-brightness)*
+  - Update REQ-104 and add REQ-226 low-variance fallback behavior.
+  - Add _should_use_low_variance_auto_brightness_fallback and guard constants.
+  - Route low-variance/low-sample luminance to simple Reinhard in tonemap.
+  - Keep chromatic rescale and luminance-preserving desaturation unchanged.
+  - Add tests for sparse/uniform/near-uniform fallback and non-uniform regression.
+  - Update WORKFLOW and regenerate REFERENCES for runtime/symbol traceability.
+- align xphoto estimation defaults and payload policy [useReq] *(auto-white-balance)*
+  - Update SRS AWB requirements for linear xphoto default and source-auto compatibility scope.
+  - Refactor xphoto payload adaptation into robust-rescale, soft-knee compression, and quantization helpers.
+  - Add runtime uint16 capability probes for Simple/Grayworld/IA xphoto algorithms with safe fallback.
+  - Extend AWB tests for default-domain behavior, uint16 policy, soft-knee clipping reduction, and float-only TTL/ColorConstancy paths.
+  - Regenerate WORKFLOW and REFERENCES docs to match updated AWB runtime flow and symbols.
+- update auto-stage parameter summary output [useReq] *(dng2jpg)*
+  - Update REQ-221 and TST-081 for always-on auto-stage groups and status lines.
+  - Refactor _print_validated_run_parameters to print AB/AWB sections separately.
+  - Add auto-levels and auto-adjust enable/disabled status lines.
+  - Update WORKFLOW and regenerate REFERENCES for traceability.
+
+### 📚  Documentation
+- Update README.md file.
+- align README with current CLI surface [useReq] *(readme)*
+  - complete the remaining README TODO sections
+  - correct Linux-only and launcher requirement messaging
+  - consolidate acknowledgments and add visible runtime behavior notes
+- Uprate README.md file.
+- align README with current CLI surface [useReq] *(readme)*
+  - Req-ID: useReq-DNG2JPG-work-20260413135904
+  - Update root README from implementation evidence.
+  - Document management commands, CLI options, pipeline families,
+  - backend variants, examples, test matrix, acknowledgements,
+  - and per-stage algorithm summaries.
+
 ## [0.2.0](https://github.com/Ogekuri/DNG2JPG/compare/v0.1.0..v0.2.0) - 2026-04-10
 ### ⛰️  Features
 - print structured validated parameter summary after CLI validation [useReq] *(dng2jpg)*
@@ -669,6 +774,8 @@
 
 - \[0.1.0\]: https://github.com/Ogekuri/DNG2JPG/releases/tag/v0.1.0
 - \[0.2.0\]: https://github.com/Ogekuri/DNG2JPG/releases/tag/v0.2.0
+- \[0.3.0\]: https://github.com/Ogekuri/DNG2JPG/releases/tag/v0.3.0
 
 [0.1.0]: https://github.com/Ogekuri/DNG2JPG/releases/tag/v0.1.0
 [0.2.0]: https://github.com/Ogekuri/DNG2JPG/compare/v0.1.0..v0.2.0
+[0.3.0]: https://github.com/Ogekuri/DNG2JPG/compare/v0.2.0..v0.3.0
