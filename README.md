@@ -166,8 +166,7 @@ Important stage rules:
 
 Click to zoom flowchart image.
 
-[![Flowchart](https://raw.githubusercontent.com/Ogekuri/DNG2JPG/refs/heads/master/images/flowchart-bw.svg)](https://raw.githubusercontent.com/Ogekuri/DNG2JPG/refs/he
-ads/master/images/flowchart-bw.svg)
+[![Flowchart](https://raw.githubusercontent.com/Ogekuri/DNG2JPG/refs/heads/master/images/flowchart-bw.svg)](https://raw.githubusercontent.com/Ogekuri/DNG2JPG/refs/heads/master/images/flowchart-bw.svg)
 
 ## Exposure planning modes
 
