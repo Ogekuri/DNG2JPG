@@ -103,6 +103,7 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **DES-007**: MUST process conversion as a one-shot process model without spawning explicit application-managed threads.
 - **DES-009**: MUST serialize `--debug` checkpoints from normalized RGB float stage buffers into persistent TIFF16 files outside the temporary workspace lifecycle.
 - **DES-010**: MUST declare `exifread` as a project runtime dependency for merge-gamma EXIF binary stream extraction.
+- **DES-011**: MUST structure OpenCV Debevec/Robertson radiance execution as separable `radiance_input_adapter`, `response_estimator`, and `radiance_merger` adapters selected by one deterministic dispatcher.
 
 ### 3.2 Functions
 - **REQ-001**: MUST print conversion help and exit successfully when conversion command receives no arguments.
@@ -217,13 +218,15 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **REQ-107**: MUST accept `--hdr-merge OpenCV-Merge` as HDR backend selector and execute OpenCV backend behavior when selected.
 - **REQ-108**: MUST execute OpenCV backend from three in-memory RGB float brackets ordered as `ev_minus`, `ev_zero`, `ev_plus` using selectable algorithm `Debevec`, `Robertson`, or `Mertens`, defaulting to `Debevec`, and MUST pass brackets without entry re-normalization or clipping.
 - **REQ-109**: MUST derive OpenCV Debevec/Robertson exposure times in seconds from source EXIF `ExposureTime`, preserve bracket order, and map the sequence to extracted `(ev_zero-ev_delta, ev_zero, ev_zero+ev_delta)`.
-- **REQ-110**: MUST preserve RGB float input/output interfaces for OpenCV merge and MUST confine any required Debevec/Robertson radiance-path `uint8` quantization to backend-local calibrate/merge adaptation boundaries.
+- **REQ-110**: MUST preserve RGB float input/output interfaces for OpenCV merge.
+- **REQ-245**: MUST prefer a Debevec/Robertson radiance path without float-to-uint8 conversion before merge and use backend-local `uint8` fallback only when high-precision merge execution is unavailable.
 - **REQ-141**: MUST expose OpenCV controls `--opencv-merge-algorithm`, `--opencv-merge-tonemap`, and `--opencv-merge-tonemap-gamma`, defaulting to `Debevec`, `enable`, and algorithm-specific gamma `Debevec=1.0`, `Robertson=0.9`, `Mertens=0.8`.
 - **REQ-142**: MUST treat EXIF `ExposureTime` as the linear RAW exposure time of the extracted base image and MUST compute OpenCV radiance times as `t_raw*2^(ev_zero-ev_delta)`, `t_raw*2^ev_zero`, and `t_raw*2^(ev_zero+ev_delta)`.
 - **REQ-143**: MUST execute optional OpenCV simple gamma tone mapping for `Debevec`, `Robertson`, and `Mertens` outputs before downstream postprocess, default enabled with algorithm-specific gamma `1.0`, `0.9`, and `0.8`, and MUST skip contrast-enhancing tone operators.
 - **REQ-144**: MUST deliver one congruent normalized RGB float output contract across OpenCV `Debevec`, `Robertson`, and `Mertens`, preserving exposure semantics without backend-specific contrast compensation.
 - **REQ-152**: MUST feed Debevec and Robertson OpenCV input brackets directly from the linear HDR bracket contract without any gamma-inversion preprocessing step.
-- **REQ-153**: MUST estimate inverse camera response with OpenCV `CalibrateDebevec` or `CalibrateRobertson` before OpenCV `MergeDebevec` or `MergeRobertson` and MUST pass both `times` and calibrated `response` into the merge call.
+- **REQ-153**: MUST estimate Debevec/Robertson radiance response through the selected `response_estimator` adapter before merge and pass `times` plus `response` only when the selected radiance merger requires them.
+- **REQ-246**: MUST print one deterministic runtime line `opencv-radiance-path: high-precision` or `opencv-radiance-path: uint8-legacy` before Debevec/Robertson merge execution.
 - **REQ-161**: MUST extract EXIF `ExposureTime` from the source DNG metadata and reject OpenCV `Debevec` or `Robertson` execution when that value is missing, non-positive, or not coercible to seconds.
 - **REQ-162**: MUST keep OpenCV Debevec and Robertson processing on RGB float `[0,1]` interfaces while allowing backend-local response estimation inputs/outputs required by OpenCV calibrators.
 - **REQ-154**: MUST execute OpenCV `MergeMertens` on merge-gamma-conditioned RGB float brackets, apply the explicit `*255.0` exposure-fusion rescale, then apply optional OpenCV tonemap before backend output normalization.
@@ -318,7 +321,9 @@ Explicit optimization patterns are implemented in the OpenCV pipeline using vect
 - **TST-012**: MUST verify `_encode_jpg` applies one float-to-uint8 conversion immediately before JPEG save after dedicated `_postprocess` stage completion.
 - **TST-013**: MUST verify `_parse_run_options` accepts `--hdr-merge OpenCV-Merge`, defaults `--hdr-merge` to `OpenCV-Tonemap`, and rejects values outside `Luminace-HDR`, `OpenCV-Merge`, `OpenCV-Tonemap`, and `HDR-Plus`.
 - **TST-014**: MUST verify OpenCV radiance exposure derivation preserves bracket order, uses EXIF exposure seconds, maps the sequence to `(ev_zero-ev_delta, ev_zero, ev_zero+ev_delta)`, and raises deterministic `ValueError` when derived `2**EV` scaling is non-representable.
-- **TST-015**: MUST verify OpenCV merge outputs for `Debevec`, `Robertson`, and `Mertens` remain normalized RGB float images bounded to `[0,1]` after backend-local radiance adaptation and backend output normalization.
+- **TST-015**: MUST verify OpenCV merge outputs for `Debevec`, `Robertson`, and `Mertens` remain normalized RGB float32 images bounded to `[0,1]` after backend-local radiance adaptation, merge gamma, and backend output normalization.
+- **TST-094**: MUST verify Debevec/Robertson radiance dispatch emits `opencv-radiance-path: high-precision` on supported payloads and emits `opencv-radiance-path: uint8-legacy` only after deterministic high-precision incompatibility.
+- **TST-095**: MUST verify the high-precision Debevec/Robertson path reaches merge execution without any float-to-uint8 bracket conversion before merge while preserving normalized RGB float32 backend output.
 - **TST-047**: MUST verify `_parse_run_options` rejects removed `--auto-ev`, `--auto-ev-shadow-target`, `--auto-ev-highlight-target`, and `--auto-ev-pct`, and accepts `--auto-ev-shadow-clipping`, `--auto-ev-highlight-clipping`, and `--auto-ev-step` with deterministic defaults and validation.
 - **TST-048**: MUST verify iterative bracket expansion for non-OpenCV-Tonemap backends stops at first threshold breach or deterministic safety bound and always terminates when `--bracketing` is omitted.
 - **TST-049**: MUST verify runtime diagnostics print iterative clipping percentages and final `ev_delta` only for non-OpenCV-Tonemap backends when `--bracketing` is omitted.

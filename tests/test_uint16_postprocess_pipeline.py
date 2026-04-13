@@ -3219,8 +3219,23 @@ def test_parse_run_options_rejects_post_gamma_auto_knobs_without_auto() -> None:
     assert parsed is None
 
 
-def test_run_opencv_merge_backend_dispatches_debevec_uint8_radiance_path_with_tonemap() -> None:
-    """OpenCV Debevec radiance path must quantize locally and return float output."""
+def test_run_opencv_merge_backend_prefers_debevec_high_precision_radiance_path_with_tonemap(
+    monkeypatch,
+    capsys,
+) -> None:
+    """@brief Validate high-precision Debevec radiance dispatch.
+
+    @details Blocks unexpected uint8 quantization, executes
+    `_run_opencv_merge_backend(...)` with probe-supported fake OpenCV merge
+    adapters, verifies `opencv-radiance-path: high-precision`, verifies
+    calibrator bypass, verifies float32 merge inputs, and verifies normalized
+    float32 backend output. Complexity: O(H*W). Side effects: captures stdout
+    and monkeypatches one helper.
+    @param monkeypatch {pytest.MonkeyPatch} Pytest monkeypatch fixture.
+    @param capsys {pytest.CaptureFixture[str]} Pytest stdout/stderr capture fixture.
+    @return {None} Assertions only.
+    @satisfies TST-094, TST-095
+    """
 
     fake_cv2 = _FakeOpenCvModule()
     bracket_images_float = [
@@ -3228,6 +3243,15 @@ def test_run_opencv_merge_backend_dispatches_debevec_uint8_radiance_path_with_to
         np.full((1, 2, 3), 0.5, dtype=np.float32),
         np.full((1, 2, 3), 0.875, dtype=np.float32),
     ]
+
+    def _fail_quantize(**_kwargs):
+        raise AssertionError("High-precision radiance path called uint8 quantization")
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_quantize_opencv_radiance_rgb_uint8",
+        _fail_quantize,
+    )
 
     output = dng2jpg_module._run_opencv_merge_backend(  # pylint: disable=protected-access
         bracket_images_float=bracket_images_float,
@@ -3242,30 +3266,27 @@ def test_run_opencv_merge_backend_dispatches_debevec_uint8_radiance_path_with_to
         auto_adjust_dependencies=(fake_cv2, np),
     )
 
-    assert fake_cv2.calibrate_debevec.last_inputs is not None
+    captured = capsys.readouterr()
+    assert "opencv-radiance-path: high-precision" in captured.out
+    assert fake_cv2.calibrate_debevec.last_inputs is None
     assert fake_cv2.merge_debevec.last_inputs is not None
     assert fake_cv2.merge_robertson.last_inputs is None
     assert fake_cv2.last_tonemap is not None
-    assert all(
-        frame.dtype == np.uint8 for frame in fake_cv2.calibrate_debevec.last_inputs
-    )
     np.testing.assert_allclose(
         fake_cv2.merge_debevec.last_times,
         np.array([0.17677669, 0.35355338, 0.70710677], dtype=np.float32),
         rtol=1e-6,
         atol=1e-6,
     )
-    np.testing.assert_array_equal(
-        fake_cv2.calibrate_debevec.last_inputs[1],
-        np.full((1, 2, 3), 128, dtype=np.uint8),
-    )
-    assert fake_cv2.merge_debevec.last_response is not None
+    assert fake_cv2.merge_debevec.last_response is None
     assert all(
-        frame.dtype == np.uint8 for frame in fake_cv2.merge_debevec.last_inputs
+        frame.dtype == np.float32 for frame in fake_cv2.merge_debevec.last_inputs
     )
-    np.testing.assert_array_equal(
+    np.testing.assert_allclose(
         fake_cv2.merge_debevec.last_inputs[1],
-        np.full((1, 2, 3), 128, dtype=np.uint8),
+        np.full((1, 2, 3), 0.5, dtype=np.float32),
+        rtol=0.0,
+        atol=0.0,
     )
     assert fake_cv2.last_tonemap.gamma == 1.0
     assert output.dtype == np.float32
@@ -3273,8 +3294,22 @@ def test_run_opencv_merge_backend_dispatches_debevec_uint8_radiance_path_with_to
     assert float(np.max(output)) <= 1.0
 
 
-def test_run_opencv_merge_backend_dispatches_robertson_uint8_radiance_path() -> None:
-    """OpenCV Robertson radiance path must quantize locally and return float output."""
+def test_run_opencv_merge_backend_falls_back_to_robertson_uint8_legacy_radiance_path(
+    monkeypatch,
+    capsys,
+) -> None:
+    """@brief Validate Robertson uint8 legacy fallback selection.
+
+    @details Forces high-precision support probe failure, executes
+    `_run_opencv_merge_backend(...)` for Robertson, verifies
+    `opencv-radiance-path: uint8-legacy`, verifies uint8 calibrator and merge
+    payloads, and verifies normalized float32 backend output. Complexity:
+    O(H*W). Side effects: captures stdout and monkeypatches one probe helper.
+    @param monkeypatch {pytest.MonkeyPatch} Pytest monkeypatch fixture.
+    @param capsys {pytest.CaptureFixture[str]} Pytest stdout/stderr capture fixture.
+    @return {None} Assertions only.
+    @satisfies TST-094
+    """
 
     fake_cv2 = _FakeOpenCvModule()
     bracket_images_float = [
@@ -3282,6 +3317,12 @@ def test_run_opencv_merge_backend_dispatches_robertson_uint8_radiance_path() -> 
         np.full((1, 1, 3), 0.4, dtype=np.float32),
         np.full((1, 1, 3), 0.8, dtype=np.float32),
     ]
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_probe_opencv_high_precision_radiance_support",
+        lambda **_kwargs: False,
+    )
 
     output = dng2jpg_module._run_opencv_merge_backend(  # pylint: disable=protected-access
         bracket_images_float=bracket_images_float,
@@ -3296,6 +3337,8 @@ def test_run_opencv_merge_backend_dispatches_robertson_uint8_radiance_path() -> 
         auto_adjust_dependencies=(fake_cv2, np),
     )
 
+    captured = capsys.readouterr()
+    assert "opencv-radiance-path: uint8-legacy" in captured.out
     assert fake_cv2.calibrate_robertson.last_inputs is not None
     assert fake_cv2.merge_robertson.last_inputs is not None
     assert fake_cv2.merge_debevec.last_inputs is None
