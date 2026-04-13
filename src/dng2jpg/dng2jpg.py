@@ -9304,14 +9304,17 @@ def _to_uint16_image_array(np_module, image_data):
 def _apply_post_gamma_float(np_module, image_rgb_float, gamma_value):
     """@brief Apply static post-gamma over RGB float tensor.
 
-    @details Executes the legacy static gamma equation on RGB float
-    data (`output = input^(1/gamma)`) without intermediate stage-local `[0,1]`
-    clipping, preserving float headroom for downstream pipeline stages.
+    @details Executes the numeric static gamma stage on finite
+    display-referred RGB float data with sign-preserving magnitude power
+    (`output = sign(input) * abs(input)^(1/gamma)`), preserves legacy
+    `input^(1/gamma)` behavior for non-negative samples, avoids intermediate
+    stage-local `[0,1]` clipping, and prevents `NaN`/`Inf` generation on
+    signed backend outputs. Complexity: O(H*W). Side effects: none.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} RGB float image tensor.
     @param gamma_value {float} Static post-gamma factor.
-    @return {object} RGB float tensor after gamma stage without stage-local clipping.
-    @satisfies REQ-012, REQ-013, REQ-132, REQ-134
+    @return {object} RGB float tensor after sign-preserving gamma stage without stage-local clipping.
+    @satisfies REQ-012, REQ-013, REQ-132, REQ-134, REQ-244
     """
 
     validated_input = _ensure_three_channel_float_array_no_range_adjust(
@@ -9320,10 +9323,10 @@ def _apply_post_gamma_float(np_module, image_rgb_float, gamma_value):
     )
     if gamma_value == 1.0:
         return validated_input
-    adjusted = np_module.power(
-        validated_input.astype(np_module.float64),
-        1.0 / float(gamma_value),
-    )
+    exponent = 1.0 / float(gamma_value)
+    input_float64 = validated_input.astype(np_module.float64)
+    adjusted_magnitude = np_module.power(np_module.abs(input_float64), exponent)
+    adjusted = np_module.copysign(adjusted_magnitude, input_float64)
     return adjusted.astype(np_module.float32)
 
 
@@ -9529,23 +9532,25 @@ def _apply_static_postprocess_float(
 ):
     """@brief Execute static postprocess chain with float-only stage internals.
 
-    @details Accepts one normalized RGB float tensor and executes static
-    postprocess in strict order `gamma->brightness->contrast->saturation`,
-    where gamma is either numeric static gamma or auto-gamma replacement when
-    `--post-gamma=auto` is selected. Bypasses numeric static stage when all
-    numeric factors are neutral (`1.0`), executes only non-neutral numeric
-    substages in order, runs all intermediate calculations in float domain
-    without stage-local `[0,1]` clipping on gamma/brightness/saturation
-    stages, optionally emits persistent debug TIFF checkpoints after each
-    executed static substage, and eliminates the prior float->uint16->float
-    adaptation cycle from this step.
+    @details Accepts one display-referred RGB float tensor, including signed
+    or otherwise unbounded backend outputs, and executes static postprocess in
+    strict order `gamma->brightness->contrast->saturation`, where gamma is
+    either numeric static gamma or auto-gamma replacement when
+    `--post-gamma=auto` is selected. Numeric gamma uses sign-preserving
+    magnitude power on finite samples while preserving legacy non-negative
+    behavior. Bypasses numeric static stage when all numeric factors are
+    neutral (`1.0`), executes only non-neutral numeric substages in order,
+    runs all intermediate calculations in float domain without stage-local
+    `[0,1]` clipping on gamma/brightness/saturation stages, optionally emits
+    persistent debug TIFF checkpoints after each executed static substage, and
+    eliminates the prior float->uint16->float adaptation cycle from this step.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb_float {object} RGB float tensor.
     @param postprocess_options {PostprocessOptions} Parsed postprocess controls.
     @param imageio_module {ModuleType|None} Optional imageio module used for debug TIFF checkpoint emission.
     @param debug_context {DebugArtifactContext|None} Optional persistent debug output metadata.
     @return {object} RGB float tensor after static postprocess chain.
-    @satisfies REQ-012, REQ-013, REQ-132, REQ-134, REQ-148, REQ-176, REQ-177, REQ-178
+    @satisfies REQ-012, REQ-013, REQ-132, REQ-134, REQ-148, REQ-176, REQ-177, REQ-178, REQ-244
     """
 
     processed = _ensure_three_channel_float_array_no_range_adjust(

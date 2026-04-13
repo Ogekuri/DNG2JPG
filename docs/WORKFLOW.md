@@ -13,6 +13,10 @@
 - OpenCV radiance backend documentation is now aligned with implementation:
   Debevec/Robertson preserve float interfaces externally while confining
   required `uint8` payloads to backend-local calibrate/merge adaptation.
+- Numeric static post-gamma now applies sign-preserving power on finite
+  display-referred RGB float payloads, preventing `NaN`/`Inf` on signed
+  OpenCV-Tonemap outputs while preserving non-negative backend behavior and
+  float-domain boundary separation.
 
 ## Behavioral Notes (2026-04-12)
 
@@ -325,7 +329,7 @@
       - _write_hdr_merge_debug_checkpoints(...): optional stage checkpoint writer [src/dng2jpg/dng2jpg.py]
       - _postprocess(...): postprocess [src/dng2jpg/dng2jpg.py]
         - _prepare_postprocess_entry_rgb_float(...): postprocess entry payload adaptation [src/dng2jpg/dng2jpg.py]
-        - _apply_static_postprocess_float(...): gamma/brightness/contrast/saturation stage [src/dng2jpg/dng2jpg.py]
+        - _apply_static_postprocess_float(...): gamma/brightness/contrast/saturation stage with sign-preserving numeric post-gamma for signed float backend payloads [src/dng2jpg/dng2jpg.py]
         - _apply_auto_levels_float(...): optional auto-levels stage [src/dng2jpg/dng2jpg.py]
           - _clip_auto_levels_entry_rgb(...): explicit auto-levels entry clip [src/dng2jpg/dng2jpg.py]
         - _apply_auto_adjust_stage_float(...): mandatory auto-adjust stage entry with internal enable-state validation and disabled pass-through path [src/dng2jpg/dng2jpg.py]

@@ -545,6 +545,46 @@ def _legacy_static_postprocess_quantized_reference(
     return image_u16.astype(np.float32) / 65535.0
 
 
+def _float_static_postprocess_reference(
+    image_rgb_float: np.ndarray,
+    postprocess_options: _StaticPostprocessOptionsLike,
+) -> np.ndarray:
+    """@brief Compute an independent float static-postprocess reference.
+
+    @details Re-implements `gamma->brightness->contrast->saturation` in test
+    code using sign-preserving numeric gamma so tests can verify static-stage
+    outputs without calling production substage helpers. Complexity: O(H*W).
+    Side effects: none.
+    @param image_rgb_float {np.ndarray} RGB float test payload.
+    @param postprocess_options {_StaticPostprocessOptionsLike} Static factor container.
+    @return {np.ndarray} Expected float32 RGB tensor after static postprocess.
+    @satisfies TST-097, TST-098
+    """
+
+    expected = np.asarray(image_rgb_float, dtype=np.float64)
+    gamma_value = float(postprocess_options.post_gamma)
+    if gamma_value != 1.0:
+        exponent = 1.0 / gamma_value
+        expected = np.copysign(np.power(np.abs(expected), exponent), expected)
+    if postprocess_options.brightness != 1.0:
+        expected = expected * float(postprocess_options.brightness)
+    if postprocess_options.contrast != 1.0:
+        channel_mean = np.mean(expected, axis=(0, 1), keepdims=True)
+        expected = channel_mean + float(postprocess_options.contrast) * (
+            expected - channel_mean
+        )
+    if postprocess_options.saturation != 1.0:
+        grayscale = (
+            (0.2126 * expected[:, :, 0])
+            + (0.7152 * expected[:, :, 1])
+            + (0.0722 * expected[:, :, 2])
+        )[:, :, None]
+        expected = grayscale + float(postprocess_options.saturation) * (
+            expected - grayscale
+        )
+    return expected.astype(np.float32)
+
+
 def _reflect_shift_2d(image: np.ndarray, shift_y: int, shift_x: int) -> np.ndarray:
     """Shift 2D image content using reflect padding instead of wraparound."""
 
@@ -611,6 +651,60 @@ def test_apply_post_gamma_float_preserves_unclipped_float_domain() -> None:
     expected = np.power(image_rgb_float.astype(np.float64), 0.5).astype(np.float32)
     np.testing.assert_allclose(output, expected, rtol=1e-6, atol=1e-6)
     assert np.max(output) > 1.0
+
+
+def test_apply_post_gamma_float_preserves_signed_finite_outputs_and_non_negative_legacy_behavior(
+) -> None:
+    """@brief Verify sign-preserving numeric post-gamma on signed payloads.
+
+    @details Escalates NumPy runtime warnings to errors, applies numeric
+    post-gamma to finite signed and non-negative display-referred RGB payloads,
+    and verifies finite outputs plus unchanged legacy results on `[0,1]`
+    samples. Complexity: O(H*W). Side effects: none.
+    @return {None} Assertions only.
+    @satisfies TST-096
+    """
+
+    signed_image_rgb_float = np.array(
+        [[[-4.0, -0.25, 0.0], [0.25, 1.0, 9.0]]],
+        dtype=np.float32,
+    )
+    non_negative_image_rgb_float = np.array(
+        [[[0.0, 0.25, 1.0], [0.36, 0.81, 1.0]]],
+        dtype=np.float32,
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        signed_output = dng2jpg_module._apply_post_gamma_float(  # pylint: disable=protected-access
+            np_module=np,
+            image_rgb_float=signed_image_rgb_float,
+            gamma_value=2.0,
+        )
+        non_negative_output = dng2jpg_module._apply_post_gamma_float(  # pylint: disable=protected-access
+            np_module=np,
+            image_rgb_float=non_negative_image_rgb_float,
+            gamma_value=2.0,
+        )
+
+    expected_signed = np.copysign(
+        np.power(np.abs(signed_image_rgb_float.astype(np.float64)), 0.5),
+        signed_image_rgb_float.astype(np.float64),
+    ).astype(np.float32)
+    expected_non_negative = np.power(
+        non_negative_image_rgb_float.astype(np.float64),
+        0.5,
+    ).astype(np.float32)
+
+    assert bool(np.all(np.isfinite(signed_output)))
+    assert bool(np.all(np.isfinite(non_negative_output)))
+    np.testing.assert_allclose(signed_output, expected_signed, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(
+        non_negative_output,
+        expected_non_negative,
+        rtol=1e-6,
+        atol=1e-6,
+    )
 
 
 def test_apply_contrast_float_preserves_unclipped_float_domain() -> None:
@@ -849,6 +943,129 @@ def test_apply_static_postprocess_float_executes_auto_gamma_then_static_substage
     )
     np.testing.assert_allclose(output, image_rgb_float + np.float32(0.10), rtol=0.0, atol=1e-7)
     assert execution_order == ["auto-gamma", "brightness", "contrast", "saturation"]
+
+
+def test_apply_static_postprocess_float_preserves_signed_opencv_tonemap_mantiuk_payloads_without_uint8_roundtrip(
+    monkeypatch,
+) -> None:
+    """@brief Verify signed Mantiuk static postprocess remains finite.
+
+    @details Resolves default `OpenCV-Tonemap mantiuk` static factors,
+    escalates NumPy runtime warnings to errors, blocks unexpected uint8 helper
+    usage, and verifies signed backend payloads remain finite and numerically
+    consistent with the documented float-domain equations. Complexity: O(H*W).
+    Side effects: monkeypatches one helper during the test body.
+    @param monkeypatch {pytest.MonkeyPatch} Pytest monkeypatch fixture.
+    @return {None} Assertions only.
+    @satisfies TST-097
+    """
+
+    signed_backend_payload = np.array(
+        [[[-1.44, -0.25, 0.36], [0.81, 1.44, 2.25]]],
+        dtype=np.float32,
+    )
+    defaults = dng2jpg_module._resolve_default_postprocess(  # pylint: disable=protected-access
+        dng2jpg_module.HDR_MERGE_MODE_OPENCV_TONEMAP,
+        dng2jpg_module.DEFAULT_LUMINANCE_TMO,
+        opencv_tonemap_algorithm=dng2jpg_module.OPENCV_TONEMAP_MAP_MANTIUK,
+    )
+    postprocess_options = dng2jpg_module.PostprocessOptions(
+        post_gamma=defaults[0],
+        brightness=defaults[1],
+        contrast=defaults[2],
+        saturation=defaults[3],
+        jpg_compression=25,
+        auto_brightness_enabled=False,
+        auto_levels_enabled=False,
+        auto_adjust_enabled=False,
+        debug_enabled=False,
+    )
+
+    def _fail_uint8_conversion(*_args, **_kwargs):
+        raise AssertionError("Static postprocess called _to_uint8_image_array unexpectedly")
+
+    monkeypatch.setattr(dng2jpg_module, "_to_uint8_image_array", _fail_uint8_conversion)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        output = dng2jpg_module._apply_static_postprocess_float(  # pylint: disable=protected-access
+            np_module=np,
+            image_rgb_float=signed_backend_payload,
+            postprocess_options=postprocess_options,
+        )
+
+    expected = _float_static_postprocess_reference(
+        image_rgb_float=signed_backend_payload,
+        postprocess_options=postprocess_options,
+    )
+    assert output.dtype == np.float32
+    assert output.shape == signed_backend_payload.shape
+    assert bool(np.all(np.isfinite(output)))
+    np.testing.assert_allclose(output, expected, rtol=1e-6, atol=1e-6)
+
+
+
+def test_apply_static_postprocess_float_keeps_non_negative_backend_defaults_stable_for_opencv_merge_and_hdrplus(
+) -> None:
+    """@brief Verify unchanged non-negative backend-default static outputs.
+
+    @details Resolves default factor tuples for `OpenCV-Merge` algorithms and
+    `HDR-Plus`, applies static postprocess to one non-negative display-referred
+    payload, and verifies equality with an independent float-domain reference.
+    Complexity: O(K*H*W). Side effects: none.
+    @return {None} Assertions only.
+    @satisfies TST-098
+    """
+
+    image_rgb_float = np.array(
+        [[[0.04, 0.25, 0.81], [0.16, 0.49, 1.0]]],
+        dtype=np.float32,
+    )
+    backend_defaults = {
+        "opencv-debevec": dng2jpg_module._resolve_default_postprocess(  # pylint: disable=protected-access
+            dng2jpg_module.HDR_MERGE_MODE_OPENCV_MERGE,
+            dng2jpg_module.DEFAULT_LUMINANCE_TMO,
+            opencv_merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_DEBEVEC,
+        ),
+        "opencv-robertson": dng2jpg_module._resolve_default_postprocess(  # pylint: disable=protected-access
+            dng2jpg_module.HDR_MERGE_MODE_OPENCV_MERGE,
+            dng2jpg_module.DEFAULT_LUMINANCE_TMO,
+            opencv_merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_ROBERTSON,
+        ),
+        "opencv-mertens": dng2jpg_module._resolve_default_postprocess(  # pylint: disable=protected-access
+            dng2jpg_module.HDR_MERGE_MODE_OPENCV_MERGE,
+            dng2jpg_module.DEFAULT_LUMINANCE_TMO,
+            opencv_merge_algorithm=dng2jpg_module.OPENCV_MERGE_ALGORITHM_MERTENS,
+        ),
+        "hdrplus": dng2jpg_module._resolve_default_postprocess(  # pylint: disable=protected-access
+            dng2jpg_module.HDR_MERGE_MODE_HDR_PLUS,
+            dng2jpg_module.DEFAULT_LUMINANCE_TMO,
+        ),
+    }
+
+    for defaults in backend_defaults.values():
+        postprocess_options = dng2jpg_module.PostprocessOptions(
+            post_gamma=defaults[0],
+            brightness=defaults[1],
+            contrast=defaults[2],
+            saturation=defaults[3],
+            jpg_compression=25,
+            auto_brightness_enabled=False,
+            auto_levels_enabled=False,
+            auto_adjust_enabled=False,
+            debug_enabled=False,
+        )
+        output = dng2jpg_module._apply_static_postprocess_float(  # pylint: disable=protected-access
+            np_module=np,
+            image_rgb_float=image_rgb_float,
+            postprocess_options=postprocess_options,
+        )
+        expected = _float_static_postprocess_reference(
+            image_rgb_float=image_rgb_float,
+            postprocess_options=postprocess_options,
+        )
+        np.testing.assert_allclose(output, expected, rtol=1e-6, atol=1e-6)
+
 
 
 def test_encode_jpg_quantizes_once_at_final_boundary(monkeypatch, tmp_path) -> None:
