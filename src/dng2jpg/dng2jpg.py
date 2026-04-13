@@ -26,7 +26,7 @@ import warnings
 import math
 from collections.abc import Callable
 from io import BytesIO
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -135,8 +135,6 @@ RAW_WHITE_BALANCE_MODE_MIN = "MIN"
 RAW_WHITE_BALANCE_MODE_MEAN = "MEAN"
 DEFAULT_RAW_WHITE_BALANCE_MODE = RAW_WHITE_BALANCE_MODE_MEAN
 DEFAULT_WHITE_BALANCE_XPHOTO_DOMAIN = WHITE_BALANCE_XPHOTO_DOMAIN_LINEAR
-WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO = "ev-zero"
-WHITE_BALANCE_ANALYSIS_SOURCE_LINEAR_BASE = "linear-base"
 XPHOTO_ESTIMATION_PAYLOAD_SCALE_PERCENTILE = 99.5
 XPHOTO_ESTIMATION_PAYLOAD_SOFT_KNEE_START = 0.95
 XPHOTO_ESTIMATION_PAYLOAD_SOFT_KNEE_STRENGTH = 0.2
@@ -301,10 +299,6 @@ _WHITE_BALANCE_MODES = (
 )
 _AUTO_WHITE_BALANCE_MODE_OPTIONS = _WHITE_BALANCE_MODES + (
     AUTO_WHITE_BALANCE_MODE_DISABLE,
-)
-_WHITE_BALANCE_ANALYSIS_SOURCES = (
-    WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO,
-    WHITE_BALANCE_ANALYSIS_SOURCE_LINEAR_BASE,
 )
 _WHITE_BALANCE_XPHOTO_DOMAINS = (
     WHITE_BALANCE_XPHOTO_DOMAIN_LINEAR,
@@ -693,35 +687,35 @@ class OpenCvTonemapOptions:
 
 @dataclass(frozen=True)
 class PostprocessOptions:
-    """@brief Hold deterministic postprocessing option values.
+    """@brief Hold deterministic post-merge correction configuration.
 
-    @details Encapsulates correction factors and JPEG compression level used by
-    shared TIFF-to-JPG postprocessing for both HDR backends, including
-    `--post-gamma=auto` replacement-stage controls.
+    @details Encapsulates shared static postprocess factors, JPEG compression,
+    post-merge auto-levels, post-merge auto-adjust, pre-merge auto-brightness
+    knobs, pre-merge auto-white-balance selectors, RAW white-balance
+    normalization, merge-gamma request state, and optional OpenCV-Tonemap
+    selector payload. Selector fields are limited to CLI-accepted or
+    runtime-effective variants. Complexity: O(1). Side effects: none.
     @param post_gamma {float} Numeric gamma correction factor for static numeric mode.
-    @param post_gamma_mode {str} Static gamma selector in `{"numeric","auto"}`.
-    @param post_gamma_auto_options {PostGammaAutoOptions} Auto-gamma replacement stage knobs.
     @param brightness {float} Brightness enhancement factor.
     @param contrast {float} Contrast enhancement factor.
     @param saturation {float} Saturation enhancement factor.
     @param jpg_compression {int} JPEG compression level in range `[0, 100]`.
-    @param auto_brightness_enabled {bool} `True` when the pre-bracketing auto-brightness stage is enabled.
-    @param auto_brightness_pre_applied {bool} `True` when auto-brightness already executed before `_postprocess(...)` and must be skipped inside post-merge processing.
-    @param auto_brightness_options {AutoBrightnessOptions} Auto-brightness stage knobs.
-    @param auto_levels_enabled {bool} `True` when auto-levels stage is enabled.
-    @param auto_levels_options {AutoLevelsOptions} Auto-levels stage knobs.
-    @param auto_adjust_enabled {bool} `True` when the auto-adjust stage is enabled.
-    @param auto_adjust_options {AutoAdjustOptions} Knobs for the sole auto-adjust implementation.
+    @param post_gamma_mode {str} Static gamma selector in `{"numeric","auto"}`.
+    @param post_gamma_auto_options {PostGammaAutoOptions} Auto-gamma replacement-stage knobs.
+    @param auto_brightness_enabled {bool} `True` when the pre-bracket auto-brightness stage is enabled.
+    @param auto_brightness_options {AutoBrightnessOptions} Pre-bracket auto-brightness knobs.
+    @param auto_levels_enabled {bool} `True` when post-merge auto-levels is enabled.
+    @param auto_levels_options {AutoLevelsOptions} Post-merge auto-levels knobs.
+    @param auto_adjust_enabled {bool} `True` when post-merge auto-adjust is enabled.
+    @param auto_adjust_options {AutoAdjustOptions} Post-merge auto-adjust knobs.
     @param debug_enabled {bool} `True` when persistent debug TIFF checkpoints are enabled.
     @param merge_gamma_option {MergeGammaOption} Parsed merge-gamma request applied only by OpenCV and HDR+ backends.
     @param raw_white_balance_mode {str} RAW camera WB normalization mode in `{"GREEN","MAX","MIN","MEAN"}`.
-    @param white_balance_mode {str|None} Optional `--auto-white-balance` mode applied to the linear base image after auto-brightness and before auto-zero evaluation.
-    @param auto_white_balance_pre_applied {bool} `True` when auto-white-balance already executed before `_postprocess(...)` and must be skipped inside post-merge processing.
-    @param white_balance_analysis_source {str} `--white-balance-analysis-source` selector for auto-white-balance analysis payload in `{"ev-zero","linear-base"}`.
-    @param white_balance_xphoto_domain {str} Xphoto estimation-domain selector in `{"linear","srgb","source-auto"}` applied only to xphoto gain estimation.
-    @param opencv_tonemap_options {OpenCvTonemapOptions|None} Optional OpenCV-Tonemap backend selector and knob payload.
+    @param white_balance_mode {str|None} Optional pre-bracket `--auto-white-balance` mode.
+    @param white_balance_xphoto_domain {str} Xphoto estimation-domain selector in `{"linear","srgb","source-auto"}`.
+    @param opencv_tonemap_options {OpenCvTonemapOptions|None} Optional OpenCV-Tonemap selector and knob payload.
     @return {None} Immutable dataclass container.
-    @satisfies REQ-020, REQ-050, REQ-065, REQ-066, REQ-069, REQ-071, REQ-072, REQ-073, REQ-075, REQ-082, REQ-083, REQ-084, REQ-086, REQ-087, REQ-088, REQ-089, REQ-090, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-146, REQ-176, REQ-179, REQ-181, REQ-182, REQ-190, REQ-194, REQ-195, REQ-196, REQ-199, REQ-203, REQ-210
+    @satisfies DES-012, REQ-020, REQ-050, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-146, REQ-176, REQ-179, REQ-181, REQ-182, REQ-190, REQ-194, REQ-195, REQ-196, REQ-199, REQ-203, REQ-210, REQ-254
     """
 
     post_gamma: float
@@ -734,7 +728,6 @@ class PostprocessOptions:
         default_factory=PostGammaAutoOptions
     )
     auto_brightness_enabled: bool = False
-    auto_brightness_pre_applied: bool = False
     auto_brightness_options: AutoBrightnessOptions = field(
         default_factory=AutoBrightnessOptions
     )
@@ -746,8 +739,6 @@ class PostprocessOptions:
     merge_gamma_option: MergeGammaOption = field(default_factory=MergeGammaOption)
     raw_white_balance_mode: str = DEFAULT_RAW_WHITE_BALANCE_MODE
     white_balance_mode: str | None = None
-    auto_white_balance_pre_applied: bool = False
-    white_balance_analysis_source: str = WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO
     white_balance_xphoto_domain: str = DEFAULT_WHITE_BALANCE_XPHOTO_DOMAIN
     opencv_tonemap_options: OpenCvTonemapOptions | None = None
 
@@ -755,9 +746,10 @@ class PostprocessOptions:
     def auto_white_balance_mode(self) -> str | None:
         """@brief Expose optional `--auto-white-balance` mode with explicit naming.
 
-        @details Provides a semantically explicit alias for `white_balance_mode`
-        to distinguish auto-white-balance stage control from RAW camera
-        white-balance normalization (`--white-balance`).
+        @details Provides a semantically explicit alias for
+        `white_balance_mode` so runtime orchestration can distinguish
+        pre-bracket auto-white-balance control from RAW camera white-balance
+        normalization. Complexity: O(1). Side effects: none.
         @return {str|None} Canonical auto-white-balance mode or `None` when omitted.
         @satisfies REQ-181, REQ-182
         """
@@ -765,25 +757,13 @@ class PostprocessOptions:
         return self.white_balance_mode
 
     @property
-    def auto_white_balance_analysis_source(self) -> str:
-        """@brief Expose `--white-balance-analysis-source` with explicit auto-stage naming.
-
-        @details Provides a semantically explicit alias for
-        `white_balance_analysis_source` to make auto-white-balance stage payload
-        selection unambiguous in runtime orchestration code.
-        @return {str} Canonical auto-white-balance analysis-source selector.
-        @satisfies REQ-199, REQ-200
-        """
-
-        return self.white_balance_analysis_source
-
-    @property
     def auto_white_balance_xphoto_domain(self) -> str:
-        """@brief Expose xphoto estimation-domain selector with explicit auto-stage naming.
+        """@brief Expose xphoto estimation-domain selector with explicit naming.
 
         @details Provides a semantically explicit alias for
         `white_balance_xphoto_domain` so runtime orchestration can pass the
-        selector only to xphoto gain estimation.
+        selector only to xphoto gain estimation. Complexity: O(1). Side
+        effects: none.
         @return {str} Canonical auto-white-balance xphoto estimation-domain selector.
         @satisfies REQ-210, REQ-212
         """
@@ -1227,10 +1207,11 @@ def print_help(version):
     _print_help_section("Step 2 - Exposure planning and RAW bracket extraction")
     _print_help_option(
         "--bracketing=<value>",
-        "EV bracket half-span selector: use `auto` for forced static delta `0.1 EV`, or one finite numeric value `>= 0` for static symmetric bracket EV delta.",
+        "EV bracket half-span selector: use `auto` for automatic delta solving, or one finite numeric value `>= 0` for static symmetric bracket EV delta.",
         (
-            "Default when omitted: iterative automatic delta solver.",
-            "Use `--bracketing=<value>` to force static symmetric bracket EV delta.",
+            "Default when omitted: automatic delta solving.",
+            "Reachability matrix: omitted+omitted=`auto ev_zero+delta`; numeric+omitted=`auto ev_zero only`; `auto`+numeric=`auto ev_delta only`; numeric+numeric=`static`.",
+            "OpenCV-Tonemap resolves automatic delta to `0.1 EV` with skip diagnostics because side brackets are not consumed.",
         ),
     )
     _print_help_option(
@@ -1239,6 +1220,7 @@ def print_help(version):
         (
             "Default: `auto` when omitted.",
             "Use `--exposure=auto` to select ev_zero as min(ev_best, ev_ettr, ev_detail).",
+            "Manual `--exposure=<value>` is accepted only with `--bracketing=<value>` or explicit `--bracketing=auto`.",
             "No bit-depth-derived upper bound is enforced.",
         ),
     )
@@ -1268,12 +1250,13 @@ def print_help(version):
     )
     _print_help_option(
         "--auto-white-balance=<mode>",
-        "Optional pre-bracketing white-balance stage executed after auto-brightness and before auto-zero evaluation.",
+        "Optional pre-merge white-balance stage executed after auto-brightness and before bracket synthesis.",
         (
             "Allowed values: "
             + ", ".join(_AUTO_WHITE_BALANCE_MODE_OPTIONS)
             + ".",
             "Default: disabled (stage skipped when omitted).",
+            "Standard CLI never re-runs this stage inside `_postprocess(...)`.",
         ),
     )
     _print_help_option(
@@ -1415,8 +1398,11 @@ def print_help(version):
     _print_help_section("Step 4 - Auto-brightness stage")
     _print_help_option(
         "--auto-brightness=<enable|disable>",
-        "Enable or disable the auto-brightness stage executed after linear-base extraction and before auto-zero evaluation/bracket generation.",
-        ("Default: `disable`.",),
+        "Enable or disable the pre-merge auto-brightness stage executed after linear-base extraction and before auto-white-balance/bracket synthesis.",
+        (
+            "Default: `disable`.",
+            "Standard CLI never re-runs this stage inside `_postprocess(...)`.",
+        ),
     )
     _print_help_option(
         "--ab-key-value=<value>",
@@ -1738,43 +1724,26 @@ def _parse_ev_center_option(ev_center_raw):
 
 
 
-def _is_forced_static_auto_bracketing_selected(args):
-    """@brief Detect explicit forced-static bracketing selector usage.
+def _is_explicit_auto_bracketing_selected(args):
+    """@brief Detect explicit automatic bracketing-selector usage.
 
     @details Scans the raw CLI token vector and returns `True` only when the
     last `--bracketing=` selector token equals `auto`. This selector is
-    semantically distinct from omitted `--bracketing`, which retains iterative
-    automatic bracketing, and from later static numeric overrides. Complexity:
-    O(N). Side effects: none.
+    semantically distinct from omitted `--bracketing`, which keeps implicit
+    automatic delta resolution but does not authorize manual `--exposure`
+    pairing. Complexity: O(N). Side effects: none.
     @param args {list[str]} Raw command argument vector.
     @return {bool} `True` when explicit `--bracketing=auto` is present.
-    @satisfies CTN-003, REQ-216, REQ-217
+    @satisfies CTN-003
     """
 
-    forced_static_auto_selected = False
+    explicit_auto_selected = False
     for token in args:
         normalized_token = str(token).strip().lower()
         if not normalized_token.startswith("--bracketing="):
             continue
-        forced_static_auto_selected = normalized_token == "--bracketing=auto"
-    return forced_static_auto_selected
-
-
-def _print_forced_static_auto_bracketing_diagnostics(ev_delta):
-    """@brief Emit deterministic diagnostics for forced-static bracketing mode.
-
-    @details Prints one fixed `Bracket step: skipped` line followed by one
-    selected half-span line for explicit `--bracketing=auto` mode. Complexity:
-    O(1). Side effects: stdout writes only.
-    @param ev_delta {float} Resolved static half-span EV value.
-    @return {None} No return value; side effect is stdout emission.
-    @satisfies REQ-217
-    """
-
-    print_info("Bracket step: skipped")
-    print_info(
-        f"Exposure planning selected bracket half-span: {float(ev_delta):.6f} EV"
-    )
+        explicit_auto_selected = normalized_token == "--bracketing=auto"
+    return explicit_auto_selected
 
 
 def _parse_percentage_option(option_name, option_raw):
@@ -3219,9 +3188,10 @@ def _resolve_auto_ev_delta(
 def _resolve_opencv_tonemap_auto_ev_delta():
     """@brief Resolve OpenCV-Tonemap automatic bracket half-span without iteration.
 
-    @details Skips clipping-threshold iteration when OpenCV-Tonemap runs with
-    `--bracketing=auto`, emits deterministic skip diagnostics, and returns the
-    fixed half-span `0.1` EV.
+    @details Skips clipping-threshold iteration whenever automatic `ev_delta`
+    is requested for OpenCV-Tonemap, emits deterministic skip diagnostics, and
+    returns the fixed half-span `0.1` EV. Complexity: O(1). Side effects:
+    stdout writes only.
     @return {float} Fixed OpenCV-Tonemap automatic bracket half-span.
     @satisfies REQ-216, REQ-217
     """
@@ -4270,36 +4240,6 @@ def _parse_white_balance_mode_option(white_balance_raw):
     return _parse_auto_white_balance_mode_option(white_balance_raw)
 
 
-def _parse_white_balance_analysis_source_option(analysis_source_raw):
-    """@brief Parse white-balance analysis source selector option value.
-
-    @details Accepts case-insensitive white-balance analysis-source selector
-    names and normalizes them to canonical runtime selector names.
-    @param analysis_source_raw {str} Raw `--white-balance-analysis-source` selector token.
-    @return {str|None} Canonical analysis-source selector or `None` on parse failure.
-    @satisfies REQ-199
-    """
-
-    analysis_source_text = str(analysis_source_raw).strip()
-    if not analysis_source_text:
-        print_error("Invalid --white-balance-analysis-source value: empty value")
-        return None
-    mapping = {
-        WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO.lower(): WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO,
-        WHITE_BALANCE_ANALYSIS_SOURCE_LINEAR_BASE.lower(): WHITE_BALANCE_ANALYSIS_SOURCE_LINEAR_BASE,
-    }
-    resolved_source = mapping.get(analysis_source_text.lower())
-    if resolved_source is not None:
-        return resolved_source
-    print_error(
-        f"Invalid --white-balance-analysis-source value: {analysis_source_raw}"
-    )
-    print_error(
-        "Allowed values: " + ", ".join(_WHITE_BALANCE_ANALYSIS_SOURCES)
-    )
-    return None
-
-
 def _parse_white_balance_xphoto_domain_option(xphoto_domain_raw):
     """@brief Parse white-balance xphoto estimation-domain selector option value.
 
@@ -4924,14 +4864,15 @@ def _parse_run_options(args):
     """@brief Parse CLI args into input, output, and EV parameters.
 
     @details Supports positional file arguments, bracket delta selector
-    (`--bracketing=<auto|value>` where omitted enables iterative automatic
-    solving and explicit `auto` forces static half-span `0.1`), bracket center
-    selector (`--exposure=<auto|value>`, default `auto`), optional
+    (`--bracketing=<auto|value>` where omitted or explicit `auto` enables
+    automatic backend-specific delta resolution), bracket center selector
+    (`--exposure=<auto|value>`, default `auto`), optional
     automatic exposure clipping and step controls, optional RAW white-balance
     normalization selector
     (`--white-balance=<GREEN|MAX|MIN|MEAN>`),
     optional auto-white-balance selector (`--auto-white-balance=<mode>`) applied to
-    the linear base image after auto-brightness and before auto-zero evaluation, optional xphoto estimation-domain selector
+    the linear base image after auto-brightness and before bracket synthesis,
+    optional xphoto estimation-domain selector
     (`--white-balance-xphoto-domain=<linear|srgb|source-auto>`),
     optional postprocess controls including `--post-gamma=<value|auto>` and
     optional `--post-gamma-auto-*` knobs,
@@ -4948,7 +4889,7 @@ def _parse_run_options(args):
     invalid arity.
     @param args {list[str]} Raw command argument vector.
     @return {tuple[Path, Path, float|None, bool, PostprocessOptions, bool, bool, LuminanceOptions, OpenCvMergeOptions, HdrPlusOptions, bool, float, bool, AutoEvOptions]|None} Parsed `(input, output, ev, auto_ev_delta_enabled, postprocess, enable_luminance, enable_opencv, luminance_options, opencv_merge_options, hdrplus_options, enable_hdr_plus, ev_zero, auto_ev_zero_enabled, auto_ev_options)` tuple; `None` on parse failure. `auto_ev_zero_enabled=True` when `--exposure` is absent or `=auto`; `auto_ev_zero_enabled=False` when `--exposure=<value>` is parsed. `--exposure=<value>` without static `--bracketing=<value>` or explicit `--bracketing=auto` is rejected.
-    @satisfies CTN-002, CTN-003, CTN-007, REQ-006, REQ-007, REQ-008, REQ-009, REQ-018, REQ-020, REQ-022, REQ-023, REQ-024, REQ-025, REQ-030, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146, REQ-176, REQ-179, REQ-180, REQ-181, REQ-183, REQ-189, REQ-190, REQ-191, REQ-194, REQ-195, REQ-196, REQ-199, REQ-203, REQ-210
+    @satisfies CTN-002, CTN-003, CTN-007, DES-012, REQ-006, REQ-007, REQ-008, REQ-009, REQ-018, REQ-020, REQ-022, REQ-023, REQ-024, REQ-025, REQ-030, REQ-100, REQ-101, REQ-107, REQ-111, REQ-125, REQ-135, REQ-141, REQ-143, REQ-146, REQ-176, REQ-179, REQ-180, REQ-181, REQ-183, REQ-189, REQ-190, REQ-191, REQ-194, REQ-195, REQ-196, REQ-199, REQ-203, REQ-210
     """
 
     positional = []
@@ -4977,7 +4918,6 @@ def _parse_run_options(args):
     debug_enabled = False
     raw_white_balance_mode = DEFAULT_RAW_WHITE_BALANCE_MODE
     auto_white_balance_mode = None
-    auto_white_balance_analysis_source = WHITE_BALANCE_ANALYSIS_SOURCE_EV_ZERO
     auto_white_balance_xphoto_domain = DEFAULT_WHITE_BALANCE_XPHOTO_DOMAIN
     hdr_merge_mode = HDR_MERGE_MODE_OPENCV_TONEMAP
     opencv_raw_values = {}
@@ -5250,8 +5190,8 @@ def _parse_run_options(args):
         if token.startswith("--bracketing="):
             ev_raw = token.split("=", 1)[1].strip()
             if ev_raw.lower() == "auto":
-                ev_value = float(round(DEFAULT_AUTO_EV_STEP, 1))
-                auto_ev_delta_enabled = False
+                ev_value = None
+                auto_ev_delta_enabled = True
                 idx += 1
                 continue
             parsed_ev = _parse_ev_option(ev_raw)
@@ -5426,9 +5366,11 @@ def _parse_run_options(args):
     if (
         not auto_ev_zero_enabled
         and auto_ev_delta_enabled
-        and not _is_forced_static_auto_bracketing_selected(args)
+        and not _is_explicit_auto_bracketing_selected(args)
     ):
-        print_error("--exposure requires numeric --bracketing value")
+        print_error(
+            "--exposure requires --bracketing=<value> or --bracketing=auto"
+        )
         return None
 
     if hdr_merge_mode not in _HDR_MERGE_MODES:
@@ -5565,7 +5507,6 @@ def _parse_run_options(args):
             merge_gamma_option=merge_gamma_option,
             raw_white_balance_mode=raw_white_balance_mode,
             white_balance_mode=auto_white_balance_mode,
-            white_balance_analysis_source=auto_white_balance_analysis_source,
             white_balance_xphoto_domain=auto_white_balance_xphoto_domain,
             opencv_tonemap_options=opencv_tonemap_options,
         ),
@@ -12436,15 +12377,21 @@ def _hlrecovery_luminance_float(np_module, image_rgb, maxval=1.0):
     """@brief Apply Luminance highlight reconstruction on normalized RGB tensor.
 
     @details Ports luminance method from attached source in RGB domain with
-    clipped-channel chroma ratio scaling and masked reconstruction.
+    clipped-channel chroma ratio scaling and masked reconstruction. Sanitizes
+    non-finite RGB input samples to `0.0` before method-local computation.
+    Complexity: O(H*W). Side effects: none.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb {object} RGB float tensor on normalized scale.
     @param maxval {float} Maximum channel value.
     @return {object} Highlight-reconstructed RGB float tensor.
-    @satisfies REQ-102
+    @satisfies REQ-102, REQ-256, REQ-257
     """
 
-    rgb = np_module.asarray(image_rgb, dtype=np_module.float64)
+    rgb = _sanitize_finite_float_array(
+        np_module=np_module,
+        image_data=image_rgb,
+        dtype=np_module.float64,
+    )
     red = rgb[..., 0]
     green = rgb[..., 1]
     blue = rgb[..., 2]
@@ -12516,17 +12463,22 @@ def _hlrecovery_cielab_float(
     @details Ports CIELab blending method from attached source with Lab-space
     channel repair under clipped highlights. The default XYZ matrix matches the
     display-referred standard RGB assumption used by postprocess highlight
-    reconstruction.
+    reconstruction. Sanitizes non-finite RGB input samples to `0.0` before
+    method-local computation. Complexity: O(H*W). Side effects: none.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb {object} Display-referred RGB float tensor on normalized scale.
     @param maxval {float} Maximum channel value.
     @param xyz_cam {object|None} Optional XYZ conversion matrix.
     @param cam_xyz {object|None} Optional inverse matrix.
     @return {object} Highlight-reconstructed display-referred RGB float tensor.
-    @satisfies REQ-102, REQ-241
+    @satisfies REQ-102, REQ-241, REQ-256, REQ-257
     """
 
-    rgb = np_module.asarray(image_rgb, dtype=np_module.float64)
+    rgb = _sanitize_finite_float_array(
+        np_module=np_module,
+        image_data=image_rgb,
+        dtype=np_module.float64,
+    )
     if xyz_cam is None:
         xyz_cam = np_module.array(
             [
@@ -12632,14 +12584,16 @@ def _hlrecovery_cielab_uint16(
 def _hlrecovery_blend_float(np_module, image_rgb, hlmax, maxval=1.0):
     """@brief Apply Blend highlight reconstruction on RGB tensor.
 
-    @details Ports blend method from attached source with quadratic channel blend
-    and desaturation phase driven by clipping metrics.
+    @details Ports blend method from attached source with quadratic channel
+    blend and desaturation phase driven by clipping metrics. Sanitizes
+    non-finite RGB and `hlmax` inputs to `0.0` before method-local
+    computation. Complexity: O(H*W). Side effects: none.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb {object} RGB float tensor on normalized scale.
     @param hlmax {object} Channel maxima vector with shape `(3,)`.
     @param maxval {float} Maximum channel value.
     @return {object} Highlight-reconstructed RGB float tensor.
-    @satisfies REQ-102
+    @satisfies REQ-102, REQ-256, REQ-257
     """
 
     blend_trans = np_module.array(
@@ -12658,8 +12612,16 @@ def _hlrecovery_blend_float(np_module, image_rgb, hlmax, maxval=1.0):
         ],
         dtype=np_module.float64,
     )
-    rgb = np_module.asarray(image_rgb, dtype=np_module.float64)
-    hlmax_values = np_module.asarray(hlmax, dtype=np_module.float64)
+    rgb = _sanitize_finite_float_array(
+        np_module=np_module,
+        image_data=image_rgb,
+        dtype=np_module.float64,
+    )
+    hlmax_values = _sanitize_finite_float_array(
+        np_module=np_module,
+        image_data=hlmax,
+        dtype=np_module.float64,
+    )
     if hlmax_values.shape != (3,):
         raise ValueError("hlmax must contain exactly 3 values")
     output = rgb.copy()
@@ -12824,15 +12786,21 @@ def _hlrecovery_color_propagation_float(np_module, image_rgb, maxval=1.0):
     @details Approximates RawTherapee `Color` recovery in post-merge RGB space:
     detect clipped channel regions, estimate one local opposite-channel
     reference from `3x3` means, derive one border chrominance offset, and fill
-    clipped samples deterministically.
+    clipped samples deterministically. Sanitizes non-finite RGB input samples
+    to `0.0` before method-local computation. Complexity: O(H*W). Side
+    effects: none.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb {object} RGB float tensor on normalized scale.
     @param maxval {float} Maximum channel value.
     @return {object} Highlight-reconstructed RGB float tensor.
-    @satisfies REQ-102, REQ-119
+    @satisfies REQ-102, REQ-119, REQ-256, REQ-257
     """
 
-    rgb = np_module.asarray(image_rgb, dtype=np_module.float64)
+    rgb = _sanitize_finite_float_array(
+        np_module=np_module,
+        image_data=image_rgb,
+        dtype=np_module.float64,
+    )
     output = rgb.copy()
     clip_level = _AUTO_LEVELS_BLEND_CLIP_THRESHOLD * maxval
     dark_floor = _AUTO_LEVELS_COLOR_PROPAGATION_DARK_FLOOR * clip_level
@@ -12903,16 +12871,21 @@ def _hlrecovery_inpaint_opposed_float(
     space: derive the RawTherapee clip threshold from `gain_threshold`,
     construct one cubic-root opposite-channel neighborhood predictor, estimate
     one border chrominance offset, and inpaint only pixels above the clip
-    threshold.
+    threshold. Sanitizes non-finite RGB input samples to `0.0` before method-
+    local computation. Complexity: O(H*W). Side effects: none.
     @param np_module {ModuleType} Imported numpy module.
     @param image_rgb {object} RGB float tensor on normalized scale.
     @param gain_threshold {float} Positive Inpaint Opposed gain threshold.
     @param maxval {float} Maximum channel value.
     @return {object} Highlight-reconstructed RGB float tensor.
-    @satisfies REQ-102, REQ-119
+    @satisfies REQ-102, REQ-119, REQ-256, REQ-257
     """
 
-    rgb = np_module.asarray(image_rgb, dtype=np_module.float64)
+    rgb = _sanitize_finite_float_array(
+        np_module=np_module,
+        image_data=image_rgb,
+        dtype=np_module.float64,
+    )
     output = rgb.copy()
     gain = _AUTO_LEVELS_INPAINT_GAIN_MULTIPLIER * float(gain_threshold)
     clip_level = (_AUTO_LEVELS_INPAINT_CLIP_RATIO / max(gain, 1e-12)) * maxval
@@ -13668,34 +13641,30 @@ def _postprocess(
     postprocess_options,
     auto_adjust_dependencies=None,
     numpy_module=None,
-    bits_per_color=16,
-    source_gamma_info=None,
     debug_context=None,
 ):
     """@brief Execute post-merge postprocessing stages on one RGB float image.
 
-    @details Accepts one merge-backend display-referred RGB payload, adapts
-    postprocess entry by normalizing only non-float encodings while preserving
-    float payload dynamic range, executes optional auto-brightness stage unless
-    pre-applied by the caller, executes optional auto-white-balance stage
-    unless pre-applied by the caller, executes static postprocess stage
-    (numeric gamma/brightness/contrast/saturation or auto-gamma replacement),
-    optional auto-levels stage, and mandatory auto-adjust stage entry with
-    internal enable-state validation while preserving float interfaces. When
-    debug context is present, emits persistent TIFF16 checkpoints after each
-    executed stage and returns clipped display-referred RGB float output for
-    final JPEG encoding.
+    @details Accepts one merge-backend display-referred RGB payload, adapts the
+    entry payload by normalizing only non-float encodings while preserving
+    float payload dynamic range, executes shared static postprocess
+    (`gamma->brightness->contrast->saturation` or auto-gamma replacement),
+    optional auto-levels, and mandatory auto-adjust stage entry with internal
+    enable-state validation. Standard CLI auto-brightness and auto-white-
+    balance are excluded from this function and remain pre-bracket stages in
+    `run(...)`. When debug context is present, emits persistent TIFF16
+    checkpoints for executed post-merge stages and returns clipped display-
+    referred RGB float output for final JPEG encoding. Complexity: O(H*W).
+    Side effects: optional TIFF writes via `imageio_module`.
     @param imageio_module {ModuleType} Imported imageio module used for debug TIFF checkpoint emission.
-    @param merged_image_float {object} Merged image payload produced by selected backend.
-    @param postprocess_options {PostprocessOptions} Shared TIFF-to-JPG correction settings.
-    @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` modules for the auto-adjust implementation.
+    @param merged_image_float {object} Merged image payload produced by the selected backend.
+    @param postprocess_options {PostprocessOptions} Shared post-merge correction settings.
+    @param auto_adjust_dependencies {tuple[ModuleType, ModuleType]|None} Optional `(cv2, numpy)` modules for auto-adjust.
     @param numpy_module {ModuleType|None} Optional numpy module for float-domain stages.
-    @param bits_per_color {int} Source DNG bit depth used by IA auto-white-balance estimation.
-    @param source_gamma_info {SourceGammaInfo|None} Source-gamma diagnostics used by xphoto `source-auto` estimation domain.
     @param debug_context {DebugArtifactContext|None} Optional persistent debug output metadata.
     @return {object} Postprocessed display-referred RGB float tensor in range `[0,1]`.
     @exception RuntimeError Raised when numpy or auto-adjust dependencies are missing.
-    @satisfies REQ-012, REQ-013, REQ-050, REQ-075, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-106, REQ-123, REQ-132, REQ-134, REQ-148, REQ-176, REQ-182, REQ-183, REQ-199, REQ-200, REQ-213, REQ-214, REQ-234, REQ-235, REQ-237, REQ-238
+    @satisfies REQ-012, REQ-100, REQ-101, REQ-102, REQ-103, REQ-104, REQ-105, REQ-106, REQ-123, REQ-132, REQ-134, REQ-148, REQ-176, REQ-214, REQ-234, REQ-235, REQ-237, REQ-238, REQ-252, REQ-253, REQ-254
     """
 
     if numpy_module is not None:
@@ -13713,44 +13682,6 @@ def _postprocess(
         np_module=np_module,
         image_data=merged_image_float,
     )
-    if (
-        postprocess_options.auto_brightness_enabled
-        and not postprocess_options.auto_brightness_pre_applied
-    ):
-        image_rgb_float = _apply_auto_brightness_rgb_float(
-            np_module=np_module,
-            image_rgb_float=image_rgb_float,
-            auto_brightness_options=postprocess_options.auto_brightness_options,
-        )
-        if debug_context is not None:
-            _write_debug_rgb_float_tiff(
-                imageio_module=imageio_module,
-                np_module=np_module,
-                debug_context=debug_context,
-                stage_suffix="_3.0_auto-brightness",
-                image_rgb_float=image_rgb_float,
-            )
-    if (
-        postprocess_options.auto_white_balance_mode is not None
-        and not postprocess_options.auto_white_balance_pre_applied
-    ):
-        image_rgb_float = _apply_auto_white_balance_stage_float(
-            image_rgb_float=image_rgb_float,
-            white_balance_mode=postprocess_options.auto_white_balance_mode,
-            auto_brightness_options=postprocess_options.auto_brightness_options,
-            white_balance_xphoto_domain=postprocess_options.auto_white_balance_xphoto_domain,
-            source_gamma_info=source_gamma_info,
-            bits_per_color=bits_per_color,
-            auto_adjust_dependencies=auto_adjust_dependencies,
-        )
-        if debug_context is not None:
-            _write_debug_rgb_float_tiff(
-                imageio_module=imageio_module,
-                np_module=np_module,
-                debug_context=debug_context,
-                stage_suffix="_3.5_auto-white-balance",
-                image_rgb_float=image_rgb_float,
-            )
     image_rgb_float = _apply_static_postprocess_float(
         np_module=np_module,
         image_rgb_float=image_rgb_float,
@@ -14139,23 +14070,26 @@ def _print_validated_run_parameters(
 def run(args):
     """@brief Execute `dng2jpg` command pipeline.
 
-    @details Parses command options, emits structured validated parameter summary via
-    `_print_validated_run_parameters` after file-path preconditions pass, validates
-    dependencies, detects source DNG bits-per-color from RAW metadata, resolves
-    `ev_zero` (static `0.0` default, static `--exposure=<value>`, or auto via
-    `--exposure=auto`) and `ev_delta` (iterative automatic when
-    `--bracketing` is omitted, static `--bracketing=<value>`, or forced static
-    `--bracketing=auto`), extracts one linear HDR base image
-    using selected RAW WB normalization mode, executes mandatory auto-white-balance
-    stage entry after auto-brightness with internal enable-state validation,
-    derives bracket payloads in canonical order, executes the selected HDR
-    backend with float input/output interfaces,
-    executes the float-interface post-merge pipeline, optionally emits persistent
-    debug TIFF checkpoints for executed stages, writes the final JPG, and guarantees
-    temporary artifact cleanup through isolated temporary directory lifecycle.
+    @details Parses command options, emits structured validated parameter
+    summary after file-path preconditions pass, validates dependencies, detects
+    source DNG bits-per-color from RAW metadata, resolves `ev_zero` (static
+    `0.0` default, static `--exposure=<value>`, or auto via
+    `--exposure=auto`) and `ev_delta` (automatic when `--bracketing` is
+    omitted or explicit `--bracketing=auto`, static for
+    `--bracketing=<value>`), extracts one linear HDR base image using the
+    selected RAW WB normalization mode, executes pre-bracket auto-brightness,
+    executes pre-bracket auto-white-balance with internal enable-state
+    validation, derives bracket payloads in canonical order, executes the
+    selected HDR backend with float input/output interfaces, executes the
+    post-merge `_postprocess(...)` pipeline without re-running auto-brightness
+    or auto-white-balance, optionally emits persistent debug TIFF checkpoints
+    for executed stages, writes the final JPG, and guarantees temporary-artifact
+    cleanup through isolated temporary-directory lifecycle. Complexity: O(H*W)
+    plus backend-specific merge cost. Side effects: filesystem I/O, stdout,
+    optional subprocess execution, optional debug TIFF writes.
     @param args {list[str]} Command argument vector excluding command token.
     @return {int} `0` on success; `1` on parse/validation/dependency/processing failure.
-    @satisfies PRJ-001, CTN-001, CTN-004, CTN-005, CTN-007, REQ-008, REQ-009, REQ-010, REQ-011, REQ-012, REQ-013, REQ-014, REQ-015, REQ-032, REQ-037, REQ-050, REQ-052, REQ-100, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-127, REQ-128, REQ-129, REQ-131, REQ-132, REQ-133, REQ-134, REQ-138, REQ-139, REQ-140, REQ-146, REQ-147, REQ-148, REQ-149, REQ-157, REQ-158, REQ-159, REQ-160, REQ-181, REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188, REQ-189, REQ-190, REQ-191, REQ-192, REQ-193, REQ-194, REQ-195, REQ-196, REQ-197, REQ-198, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207, REQ-215, REQ-216, REQ-217, REQ-218, REQ-219, REQ-220, REQ-236
+    @satisfies PRJ-001, CTN-001, CTN-004, CTN-005, CTN-007, REQ-008, REQ-009, REQ-010, REQ-011, REQ-012, REQ-013, REQ-014, REQ-015, REQ-032, REQ-037, REQ-050, REQ-052, REQ-100, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110, REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-126, REQ-127, REQ-128, REQ-129, REQ-131, REQ-132, REQ-133, REQ-134, REQ-138, REQ-139, REQ-140, REQ-146, REQ-147, REQ-148, REQ-149, REQ-157, REQ-158, REQ-159, REQ-160, REQ-181, REQ-182, REQ-183, REQ-184, REQ-185, REQ-186, REQ-187, REQ-188, REQ-189, REQ-190, REQ-191, REQ-192, REQ-193, REQ-194, REQ-195, REQ-196, REQ-197, REQ-198, REQ-203, REQ-204, REQ-205, REQ-206, REQ-207, REQ-215, REQ-216, REQ-217, REQ-218, REQ-219, REQ-220, REQ-236, REQ-252, REQ-253, REQ-254
     """
 
     if not _is_supported_runtime_os():
@@ -14181,9 +14115,6 @@ def run(args):
         auto_ev_zero_enabled,
         auto_ev_options,
     ) = parsed
-    forced_static_auto_bracketing_enabled = _is_forced_static_auto_bracketing_selected(
-        args
-    )
     enable_opencv_tonemap = _derive_opencv_tonemap_enabled(postprocess_options)
 
     if input_dng.suffix.lower() != ".dng":
@@ -14318,6 +14249,14 @@ def run(args):
                         image_rgb_float=base_rgb_float,
                         auto_brightness_options=postprocess_options.auto_brightness_options,
                     )
+                    if debug_context is not None:
+                        _write_debug_rgb_float_tiff(
+                            imageio_module=imageio_module,
+                            np_module=numpy_module,
+                            debug_context=debug_context,
+                            stage_suffix="_3.0_auto-brightness",
+                            image_rgb_float=base_rgb_float,
+                        )
                 white_balance_stage_dependencies = auto_adjust_dependencies
                 if white_balance_stage_dependencies is None:
                     white_balance_stage_dependencies = (None, numpy_module)
@@ -14331,6 +14270,17 @@ def run(args):
                     auto_adjust_dependencies=white_balance_stage_dependencies,
                     estimation_input_is_auto_brightness_preprocessed=postprocess_options.auto_brightness_enabled,
                 )
+                if (
+                    debug_context is not None
+                    and postprocess_options.auto_white_balance_mode is not None
+                ):
+                    _write_debug_rgb_float_tiff(
+                        imageio_module=imageio_module,
+                        np_module=numpy_module,
+                        debug_context=debug_context,
+                        stage_suffix="_3.5_auto-white-balance",
+                        image_rgb_float=base_rgb_float,
+                    )
                 if auto_ev_zero_enabled and auto_ev_delta_enabled:
                     if enable_opencv_tonemap:
                         if auto_adjust_dependencies is None:
@@ -14412,10 +14362,6 @@ def run(args):
                 if effective_ev_value is None:
                     raise ValueError("Missing resolved EV delta")
                 effective_ev_value = float(round(effective_ev_value, 1))
-                if forced_static_auto_bracketing_enabled:
-                    _print_forced_static_auto_bracketing_diagnostics(
-                        ev_delta=effective_ev_value,
-                    )
                 print_info(
                     f"Using EV bracket delta: {effective_ev_value:g}"
                     + (" (auto)" if auto_ev_delta_enabled else " (static)")
@@ -14539,26 +14485,19 @@ def run(args):
                     merged_image_float=merged_image_float,
                     merge_debug_snapshots=merge_debug_snapshots,
                 )
-            encode_postprocess_options = replace(
-                postprocess_options,
-                auto_brightness_pre_applied=postprocess_options.auto_brightness_enabled,
-                auto_white_balance_pre_applied=True,
-            )
             postprocessed_image_float = _postprocess(
                 imageio_module=imageio_module,
                 merged_image_float=merged_image_float,
-                postprocess_options=encode_postprocess_options,
+                postprocess_options=postprocess_options,
                 auto_adjust_dependencies=auto_adjust_dependencies,
                 numpy_module=numpy_module,
-                bits_per_color=bits_per_color,
-                source_gamma_info=source_gamma_info,
                 debug_context=debug_context,
             )
             _encode_jpg(
                 pil_image_module=pil_image_module,
                 postprocessed_image_float=postprocessed_image_float,
                 output_jpg=output_jpg,
-                postprocess_options=encode_postprocess_options,
+                postprocess_options=postprocess_options,
                 numpy_module=numpy_module,
                 piexif_module=piexif_module,
                 source_exif_payload=source_exif_payload,

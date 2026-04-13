@@ -19,6 +19,15 @@
   display-referred RGB float payloads, preventing `NaN`/`Inf` on signed
   OpenCV-Tonemap outputs while preserving non-negative backend behavior and
   float-domain boundary separation.
+- Standard CLI auto-brightness and auto-white-balance now execute only on the
+  pre-bracket linear-base image; `_postprocess(...)` now starts from
+  merge-backend output and executes only static postprocess, auto-levels, and
+  auto-adjust.
+- Auto-white-balance runtime selectors now exclude the dormant
+  `white_balance_analysis_source` concept so the option model matches the
+  CLI-accepted selector set.
+- Float-domain highlight-reconstruction helpers now sanitize non-finite RGB
+  inputs locally before method-specific recovery arithmetic.
 
 ## Behavioral Notes (2026-04-12)
 
@@ -47,10 +56,12 @@
   inputs, rejects all-non-finite base tensors, treats non-finite clipping
   metrics as clipped pixels, and enforces deterministic iteration/span guards to
   prevent non-terminating loops.
-- Exposure selector semantics now distinguish omitted `--bracketing` (iterative
-  automatic bracket solving) from explicit `--bracketing=auto` (forced static
-  half-span `0.1 EV`) and quantize static `--bracketing`/`--exposure` values to
-  one decimal place.
+- Exposure selector semantics now distinguish omitted `--bracketing`
+  (implicit automatic delta solving) from explicit `--bracketing=auto`
+  (automatic delta solving that also permits manual `--exposure=<value>`);
+  OpenCV-Tonemap still resolves any automatic delta request to fixed `0.1 EV`,
+  and static `--bracketing`/`--exposure` values remain quantized to one
+  decimal place.
 - Auto-brightness now routes low-variance/low-sample luminance through a
   fallback simple Reinhard safeguard while preserving finite-only luminance
   statistics; auto-gamma still falls back deterministically to identity gamma
@@ -230,7 +241,7 @@
         - _line(...): row line generation [src/dng2jpg/dng2jpg.py]
     - run(args): HDR conversion pipeline orchestration [src/dng2jpg/dng2jpg.py]
       - _is_supported_runtime_os(): Linux-only runtime guard [src/dng2jpg/dng2jpg.py]
-      - _parse_run_options(args): parse and validate conversion options, defaulting omitted `--bracketing` and `--exposure` to automatic exposure solving, mapping explicit `--bracketing=auto` to forced static `ev_delta=0.1`, rounding static `--bracketing`/`--exposure` values to one decimal place, and allowing `--exposure=<value>` only when bracketing resolves to static mode; rejects legacy removed options `--auto-ev`, `--auto-zero`, `--auto-zero-pct` with explicit "Removed option:" diagnostics; defaults omitted `--hdr-merge` to `OpenCV-Tonemap`, defaults omitted xphoto estimation domain to `linear`, and maps `--auto-white-balance=disable` to explicit stage bypass [src/dng2jpg/dng2jpg.py]
+      - _parse_run_options(args): parse and validate conversion options, defaulting omitted `--bracketing` and `--exposure` to automatic exposure solving, treating explicit `--bracketing=auto` as automatic backend-specific `ev_delta`, rounding static `--bracketing`/`--exposure` values to one decimal place, and allowing `--exposure=<value>` only when bracketing resolves to static mode or explicit auto-delta mode; rejects legacy removed options `--auto-ev`, `--auto-zero`, `--auto-zero-pct` with explicit "Removed option:" diagnostics; defaults omitted `--hdr-merge` to `OpenCV-Tonemap`, defaults omitted xphoto estimation domain to `linear`, and maps `--auto-white-balance=disable` to explicit stage bypass [src/dng2jpg/dng2jpg.py]
         - _parse_opencv_merge_backend_options(...): OpenCV backend option parsing [src/dng2jpg/dng2jpg.py]
         - _parse_post_gamma_auto_options(...): auto post-gamma option parsing [src/dng2jpg/dng2jpg.py]
         - _parse_auto_brightness_options(...): auto-brightness option parsing [src/dng2jpg/dng2jpg.py]
@@ -241,7 +252,7 @@
         - _parse_hdr_merge_option(...): backend selector parsing [src/dng2jpg/dng2jpg.py]
         - _parse_ev_option(...): EV delta parsing [src/dng2jpg/dng2jpg.py]
         - _parse_ev_center_option(...): EV center parsing for `--exposure=<value>` (numeric only; auto sentinel handled inline) [src/dng2jpg/dng2jpg.py]
-        - _is_forced_static_auto_bracketing_selected(...): forced static `--bracketing=auto` selector detection [src/dng2jpg/dng2jpg.py]
+        - _is_explicit_auto_bracketing_selected(...): explicit `--bracketing=auto` selector detection for reachable auto-delta-only mode [src/dng2jpg/dng2jpg.py]
         - _parse_gamma_option(...): post-gamma numeric parsing [src/dng2jpg/dng2jpg.py]
         - _parse_jpg_compression_option(...): JPG compression parsing [src/dng2jpg/dng2jpg.py]
         - _resolve_default_postprocess(...): backend default postprocess profile resolution keyed by backend variant (`Luminace-HDR`, `OpenCV-Merge`, `OpenCV-Tonemap`, `HDR-Plus`), with `OpenCV-Tonemap drago=(1.0,1.0,1.4,1.0)` and `mantiuk=(0.9,1.0,1.3,1.0)` [src/dng2jpg/dng2jpg.py]
@@ -292,15 +303,14 @@
               - _resolve_xphoto_estimation_payload_scale(...): robust rescale-factor derivation [src/dng2jpg/dng2jpg.py]
             - _compress_xphoto_estimation_payload_highlights_soft_knee(...): monotonic highlight shoulder compression [src/dng2jpg/dng2jpg.py]
             - _quantize_xphoto_estimation_payload_rgb(...): backend-local quantization (`uint8|uint16`) [src/dng2jpg/dng2jpg.py]
-      - _resolve_joint_auto_ev_solution(...): joint auto EV center+delta resolution when both `--exposure=auto` and `--bracketing=auto` for non-OpenCV-Tonemap backends [src/dng2jpg/dng2jpg.py]
+      - _resolve_joint_auto_ev_solution(...): joint auto EV center+delta resolution when automatic `ev_zero` and automatic `ev_delta` are both active for non-OpenCV-Tonemap backends [src/dng2jpg/dng2jpg.py]
         - _calculate_auto_zero_evaluations(...): EV quality measurements with finite-safe heuristics [src/dng2jpg/dng2jpg.py]
           - _calculate_ettr_ev(...): ETTR heuristic with finite-sample filtering and deterministic `0.0` fallback [src/dng2jpg/dng2jpg.py]
           - _calculate_detail_preservation_ev(...): detail heuristic with non-finite sanitization and deterministic `0.0` fallback [src/dng2jpg/dng2jpg.py]
         - _select_ev_zero_candidate(evaluations): EV center selection as signed numeric minimum across `ev_best`, `ev_ettr`, `ev_detail` [src/dng2jpg/dng2jpg.py]
         - _resolve_auto_ev_delta(...): iterative bracket half-span expansion algorithm [src/dng2jpg/dng2jpg.py]
-      - _resolve_auto_ev_delta(...): standalone auto EV delta resolution when only `--bracketing=auto` (without `--exposure=auto`) and backend is not OpenCV-Tonemap [src/dng2jpg/dng2jpg.py]
-      - _resolve_opencv_tonemap_auto_ev_delta(): OpenCV-Tonemap auto-bracketing fixed half-span resolver with skip diagnostics [src/dng2jpg/dng2jpg.py]
-      - _print_forced_static_auto_bracketing_diagnostics(...): explicit `--bracketing=auto` static-half-span diagnostics [src/dng2jpg/dng2jpg.py]
+      - _resolve_auto_ev_delta(...): standalone auto EV delta resolution when only automatic `ev_delta` is active and backend is not OpenCV-Tonemap [src/dng2jpg/dng2jpg.py]
+      - _resolve_opencv_tonemap_auto_ev_delta(): OpenCV-Tonemap automatic-delta fixed half-span resolver with skip diagnostics [src/dng2jpg/dng2jpg.py]
       - _build_exposure_multipliers(ev_value, ev_zero): EV triplet multipliers with finite-safe exponentiation guard [src/dng2jpg/dng2jpg.py]
         - _safe_pow2_ev(exponent, context): deterministic `2**EV` finite/overflow validator [src/dng2jpg/dng2jpg.py]
       - _extract_bracket_images_float(...): bracket extraction with optional side-bracket bypass for OpenCV-Tonemap [src/dng2jpg/dng2jpg.py]
@@ -336,7 +346,7 @@
         - _hdrplus_merge_temporal_rgb(...): temporal merge [src/dng2jpg/dng2jpg.py]
         - _hdrplus_merge_spatial_rgb(...): spatial merge [src/dng2jpg/dng2jpg.py]
       - _write_hdr_merge_debug_checkpoints(...): optional stage checkpoint writer [src/dng2jpg/dng2jpg.py]
-      - _postprocess(...): postprocess [src/dng2jpg/dng2jpg.py]
+      - _postprocess(...): post-merge static postprocess, auto-levels, and auto-adjust dispatch without auto-brightness or auto-white-balance re-entry [src/dng2jpg/dng2jpg.py]
         - _prepare_postprocess_entry_rgb_float(...): postprocess entry payload adaptation [src/dng2jpg/dng2jpg.py]
         - _apply_static_postprocess_float(...): gamma/brightness/contrast/saturation stage with sign-preserving numeric post-gamma for signed float backend payloads [src/dng2jpg/dng2jpg.py]
         - _apply_auto_levels_float(...): optional auto-levels stage [src/dng2jpg/dng2jpg.py]
@@ -372,12 +382,12 @@
       - _check_online_version(force): optional release check with silent same-version outcome [src/dng2jpg/core.py]
       - _run_management(command): optional management command [src/dng2jpg/core.py]
       - run(args): conversion pipeline [src/dng2jpg/dng2jpg.py]
-        - _parse_run_options(args): CLI option parser defaulting omitted `--hdr-merge` to `OpenCV-Tonemap`, defaulting xphoto estimation domain to `linear`, mapping explicit `--bracketing=auto` to static `ev_delta=0.1`, rounding static EV selectors to one decimal place, including explicit `--auto-white-balance=disable` stage bypass mapping, rejecting removed options (`--auto-ev`, `--auto-zero`, `--auto-zero-pct`) with explicit diagnostics, and enforcing that `--exposure=<value>` requires static bracketing resolution [src/dng2jpg/dng2jpg.py]
+        - _parse_run_options(args): CLI option parser defaulting omitted `--hdr-merge` to `OpenCV-Tonemap`, defaulting xphoto estimation domain to `linear`, treating explicit `--bracketing=auto` as automatic backend-specific `ev_delta`, rounding static EV selectors to one decimal place, including explicit `--auto-white-balance=disable` stage bypass mapping, rejecting removed options (`--auto-ev`, `--auto-zero`, `--auto-zero-pct`) with explicit diagnostics, and enforcing that omitted `--bracketing` keeps manual `--exposure=<value>` unreachable [src/dng2jpg/dng2jpg.py]
         - _print_validated_run_parameters(...): structured validated parameter summary after file-path preconditions [src/dng2jpg/dng2jpg.py]
         - _extract_base_rgb_linear_float(...): RAW extraction and WB normalization [src/dng2jpg/dng2jpg.py]
         - _extract_bracket_images_float(...): bracket synthesis with OpenCV-Tonemap side-bracket skip path [src/dng2jpg/dng2jpg.py]
         - _run_luminance_hdr_cli(...) / _run_opencv_merge_backend(...) / _run_opencv_tonemap_backend(...) / _run_hdr_plus_merge(...): backend merge dispatch [src/dng2jpg/dng2jpg.py]
-        - _postprocess(...): postprocess stage dispatch [src/dng2jpg/dng2jpg.py]
+        - _postprocess(...): post-merge postprocess stage dispatch without auto-brightness or auto-white-balance branches [src/dng2jpg/dng2jpg.py]
         - _encode_jpg(...): final JPEG encode stage [src/dng2jpg/dng2jpg.py]
         - _sync_output_file_timestamps_from_exif(...): output timestamp synchronization [src/dng2jpg/dng2jpg.py]
 - External Boundaries:

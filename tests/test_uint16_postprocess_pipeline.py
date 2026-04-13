@@ -1364,7 +1364,17 @@ def test_encode_jpg_refreshes_exif_thumbnail_from_final_quantized_rgb_uint8(
 def test_encode_jpg_writes_debug_checkpoints_with_progressive_suffixes(
     monkeypatch, tmp_path
 ) -> None:
-    """Postprocess debug mode must persist TIFF checkpoints in execution order."""
+    """@brief Validate post-merge debug checkpoints exclude pre-merge stages.
+
+    @details Exercises `_postprocess(...)` with auto-brightness enabled in the
+    option payload, verifies `_postprocess(...)` never invokes the pre-merge
+    auto-brightness stage, and verifies debug checkpoints cover only static
+    postprocess and auto-levels in execution order.
+    @param monkeypatch {object} Pytest monkeypatch fixture.
+    @param tmp_path {Path} Temporary output directory.
+    @return {None} Assertions only.
+    @satisfies TST-100
+    """
 
     merged_rgb_float = np.array(
         [
@@ -1384,7 +1394,6 @@ def test_encode_jpg_writes_debug_checkpoints_with_progressive_suffixes(
     call_trace: list[str] = []
 
     original_static = dng2jpg_module._apply_static_postprocess_float  # pylint: disable=protected-access
-    original_auto_brightness = dng2jpg_module._apply_auto_brightness_rgb_float  # pylint: disable=protected-access
     original_auto_levels = dng2jpg_module._apply_auto_levels_float  # pylint: disable=protected-access
 
     def _tracked_static(*, np_module, image_rgb_float, postprocess_options, **kwargs):
@@ -1394,14 +1403,6 @@ def test_encode_jpg_writes_debug_checkpoints_with_progressive_suffixes(
             image_rgb_float=image_rgb_float,
             postprocess_options=postprocess_options,
             **kwargs,
-        )
-
-    def _tracked_auto_brightness(*, np_module, image_rgb_float, auto_brightness_options):
-        call_trace.append("auto-brightness")
-        return original_auto_brightness(
-            np_module=np_module,
-            image_rgb_float=image_rgb_float,
-            auto_brightness_options=auto_brightness_options,
         )
 
     def _tracked_auto_levels(*, np_module, image_rgb_float, auto_levels_options):
@@ -1415,13 +1416,15 @@ def test_encode_jpg_writes_debug_checkpoints_with_progressive_suffixes(
     monkeypatch.setattr(dng2jpg_module, "_apply_static_postprocess_float", _tracked_static)
     monkeypatch.setattr(
         dng2jpg_module,
-        "_apply_auto_brightness_rgb_float",
-        _tracked_auto_brightness,
+        "_apply_auto_levels_float",
+        _tracked_auto_levels,
     )
     monkeypatch.setattr(
         dng2jpg_module,
-        "_apply_auto_levels_float",
-        _tracked_auto_levels,
+        "_apply_auto_brightness_rgb_float",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("_postprocess must not invoke auto-brightness")
+        ),
     )
     postprocess_options = dng2jpg_module.PostprocessOptions(
         post_gamma=1.05,
@@ -1449,10 +1452,9 @@ def test_encode_jpg_writes_debug_checkpoints_with_progressive_suffixes(
         numpy_module=np,
     )
 
-    assert call_trace == ["auto-brightness", "static", "auto-levels"]
+    assert call_trace == ["static", "auto-levels"]
     written_paths = [Path(path) for path, _image in imageio_module.writes]
     assert written_paths == [
-        tmp_path / "sample_3.0_auto-brightness.tiff",
         tmp_path / "sample_4.1_static_correction_gamma.tiff",
         tmp_path / "sample_4.2_static_correction_brightness.tiff",
         tmp_path / "sample_4.3_static_correction_contrast.tiff",
@@ -1464,16 +1466,26 @@ def test_encode_jpg_writes_debug_checkpoints_with_progressive_suffixes(
         assert image.shape[-1] == 3
 
 
-def test_encode_jpg_writes_auto_white_balance_checkpoint_when_enabled(
-    monkeypatch, tmp_path
+def test_postprocess_does_not_invoke_auto_white_balance_stage_when_enabled(
+    monkeypatch,
+    tmp_path,
 ) -> None:
-    """Postprocess debug mode must persist auto-white-balance checkpoint."""
+    """@brief Validate `_postprocess(...)` excludes auto-white-balance.
+
+    @details Exercises `_postprocess(...)` with `white_balance_mode` enabled,
+    verifies the pre-merge auto-white-balance stage is never invoked, and
+    verifies no auto-white-balance checkpoint is emitted from the post-merge
+    pipeline.
+    @param monkeypatch {object} Pytest monkeypatch fixture.
+    @param tmp_path {Path} Temporary output directory.
+    @return {None} Assertions only.
+    @satisfies TST-100
+    """
 
     merged_rgb_float = np.full((2, 2, 3), 0.25, dtype=np.float32)
     imageio_module = _FakeImageIoModule(
         merged_rgb_u16=(merged_rgb_float * 65535.0).astype(np.uint16)
     )
-    pil_module = _FakePilModule()
     debug_context = dng2jpg_module.DebugArtifactContext(  # pylint: disable=protected-access
         output_dir=tmp_path,
         input_stem="sample",
@@ -1482,38 +1494,32 @@ def test_encode_jpg_writes_auto_white_balance_checkpoint_when_enabled(
     monkeypatch.setattr(
         dng2jpg_module,
         "_apply_auto_white_balance_stage_float",
-        lambda **kwargs: np.array(kwargs["image_rgb_float"], copy=True),
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("_postprocess must not invoke auto-white-balance")
+        ),
     )
 
-    postprocess_options = dng2jpg_module.PostprocessOptions(
-        post_gamma=1.0,
-        brightness=1.0,
-        contrast=1.0,
-        saturation=1.0,
-        jpg_compression=25,
-        auto_brightness_enabled=False,
-        auto_levels_enabled=False,
-        auto_adjust_enabled=False,
-        debug_enabled=True,
-        white_balance_mode="TTL",
-    )
     postprocessed_image_float = dng2jpg_module._postprocess(  # pylint: disable=protected-access
         imageio_module=imageio_module,
         merged_image_float=merged_rgb_float,
-        postprocess_options=postprocess_options,
+        postprocess_options=dng2jpg_module.PostprocessOptions(
+            post_gamma=1.0,
+            brightness=1.0,
+            contrast=1.0,
+            saturation=1.0,
+            jpg_compression=25,
+            auto_brightness_enabled=False,
+            auto_levels_enabled=False,
+            auto_adjust_enabled=False,
+            debug_enabled=True,
+            white_balance_mode="TTL",
+        ),
         numpy_module=np,
         debug_context=debug_context,
     )
-    dng2jpg_module._encode_jpg(  # pylint: disable=protected-access
-        pil_image_module=pil_module,
-        postprocessed_image_float=postprocessed_image_float,
-        output_jpg=tmp_path / "out.jpg",
-        postprocess_options=postprocess_options,
-        numpy_module=np,
-    )
 
-    written_paths = [Path(path) for path, _image in imageio_module.writes]
-    assert written_paths == [tmp_path / "sample_3.5_auto-white-balance.tiff"]
+    np.testing.assert_allclose(postprocessed_image_float, merged_rgb_float)
+    assert imageio_module.writes == []
 
 
 def test_write_hdr_merge_debug_checkpoints_writes_merge_gamma_boundaries(
@@ -2460,6 +2466,30 @@ def test_print_help_documents_all_conversion_options_with_defaults(capsys) -> No
     assert "mantiuk" in output and "0.9 / 1 / 1.3 / 1" in output
 
 
+def test_print_help_documents_reachability_matrix_and_pre_merge_stage_scope(
+    capsys,
+) -> None:
+    """@brief Validate help reachability matrix and pre-merge stage scope.
+
+    @details Verifies help text documents the reachable
+    `--bracketing`/`--exposure` combinations and explicitly confines
+    auto-brightness and auto-white-balance to pre-merge execution.
+    @param capsys {object} Pytest capture fixture.
+    @return {None} Assertions only.
+    @satisfies TST-101
+    """
+
+    dng2jpg_module.print_help("test-version")
+    output = capsys.readouterr().out
+
+    assert "Reachability matrix:" in output
+    assert "auto ev_zero+delta" in output
+    assert "numeric+omitted=`auto ev_zero" in output
+    assert "auto ev_delta only" in output
+    assert "numeric+numeric=`static`" in output
+    assert "Standard CLI never re-runs this stage inside `_postprocess(...)`." in output
+
+
 def test_parse_run_options_rejects_unknown_hdr_merge_backend() -> None:
     """Parser must reject unknown `--hdr-merge` selector values."""
 
@@ -2470,7 +2500,14 @@ def test_parse_run_options_rejects_unknown_hdr_merge_backend() -> None:
 
 
 def test_parse_run_options_auto_ev_defaults_and_explicit_ev_auto() -> None:
-    """Auto exposure must default to enabled and be selectable by `--bracketing=auto`."""
+    """@brief Validate automatic bracketing defaults and explicit auto selector.
+
+    @details Verifies omitted selectors keep automatic `ev_zero` and
+    automatic `ev_delta`, and verifies explicit `--bracketing=auto` preserves
+    automatic `ev_delta` instead of forcing a static `0.1` payload.
+    @return {None} Assertions only.
+    @satisfies TST-001
+    """
 
     parsed_default_auto = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         ["input.dng", "output.jpg"]
@@ -2486,8 +2523,8 @@ def test_parse_run_options_auto_ev_defaults_and_explicit_ev_auto() -> None:
         ["input.dng", "output.jpg", "--bracketing=auto"]
     )
     assert parsed_explicit_auto is not None
-    assert parsed_explicit_auto[2] == 0.1
-    assert parsed_explicit_auto[3] is False
+    assert parsed_explicit_auto[2] is None
+    assert parsed_explicit_auto[3] is True
 
 
 def test_parse_run_options_rejects_removed_auto_ev_option(capsys) -> None:
@@ -2527,15 +2564,41 @@ def test_parse_run_options_static_ev_preserves_manual_ev_zero() -> None:
     assert parsed_static[12] is False
 
 
+def test_parse_run_options_accepts_manual_exposure_with_explicit_auto_bracketing() -> None:
+    """@brief Validate reachable `auto ev_delta only` parser state.
+
+    @details Verifies `--bracketing=auto --exposure=<value>` keeps automatic
+    `ev_delta` while preserving manual `ev_zero`.
+    @return {None} Assertions only.
+    @satisfies TST-001
+    """
+
+    parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
+        ["input.dng", "output.jpg", "--bracketing=auto", "--exposure=0.5"]
+    )
+    assert parsed is not None
+    assert parsed[2] is None
+    assert parsed[3] is True
+    assert parsed[11] == 0.5
+    assert parsed[12] is False
+
+
 def test_parse_run_options_rejects_ev_zero_without_ev(capsys) -> None:
-    """`--exposure` must require static `--ev` mode."""
+    """@brief Validate unreachable manual-exposure parser combination.
+
+    @details Verifies omitted `--bracketing` keeps manual `--exposure=<value>`
+    invalid and emits deterministic reachability diagnostics.
+    @param capsys {object} Pytest capture fixture.
+    @return {None} Assertions only.
+    @satisfies TST-001
+    """
 
     parsed = dng2jpg_module._parse_run_options(  # pylint: disable=protected-access
         ["input.dng", "output.jpg", "--exposure=0.5"]
     )
     assert parsed is None
     captured = capsys.readouterr()
-    assert "--exposure requires numeric --bracketing value" in captured.err
+    assert "--exposure requires --bracketing=<value> or --bracketing=auto" in captured.err
 
 
 def test_parse_run_options_last_exposure_auto_overrides_previous_manual_value() -> None:
@@ -5288,6 +5351,86 @@ def test_apply_auto_levels_color_methods_require_explicit_enable(
     ]
 
 
+def test_hlrecovery_float_helpers_sanitize_non_finite_inputs_and_preserve_finite_noop() -> None:
+    """@brief Validate direct highlight-recovery helper hardening.
+
+    @details Exercises `_hlrecovery_luminance_float(...)`,
+    `_hlrecovery_cielab_float(...)`, `_hlrecovery_blend_float(...)`,
+    `_hlrecovery_color_propagation_float(...)`, and
+    `_hlrecovery_inpaint_opposed_float(...)` with finite no-op input and
+    `NaN/+Inf/-Inf`-contaminated input. Verifies finite no-op behavior remains
+    unchanged and verifies direct helper reuse yields finite outputs after local
+    sanitization.
+    @return {None} Assertions only.
+    @satisfies TST-102
+    """
+
+    finite_image = np.array(
+        [[[0.10, 0.20, 0.30], [0.40, 0.20, 0.10]]],
+        dtype=np.float32,
+    )
+    non_finite_image = np.array(
+        [[[np.nan, 1.20, np.inf], [-np.inf, 0.30, 0.40]]],
+        dtype=np.float32,
+    )
+    helper_specs = (
+        (
+            "luminance",
+            lambda image: dng2jpg_module._hlrecovery_luminance_float(  # pylint: disable=protected-access
+                np_module=np,
+                image_rgb=image,
+                maxval=1.0,
+            ),
+        ),
+        (
+            "cielab",
+            lambda image: dng2jpg_module._hlrecovery_cielab_float(  # pylint: disable=protected-access
+                np_module=np,
+                image_rgb=image,
+                maxval=1.0,
+            ),
+        ),
+        (
+            "blend",
+            lambda image: dng2jpg_module._hlrecovery_blend_float(  # pylint: disable=protected-access
+                np_module=np,
+                image_rgb=image,
+                hlmax=np.array([np.inf, 1.0, 0.8], dtype=np.float32),
+                maxval=1.0,
+            ),
+        ),
+        (
+            "color-propagation",
+            lambda image: dng2jpg_module._hlrecovery_color_propagation_float(  # pylint: disable=protected-access
+                np_module=np,
+                image_rgb=image,
+                maxval=1.0,
+            ),
+        ),
+        (
+            "inpaint-opposed",
+            lambda image: dng2jpg_module._hlrecovery_inpaint_opposed_float(  # pylint: disable=protected-access
+                np_module=np,
+                image_rgb=image,
+                gain_threshold=1.0,
+                maxval=1.0,
+            ),
+        ),
+    )
+
+    for helper_name, helper in helper_specs:
+        finite_output = np.asarray(helper(finite_image), dtype=np.float64)
+        np.testing.assert_allclose(
+            finite_output,
+            finite_image.astype(np.float64),
+            rtol=0.0,
+            atol=0.0,
+            err_msg=helper_name,
+        )
+        non_finite_output = np.asarray(helper(non_finite_image), dtype=np.float64)
+        assert np.isfinite(non_finite_output).all(), helper_name
+
+
 def test_parse_run_options_accepts_hdrplus_controls() -> None:
     """Parser must expose HDR+ proxy, alignment, and temporal knobs."""
 
@@ -5857,8 +6000,23 @@ def test_run_debug_writes_extraction_and_merge_checkpoints(monkeypatch, tmp_path
     ]
 
 
-def test_run_auto_ev_prints_joint_candidate_diagnostics(monkeypatch, tmp_path, capsys) -> None:
-    """Automatic runtime must print heuristic anchors and the selected joint solution."""
+def test_run_auto_ev_prints_joint_candidate_diagnostics(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    """@brief Validate joint automatic `ev_zero+delta` runtime diagnostics.
+
+    @details Exercises `run(...)` with explicit `--bracketing=auto` on the
+    OpenCV-Merge backend, verifies automatic `ev_zero+delta` resolution,
+    verifies heuristic-diagnostic emission, and verifies iterative delta
+    diagnostics instead of the OpenCV-Tonemap skip path.
+    @param monkeypatch {object} Pytest monkeypatch fixture.
+    @param tmp_path {Path} Temporary output directory.
+    @param capsys {object} Pytest capture fixture.
+    @return {None} Assertions only.
+    @satisfies TST-001
+    """
 
     input_dng = tmp_path / "scene.dng"
     input_dng.write_bytes(b"fake-dng")
@@ -5957,15 +6115,271 @@ def test_run_auto_ev_prints_joint_candidate_diagnostics(monkeypatch, tmp_path, c
 
     assert exit_code == 0
     output = capsys.readouterr().out
-    assert "Using exposure mode: static" in output
-    assert "Using EV bracket delta: 0.1 (static)" in output
+    assert "Using exposure mode: auto ev_zero+delta" in output
+    assert "Using EV bracket delta:" in output
+    assert "(auto)" in output
     assert "Exposure Misure EV ev_best:" in output
     assert "Exposure Misure EV ev_ettr:" in output
     assert "Exposure Misure EV ev_detail:" in output
     assert "Exposure planning selected ev_zero:" in output
-    assert "Bracket step: skipped" in output
+    assert "Bracket step: ev_delta=" in output
+    assert "Bracket step: skipped" not in output
     assert "Exposure planning selected bracket half-span:" in output
     assert "Export EV triplet:" in output
+
+
+def test_run_opencv_tonemap_auto_ev_delta_prints_skip_diagnostics(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    """@brief Validate OpenCV-Tonemap automatic-delta skip diagnostics.
+
+    @details Exercises `run(...)` twice on the OpenCV-Tonemap backend with
+    omitted bracketing and explicit `--bracketing=auto`, verifies both paths
+    emit the deterministic skip diagnostics, and verifies both resolve the same
+    automatic `ev_delta=0.1` payload.
+    @param monkeypatch {object} Pytest monkeypatch fixture.
+    @param tmp_path {Path} Temporary output directory.
+    @param capsys {object} Pytest capture fixture.
+    @return {None} Assertions only.
+    @satisfies TST-079
+    """
+
+    input_dng = tmp_path / "scene-tonemap.dng"
+    input_dng.write_bytes(b"fake-dng")
+    output_jpg = tmp_path / "scene-tonemap.jpg"
+    raw_pixels = np.array(
+        [
+            [[1000, 2000, 3000], [4000, 5000, 6000]],
+            [[7000, 8000, 9000], [10000, 11000, 12000]],
+        ],
+        dtype=np.uint16,
+    )
+
+    class _FakeRawHandle:
+        def __init__(self) -> None:
+            self.raw_image_visible = np.zeros((2, 2), dtype=np.uint16)
+            self.white_level = int(16383)
+            self.camera_whitebalance = (1.0, 1.0, 1.0, 0.0)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            del exc_type, exc, tb
+
+        def postprocess(
+            self,
+            *,
+            output_bps,
+            use_camera_wb,
+            no_auto_bright,
+            gamma,
+            user_wb,
+            output_color,
+            no_auto_scale,
+            user_flip,
+        ) -> np.ndarray:
+            del (
+                output_bps,
+                use_camera_wb,
+                no_auto_bright,
+                gamma,
+                user_wb,
+                output_color,
+                no_auto_scale,
+                user_flip,
+            )
+            return np.array(raw_pixels, copy=True)
+
+    class _FakeRawPyModule:
+        LibRawError = RuntimeError
+
+        @staticmethod
+        def imread(_path: str) -> _FakeRawHandle:
+            return _FakeRawHandle()
+
+    fake_imageio_module = _FakeImageIoModule(
+        merged_rgb_u16=np.full((2, 2, 3), 32768, dtype=np.uint16)
+    )
+    fake_pil_module = _FakePilModule()
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_load_image_dependencies",
+        lambda: (_FakeRawPyModule(), fake_imageio_module, fake_pil_module),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_extract_dng_exif_payload_and_timestamp",
+        lambda **_kwargs: (None, None, 1, 0.125),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_resolve_auto_adjust_dependencies",
+        lambda: (_FakeOpenCvModule(), np),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_postprocess",
+        lambda **kwargs: kwargs["merged_image_float"],
+    )
+    monkeypatch.setattr(dng2jpg_module, "_encode_jpg", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_sync_output_file_timestamps_from_exif",
+        lambda **_kwargs: None,
+    )
+
+    first_exit_code = dng2jpg_module.run([
+        str(input_dng),
+        str(output_jpg),
+        "--hdr-merge=OpenCV-Tonemap",
+    ])
+    first_output = capsys.readouterr().out
+
+    second_exit_code = dng2jpg_module.run([
+        str(input_dng),
+        str(output_jpg),
+        "--hdr-merge=OpenCV-Tonemap",
+        "--bracketing=auto",
+    ])
+    second_output = capsys.readouterr().out
+
+    assert first_exit_code == 0
+    assert second_exit_code == 0
+    for output in (first_output, second_output):
+        assert "Bracket step: skipped" in output
+        assert "Exposure planning selected bracket half-span: 0.100000 EV" in output
+        assert "Using EV bracket delta: 0.1 (auto)" in output
+
+
+def test_run_auto_ev_delta_only_uses_manual_center_and_iterative_delta(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    """@brief Validate reachable runtime branch `auto ev_delta only`.
+
+    @details Exercises `run(...)` with `--bracketing=auto --exposure=<value>`
+    on the OpenCV-Merge backend, verifies manual `ev_zero` is preserved,
+    verifies automatic `ev_delta` remains iterative, and verifies auto-zero
+    diagnostics stay disabled.
+    @param monkeypatch {object} Pytest monkeypatch fixture.
+    @param tmp_path {Path} Temporary output directory.
+    @param capsys {object} Pytest capture fixture.
+    @return {None} Assertions only.
+    @satisfies TST-001
+    """
+
+    input_dng = tmp_path / "scene-auto-delta.dng"
+    input_dng.write_bytes(b"fake-dng")
+    output_jpg = tmp_path / "scene-auto-delta.jpg"
+    raw_pixels = np.array(
+        [
+            [[1000, 2000, 3000], [4000, 5000, 6000]],
+            [[7000, 8000, 9000], [10000, 11000, 12000]],
+        ],
+        dtype=np.uint16,
+    )
+
+    class _FakeRawHandle:
+        def __init__(self) -> None:
+            self.raw_image_visible = np.zeros((2, 2), dtype=np.uint16)
+            self.white_level = int(16383)
+            self.camera_whitebalance = (1.0, 1.0, 1.0, 0.0)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            del exc_type, exc, tb
+
+        def postprocess(
+            self,
+            *,
+            output_bps,
+            use_camera_wb,
+            no_auto_bright,
+            gamma,
+            user_wb,
+            output_color,
+            no_auto_scale,
+            user_flip,
+        ) -> np.ndarray:
+            del (
+                output_bps,
+                use_camera_wb,
+                no_auto_bright,
+                gamma,
+                user_wb,
+                output_color,
+                no_auto_scale,
+                user_flip,
+            )
+            return np.array(raw_pixels, copy=True)
+
+    class _FakeRawPyModule:
+        LibRawError = RuntimeError
+
+        @staticmethod
+        def imread(_path: str) -> _FakeRawHandle:
+            return _FakeRawHandle()
+
+    fake_imageio_module = _FakeImageIoModule(
+        merged_rgb_u16=np.full((2, 2, 3), 32768, dtype=np.uint16)
+    )
+    fake_pil_module = _FakePilModule()
+
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_load_image_dependencies",
+        lambda: (_FakeRawPyModule(), fake_imageio_module, fake_pil_module),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_extract_dng_exif_payload_and_timestamp",
+        lambda **_kwargs: (None, None, 1, 0.125),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_resolve_auto_adjust_dependencies",
+        lambda: (_FakeOpenCvModule(), np),
+    )
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_postprocess",
+        lambda **kwargs: kwargs["merged_image_float"],
+    )
+    monkeypatch.setattr(dng2jpg_module, "_encode_jpg", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        dng2jpg_module,
+        "_sync_output_file_timestamps_from_exif",
+        lambda **_kwargs: None,
+    )
+
+    exit_code = dng2jpg_module.run(
+        [
+            str(input_dng),
+            str(output_jpg),
+            "--bracketing=auto",
+            "--exposure=0.5",
+            "--hdr-merge=OpenCV-Merge",
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "Using exposure mode: auto ev_delta" in output
+    assert "Using selected EV center (ev_zero): 0.5" in output
+    assert "Using EV bracket delta:" in output
+    assert "(auto)" in output
+    assert "Bracket step: ev_delta=" in output
+    assert "Bracket step: skipped" not in output
+    assert "Exposure Misure EV ev_best:" not in output
+    assert "Exposure Misure EV ev_ettr:" not in output
+    assert "Exposure Misure EV ev_detail:" not in output
 
 
 def test_run_static_ev_uses_manual_center_and_reports_static_mode(
