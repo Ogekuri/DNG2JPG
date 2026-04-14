@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.7.0](https://github.com/Ogekuri/DNG2JPG/compare/v0.6.0..v0.7.0) - 2026-04-14
+### 📚  Documentation
+- refresh runtime flowchart for conversion pipeline [useReq] *(core)*
+  - normalize optional-stage decisions for auto-brightness, auto-white-balance, auto-levels, and auto-adjust
+  - align backend and exposure branches with current main-thread runtime flow
+  - keep docs/FLOWCHART.md as a single Mermaid graph TD block
+- regenerate runtime flowchart [useReq] *(core)*
+  - flow-id: 20260414T134344Z
+  - refresh docs/FLOWCHART.md from source-backed runtime analysis
+  - normalize primary conversion branches for backend comparison
+- add conversion runtime flowchart [useReq] *(flowchart)*
+  - add docs/FLOWCHART.md as a single Mermaid graph TD block
+  - map primary CLI conversion phases, exposure branches, and backend selection
+  - keep documentation limited to repository-derived runtime behavior
+
 ## [0.6.0](https://github.com/Ogekuri/DNG2JPG/compare/v0.5.0..v0.6.0) - 2026-04-14
 ### 🐛  Bug Fixes
 - Update images/flowchart-bw.svg file.
@@ -790,6 +805,7 @@
 - \[0.4.0\]: https://github.com/Ogekuri/DNG2JPG/releases/tag/v0.4.0
 - \[0.5.0\]: https://github.com/Ogekuri/DNG2JPG/releases/tag/v0.5.0
 - \[0.6.0\]: https://github.com/Ogekuri/DNG2JPG/releases/tag/v0.6.0
+- \[0.7.0\]: https://github.com/Ogekuri/DNG2JPG/releases/tag/v0.7.0
 
 [0.1.0]: https://github.com/Ogekuri/DNG2JPG/releases/tag/v0.1.0
 [0.2.0]: https://github.com/Ogekuri/DNG2JPG/compare/v0.1.0..v0.2.0
@@ -797,3 +813,4 @@
 [0.4.0]: https://github.com/Ogekuri/DNG2JPG/compare/v0.3.0..v0.4.0
 [0.5.0]: https://github.com/Ogekuri/DNG2JPG/compare/v0.4.0..v0.5.0
 [0.6.0]: https://github.com/Ogekuri/DNG2JPG/compare/v0.5.0..v0.6.0
+[0.7.0]: https://github.com/Ogekuri/DNG2JPG/compare/v0.6.0..v0.7.0
